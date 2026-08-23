@@ -105,6 +105,8 @@ def test_drone_doubling_without_walkdowns():
     pitches = [e[0] for e in events]
     # With forced doubling, expect at least one pitch an octave away from a base tone
     assert any(abs(a - b) == 12 for a in pitches for b in pitches)
+    # Note-0 clamp: doubling path must never emit MIDI 0
+    assert all(p > 0 for p in pitches)
 
 
 def test_arpeggio_respects_max_octave():

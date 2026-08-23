@@ -160,7 +160,7 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         development={
             "enabled": True,
             "seed_bars": 2,
-            "mutate_every_n": 2,
+            "mutate_every_n": 4,  # more hypnotic — hold the cell longer
             "mutate_ops": ["add_attack"],
             "additive_only": True,
             "phase_creep": False,
@@ -191,7 +191,7 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         development={
             "enabled": True,
             "seed_bars": 1,
-            "mutate_every_n": 1,
+            "mutate_every_n": 2,  # breathe between mutations
             "mutate_ops": ["phase_creep", "add_rest", "add_attack", "thin"],
             "phase_creep": True,
             "max_phase": 2,
@@ -227,7 +227,8 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         mode="dorian",
         bpm=168,
         bars=8,
-        root_notes=["D3", "G3", "C4", "F3"],
+        # Stickier Dm–G–Dm–C vamp (vs circulating D–G–C–F).
+        root_notes=["D3", "G3", "D3", "C3"],
         min_octave=3,
         max_octave=6,
         use_chord_tones=False,
@@ -240,7 +241,7 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         repetition_factor=4,
         embellish=True,
         rhythmic_variation=True,
-        chord_progression=["D3", "G3", "C4", "F3"],
+        chord_progression=["D3", "G3", "D3", "C3"],
         effects_preset="human_feel",
         development={
             "enabled": True,

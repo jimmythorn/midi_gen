@@ -88,14 +88,22 @@ class MidiProcessor:
                 slot_steps = steps_per_note
                 duration_ticks = sixteenth_note_duration_ticks * slot_steps
 
+                # Rest = None only. MIDI note 0 is not a rest token; if it
+                # appears (clamp bug / legacy), treat as silent — never emit C-1.
                 if raw_note_value is None:
+                    current_tick += duration_ticks
+                    i += slot_steps
+                    continue
+
+                note_int = int(raw_note_value)
+                if note_int <= 0:
                     current_tick += duration_ticks
                     i += slot_steps
                     continue
 
                 # Create note context for this step
                 ctx = create_note_context(
-                    note=int(raw_note_value),
+                    note=note_int,
                     velocity=64,
                     tick=current_tick,
                     options=options,
@@ -107,14 +115,13 @@ class MidiProcessor:
                 # Process through note-level effects
                 processed_ctx = self.effect_chain.process_note(ctx)
 
-                # Create note events if note is valid (note 0 is a rare edge —
-                # treat as silent to avoid C-1 accidents from clamp bugs).
-                if processed_ctx['note'] > 0:
+                sounding = int(processed_ctx['note'])
+                if sounding > 0:
                     processed_events.extend([
-                        ('note_on', current_tick, processed_ctx['note'],
+                        ('note_on', current_tick, sounding,
                          processed_ctx['velocity'], processed_ctx['channel']),
                         ('note_off', current_tick + duration_ticks,
-                         processed_ctx['note'], 0, processed_ctx['channel'])
+                         sounding, 0, processed_ctx['channel'])
                     ])
 
                 current_tick += duration_ticks
@@ -130,6 +137,10 @@ class MidiProcessor:
                     
                 note, start_tick, duration_tick, velocity = event
                 if duration_tick <= 0:
+                    continue
+                # Same note-0 policy as arpeggio: never emit C-1 as sounding.
+                if int(note) <= 0:
+                    max_tick = max(max_tick, start_tick + duration_tick)
                     continue
                     
                 # Update max_tick considering both start and duration
@@ -147,12 +158,13 @@ class MidiProcessor:
                 # Process through note-level effects
                 processed_ctx = self.effect_chain.process_note(ctx)
                 
-                if processed_ctx['note'] > 0:
+                sounding = int(processed_ctx['note'])
+                if sounding > 0:
                     processed_events.extend([
-                        ('note_on', start_tick, processed_ctx['note'],
+                        ('note_on', start_tick, sounding,
                          processed_ctx['velocity'], processed_ctx['channel']),
                         ('note_off', start_tick + duration_tick,
-                         processed_ctx['note'], 0, processed_ctx['channel'])
+                         sounding, 0, processed_ctx['channel'])
                     ])
             
             # Update options with the correct total duration
