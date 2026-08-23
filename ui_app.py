@@ -1,10 +1,12 @@
 """
-MIDI Style Lab — Streamlit UI with musician/style lookup and test output.
+MIDI Style Lab — Streamlit UI for style → sketch → Logic.
+
+North star: Pick style → Generate → Play into Logic → Download MIDI.
 
 Launch:
   ./run_ui.sh
   # or
-  PYTHONPATH=/tmp/py streamlit run ui_app.py
+  PYTHONPATH=. streamlit run ui_app.py
 """
 
 from __future__ import annotations
@@ -92,12 +94,24 @@ st.markdown(
         margin: 0 0 1.25rem 0;
       }
 
-      .panel {
-        background: color-mix(in srgb, var(--panel) 92%, black);
-        border: 1px solid var(--line);
-        border-radius: 14px;
-        padding: 1rem 1.1rem;
+      .tip {
+        border-left: 3px solid var(--accent);
+        padding: 0.65rem 0.85rem;
+        margin: 0.75rem 0 1rem 0;
+        background: color-mix(in srgb, var(--panel) 88%, black);
+        border-radius: 0 10px 10px 0;
+        color: var(--muted);
+        font-size: 0.95rem;
+        max-width: 40rem;
       }
+      .tip strong { color: var(--text); }
+
+      .record-note {
+        color: var(--muted);
+        font-size: 0.92rem;
+        margin: 0.35rem 0 0.85rem 0;
+      }
+
       .metric-row {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -148,43 +162,49 @@ st.markdown(
 )
 
 musicians = list_musicians()
+musician_names = [m.name for m in musicians]
 presets = list_presets()
 preset_ids = [p["id"] for p in presets]
 preset_labels = {p["id"]: f"{p['label']} — {p['summary']}" for p in presets}
+
+IAC_FIRST_RUN_TIP = """
+<div class="tip">
+  <strong>One-time Mac setup for Logic</strong><br/>
+  Audio MIDI Setup → MIDI Studio → IAC Driver → enable <em>Device is online</em>.
+  In Logic, set a Software Instrument track’s MIDI In to that IAC bus.
+  After that, Play into Logic is one click.
+</div>
+"""
 
 # --- Hero: brand + one job ---
 st.markdown(
     """
     <div class="hero">
       <div class="brand-mark">MIDI Style Lab</div>
-      <h1>MIDI in the shape of a musician’s style.</h1>
-      <p>Look up a player or vibe, generate a sketch, and inspect the test output before you export.</p>
+      <h1>Pick a style. Generate a sketch. Play it into Logic.</h1>
+      <p>Starting sketches, not finished compositions — generate MIDI, audition in Logic, then download.</p>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-query_col, action_col = st.columns([3, 1], vertical_alignment="bottom")
-with query_col:
-    query = st.text_input(
-        "Musician or style",
-        value=st.session_state.get("query", "Philip Glass minimalism"),
-        placeholder="e.g. Brian Eno, angular jazz, ambient drone, Aphex Twin",
-        label_visibility="collapsed",
-        key="query_input",
-    )
-with action_col:
-    generate = st.button("Generate MIDI", type="primary", use_container_width=True)
+# --- Pre-generate: catalog primary, vibe secondary ---
+catalog = st.selectbox(
+    "Style",
+    options=musician_names,
+    index=musician_names.index("Philip Glass") if "Philip Glass" in musician_names else 0,
+    help="Curated catalog profiles.",
+)
+vibe = st.text_input(
+    "Or type a vibe",
+    value="",
+    placeholder="e.g. ambient drone, angular jazz, Aphex Twin",
+    help="Overrides the catalog pick when filled.",
+)
+query = vibe.strip() if vibe.strip() else catalog
 
-# Compact controls under the hero (one secondary strip — not a dashboard)
-c1, c2, c3, c4 = st.columns([1.2, 1.4, 1, 1])
-with c1:
-    pick = st.selectbox(
-        "Catalog musician",
-        options=["(from query)"] + [m.name for m in musicians],
-        help="Optional shortcut into the curated catalog.",
-    )
-with c2:
+ctrl1, ctrl2 = st.columns([1.6, 1])
+with ctrl1:
     effects_preset = st.selectbox(
         "Effects",
         options=preset_ids,
@@ -192,21 +212,26 @@ with c2:
         index=preset_ids.index("tape_and_human"),
         help="Plain-language processing applied after notes are written.",
     )
-with c3:
+with ctrl2:
     bars = st.slider("Bars", 2, 32, int(st.session_state.get("bars", 8)))
-with c4:
-    use_sdk = st.toggle("Cursor SDK", value=True, help="Uses CURSOR_API_KEY when set; otherwise catalog only.")
-    st.caption("SDK: " + ("ready" if cursor_sdk_available() else "offline"))
 
-if pick != "(from query)":
-    query = pick
+with st.expander("Advanced"):
+    use_sdk = st.toggle(
+        "Cursor SDK enrichment",
+        value=False,
+        help="Uses CURSOR_API_KEY when set; otherwise catalog only.",
+    )
+    st.caption(
+        "SDK: " + ("ready" if cursor_sdk_available() else "offline — catalog only")
+    )
+    bpm_override = st.number_input(
+        "BPM override (0 = profile tempo)",
+        min_value=0,
+        max_value=240,
+        value=0,
+    )
 
-bpm_override = st.number_input(
-    "BPM override (0 keeps the profile tempo)",
-    min_value=0,
-    max_value=240,
-    value=0,
-)
+generate = st.button("Generate", type="primary", use_container_width=False)
 
 # --- Generate ---
 if generate:
@@ -236,120 +261,107 @@ if generate:
                 "preview_caption": describe_preview(path),
             }
             st.session_state.pop("generate_error", None)
+            st.session_state.pop("live_message", None)
         except Exception as exc:
             st.session_state["generate_error"] = str(exc)
 
-# --- Test output (persists across reruns) ---
 if st.session_state.get("generate_error"):
     st.error(f"Generation failed: {st.session_state['generate_error']}")
 
 run = st.session_state.get("last_run")
+player = get_shared_player()
+live = player.status()
+ports = live.ports
+default_port = preferred_iac_port(ports) or (ports[0] if ports else None)
+if "live_port" not in st.session_state and default_port:
+    st.session_state["live_port"] = default_port
+
+# First-run / empty-state IAC tip (not buried)
 if not run:
-    st.info("Enter a musician or style, then generate to see test output here.")
+    st.markdown(IAC_FIRST_RUN_TIP, unsafe_allow_html=True)
+    st.info("Pick a style and Generate to get a sketch.")
 else:
     result = run["result"]
     options = run["options"]
     summary = run["summary"]
     path = run["path"]
     profile = result.profile
+    midi_bytes = Path(path).read_bytes()
 
-    st.markdown("### Test output")
     st.success(result.message)
-
-    st.markdown(
-        f"""
-        <div class="metric-row">
-          <div class="metric"><div class="label">Notes</div><div class="value">{summary['note_on_count']}</div></div>
-          <div class="metric"><div class="label">Pitches</div><div class="value">{summary['unique_pitches']}</div></div>
-          <div class="metric"><div class="label">Range</div><div class="value">{summary['pitch_range']['min']}–{summary['pitch_range']['max']}</div></div>
-          <div class="metric"><div class="label">Bends</div><div class="value">{summary['pitch_bend_events']}</div></div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.caption(
+        f"{profile.name} · {options.get('mode')} · {options.get('bpm')} BPM · "
+        f"{options.get('bars')} bars · {profile.generation_type}"
     )
 
-    left, right = st.columns([1.05, 1.2], gap="large")
-    with left:
-        st.markdown("#### Profile")
-        st.markdown(f"**{profile.name}** · `{profile.source}` · {profile.generation_type}")
-        st.write(profile.description)
-        st.write(
-            f"Mode **{options.get('mode')}** · "
-            f"{options.get('bpm')} BPM · "
-            f"{options.get('bars')} bars · "
-            f"arp `{profile.arp_mode}` / {profile.arp_steps} steps"
+    # --- Primary CTA: Play into Logic ---
+    st.markdown("### Play into Logic")
+    if not live.available:
+        st.markdown(IAC_FIRST_RUN_TIP, unsafe_allow_html=True)
+        st.warning(
+            live.error
+            or "No MIDI ports available. Enable IAC Driver, then relaunch this app."
         )
-        st.markdown("#### Effects applied")
-        for line in explain_effects_config(options.get("effects_config") or []):
-            st.write(f"- {line}")
-        if result.candidates:
-            st.caption("Also considered: " + ", ".join(c.name for c in result.candidates))
-
-        midi_bytes = Path(path).read_bytes()
-        st.markdown("#### Listen")
-        st.caption(run.get("preview_caption") or "Simple synth preview (not a DAW instrument).")
-        if run.get("wav_bytes"):
-            st.audio(run["wav_bytes"], format="audio/wav")
-
-        st.markdown("#### Play into Logic (IAC)")
-        player = get_shared_player()
-        live = player.status()
-        ports = live.ports
-        default_port = preferred_iac_port(ports) or (ports[0] if ports else None)
-        if "live_port" not in st.session_state and default_port:
-            st.session_state["live_port"] = default_port
-
-        if not live.available:
-            st.warning(
-                live.error
-                or "No MIDI ports available. On Mac, enable IAC Driver in Audio MIDI Setup."
-            )
-        else:
+    else:
+        if len(ports) > 1:
             st.selectbox(
                 "MIDI output port",
                 options=ports,
                 key="live_port",
-                help="Prefer an IAC Driver bus. In Logic, set the track MIDI In to that bus.",
+                help="Prefer an IAC Driver bus.",
             )
-            play_col, stop_col = st.columns(2)
-            with play_col:
-                if st.button(
-                    "Play into Logic",
-                    type="primary",
-                    use_container_width=True,
-                    disabled=player.playing,
-                ):
-                    try:
-                        player.play_file(path, st.session_state.get("live_port"))
-                        st.session_state["live_message"] = (
-                            f"Streaming to {player.port_name}. "
-                            "Arm/record in Logic if you want a region."
-                        )
-                    except Exception as exc:
-                        st.session_state["live_message"] = f"Live MIDI failed: {exc}"
-            with stop_col:
-                if st.button("Stop", use_container_width=True, disabled=not player.playing):
-                    player.stop(wait=False)
-                    st.session_state["live_message"] = "Stopped live MIDI."
+        else:
+            st.caption(f"Port: **{ports[0]}**")
+            st.session_state["live_port"] = ports[0]
 
-            if player.playing:
-                st.caption(f"Playing → **{player.port_name}**")
-            if st.session_state.get("live_message"):
-                st.info(st.session_state["live_message"])
-            if player.last_error:
-                st.error(player.last_error)
+        play_col, stop_col = st.columns([2, 1])
+        with play_col:
+            if st.button(
+                "Play into Logic",
+                type="primary",
+                use_container_width=True,
+                disabled=player.playing,
+                key="play_logic",
+            ):
+                try:
+                    player.play_file(path, st.session_state.get("live_port"))
+                    st.session_state["live_message"] = f"Streaming to {player.port_name}."
+                except Exception as exc:
+                    st.session_state["live_message"] = f"Live MIDI failed: {exc}"
+        with stop_col:
+            if st.button(
+                "Stop",
+                use_container_width=True,
+                disabled=not player.playing,
+                key="stop_logic",
+            ):
+                player.stop(wait=False)
+                st.session_state["live_message"] = "Stopped."
 
-        with st.expander("Logic Pro setup (once)"):
-            st.markdown(
-                """
-1. Open **Audio MIDI Setup** → Window → **Show MIDI Studio**.
-2. Double-click **IAC Driver** → enable **Device is online** (add a bus if needed).
-3. In **Logic Pro**, create/select a Software Instrument track.
-4. Set that track’s **MIDI In** to the IAC bus (e.g. `IAC Driver Bus 1`).
-5. Click **Play into Logic** here. Hit **Record** in Logic if you want a captured region.
-                """
-            )
+        st.markdown(
+            '<p class="record-note"><strong>Record in Logic to capture</strong> — '
+            "live stream alone never writes a region. Arm the track and hit Record "
+            "while this plays.</p>",
+            unsafe_allow_html=True,
+        )
+        if player.playing:
+            st.caption(f"Playing → **{player.port_name}**")
+        if st.session_state.get("live_message"):
+            st.info(st.session_state["live_message"])
+        if player.last_error:
+            st.error(player.last_error)
 
+    # --- Secondary: Listen (bend-aware) + Download ---
+    st.markdown("### Listen & download")
+    st.caption(
+        "Quick preview (sine) — Play into Logic for real feel. "
+        + (run.get("preview_caption") or "")
+    )
+    if run.get("wav_bytes"):
+        st.audio(run["wav_bytes"], format="audio/wav")
+
+    dl1, dl2 = st.columns(2)
+    with dl1:
         st.download_button(
             "Download MIDI",
             data=midi_bytes,
@@ -357,6 +369,7 @@ else:
             mime="audio/midi",
             use_container_width=True,
         )
+    with dl2:
         st.download_button(
             "Download WAV preview",
             data=run.get("wav_bytes") or b"",
@@ -365,10 +378,34 @@ else:
             use_container_width=True,
             disabled=not bool(run.get("wav_bytes")),
         )
-        st.code(format_summary_text(summary))
 
-    with right:
-        st.markdown("#### Note preview")
+    # --- Geek / Debug (collapsed lab chrome) ---
+    with st.expander("Geek / Debug"):
+        st.markdown(
+            f"""
+            <div class="metric-row">
+              <div class="metric"><div class="label">Notes</div><div class="value">{summary['note_on_count']}</div></div>
+              <div class="metric"><div class="label">Pitches</div><div class="value">{summary['unique_pitches']}</div></div>
+              <div class="metric"><div class="label">Range</div><div class="value">{summary['pitch_range']['min']}–{summary['pitch_range']['max']}</div></div>
+              <div class="metric"><div class="label">Bends</div><div class="value">{summary['pitch_bend_events']}</div></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown(f"**{profile.name}** · `{profile.source}` · {profile.generation_type}")
+        st.write(profile.description)
+        st.write(
+            f"Mode **{options.get('mode')}** · "
+            f"arp `{profile.arp_mode}` / {profile.arp_steps} steps · "
+            f"mode_color `{options.get('mode_color', True)}`"
+        )
+        st.markdown("**Effects applied**")
+        for line in explain_effects_config(options.get("effects_config") or []):
+            st.write(f"- {line}")
+        if result.candidates:
+            st.caption("Also considered: " + ", ".join(c.name for c in result.candidates))
+
+        st.code(format_summary_text(summary))
         roll = events_to_roll_rows(summary)
         if roll:
             st.scatter_chart(
@@ -378,34 +415,26 @@ else:
                 },
                 x="beat",
                 y="midi",
-                height=320,
+                height=280,
             )
-            st.dataframe(roll, use_container_width=True, hide_index=True, height=280)
+            st.dataframe(roll, use_container_width=True, hide_index=True, height=240)
 
-    with st.expander("Raw generator options"):
+        st.markdown("**Raw generator options**")
         st.json(options)
 
-# --- Effects explainer (below the fold; one purpose) ---
-st.markdown("---")
-st.markdown("### Effects, in plain language")
-st.caption("These reshape the finished note stream. Pick a preset above — details live here.")
-effect_cols = st.columns(len(presets))
-for col, preset in zip(effect_cols, presets):
-    with col:
-        st.markdown(
-            f"""
-            <div class="effect-chip">
-              <strong>{preset['label']}</strong>
-              <span>{preset['summary']}</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        with st.expander("What you hear"):
-            st.write(preset["what_you_hear"])
+        st.markdown("**Effects glossary**")
+        for preset in presets:
+            st.markdown(
+                f"""
+                <div class="effect-chip">
+                  <strong>{preset['label']}</strong>
+                  <span>{preset['summary']} — {preset['what_you_hear']}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        for key, help_text in EFFECT_PARAM_HELP.items():
+            st.markdown(f"**{key}** — {help_text}")
 
-with st.expander("Parameter glossary (wow, flutter, cents…)"):
-    for key, help_text in EFFECT_PARAM_HELP.items():
-        st.markdown(f"**{key}** — {help_text}")
-
-st.caption("Style tags: " + ", ".join(list_styles()))
+        st.caption("Style tags: " + ", ".join(list_styles()))
+        st.caption("CLI (`python -m midi_gen`) remains available for power/dev use.")
