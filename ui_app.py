@@ -45,6 +45,50 @@ from midi_gen.style_prompting import (
     resolve_happy_path_query,
     vibe_chips,
 )
+from midi_gen.ui_prefs import load_prefs, prefs_for_session, save_prefs
+
+
+def _persist_live_prefs() -> None:
+    """Write transport prefs (count-in / loop / soft-click / port) to disk."""
+    updates = {
+        "live_count_in": bool(st.session_state.get("live_count_in", False)),
+        "live_loop": bool(st.session_state.get("live_loop", False)),
+        "live_soft_click": bool(st.session_state.get("live_soft_click", False)),
+    }
+    # Only write port once session has one — avoid wiping a remembered bus
+    # before ports are enumerated on first paint.
+    if "live_port" in st.session_state:
+        updates["live_port"] = st.session_state.get("live_port")
+    save_prefs(updates)
+
+
+def _seed_transport_bool_prefs() -> None:
+    """Seed count-in / loop / soft-click from disk (first run → all Off)."""
+    if st.session_state.get("_live_bool_prefs_seeded"):
+        return
+    prefs = load_prefs()
+    if "live_count_in" not in st.session_state:
+        st.session_state["live_count_in"] = bool(prefs.get("live_count_in", False))
+    if "live_loop" not in st.session_state:
+        st.session_state["live_loop"] = bool(prefs.get("live_loop", False))
+    if "live_soft_click" not in st.session_state:
+        st.session_state["live_soft_click"] = bool(prefs.get("live_soft_click", False))
+    st.session_state["_live_bool_prefs_seeded"] = True
+
+
+def _seed_live_port(ports: list[str]) -> None:
+    """Apply remembered MIDI port once ports are known (drop stale names)."""
+    if "live_port" in st.session_state:
+        current = st.session_state.get("live_port")
+        if current and ports and current not in ports:
+            st.session_state.pop("live_port", None)
+        else:
+            return
+    prefs = prefs_for_session(ports)
+    remembered = prefs.get("live_port")
+    if remembered and remembered in ports:
+        st.session_state["live_port"] = remembered
+
 
 st.set_page_config(
     page_title="MIDI Style Lab",
@@ -426,6 +470,9 @@ if "catalog_pick" not in st.session_state:
 if "vibe_text" not in st.session_state:
     st.session_state["vibe_text"] = ""
 
+# Transport prefs (count-in / loop / soft-click) before Advanced widgets bind.
+_seed_transport_bool_prefs()
+
 # Pending related-style regenerate (Try instead)
 _pending_related = st.session_state.pop("pending_related_name", None)
 if _pending_related:
@@ -535,6 +582,23 @@ with st.expander("Advanced"):
         max_value=240,
         value=0,
     )
+    # Soft click is opt-in and Off by default — tucked here so primary audition stays clean.
+    soft_click = st.checkbox(
+        "Soft click during count-in",
+        key="live_soft_click",
+        help="Sends metronome notes on the same MIDI port during count-in. "
+        "Off by default — count-in stays truly silent.",
+    )
+    if soft_click:
+        st.caption(
+            "Warning: soft-click notes travel the same IAC bus and can land in the "
+            "Logic record region if you are already recording."
+        )
+    else:
+        st.caption("When Off, count-in stays truly silent (no click notes).")
+    # Persist soft-click even before a sketch exists.
+    _persist_live_prefs()
+
 
 st.markdown('<div class="generate-wrap">', unsafe_allow_html=True)
 generate = st.button("Generate", type="primary", use_container_width=True)
@@ -600,6 +664,8 @@ live = player.status(refresh=_force_refresh)
 ports = live.ports
 if _force_refresh:
     _apply_refreshed_ports(ports)
+# Seed remembered port once ports are known; else prefer IAC / first.
+_seed_live_port(ports)
 default_port = preferred_iac_port(ports) or (ports[0] if ports else None)
 if "live_port" not in st.session_state and default_port:
     st.session_state["live_port"] = default_port
@@ -702,20 +768,26 @@ else:
 
         # Audition→Capture strip: lanes + Count-in/Loop (opt-in) + capture order.
         # Instant audition by default — count-in is OFF until the user opts in.
+        # Prefs may have already seeded these; keep False defaults for first run.
         if "live_count_in" not in st.session_state:
             st.session_state["live_count_in"] = False
         if "live_loop" not in st.session_state:
             st.session_state["live_loop"] = False
+        soft_click_on = bool(st.session_state.get("live_soft_click", False))
+        count_in_label = (
+            "Count-in (1 bar)" if soft_click_on else "Count-in (1 silent bar)"
+        )
         st.markdown(AUDITION_CAPTURE_STRIP_TOP_HTML, unsafe_allow_html=True)
         opt_a, opt_b = st.columns(2)
         with opt_a:
             count_in = st.checkbox(
-                "Count-in (1 silent bar)",
+                count_in_label,
                 key="live_count_in",
                 disabled=_transport_busy,
                 help="Opt in before Record/Capture for time after Arm→Record. "
-                "Off by default for instant audition. App-side silent bar at sketch "
-                "BPM — not synced to Logic’s clock or metronome.",
+                "Off by default for instant audition. App-side bar at sketch "
+                "BPM — not synced to Logic’s clock or metronome. Soft click "
+                "(Advanced) is Off by default so count-in stays silent.",
             )
         with opt_b:
             loop_play = st.checkbox(
@@ -727,10 +799,14 @@ else:
         st.caption(
             "Count-in is an app-side silent bar at sketch BPM — "
             "not synced to Logic’s clock or metronome."
+            if not soft_click_on
+            else "Count-in is an app-side bar at sketch BPM — "
+            "not synced to Logic’s clock. Soft click is On (Advanced) — "
+            "click notes can land in the record region."
         )
         st.markdown(AUDITION_CAPTURE_STRIP_BOTTOM_HTML, unsafe_allow_html=True)
 
-        play_col, stop_col = st.columns([2, 1])
+        play_col, stop_col, panic_col = st.columns([2, 1, 1])
         with play_col:
             if st.button(
                 "Play into Logic",
@@ -741,23 +817,30 @@ else:
             ):
                 try:
                     sketch_bpm = float(options.get("bpm") or 120)
+                    # Soft click only when Advanced opt-in is On; Off → truly silent.
+                    use_click = bool(st.session_state.get("live_soft_click", False))
                     player.play_file(
                         path,
                         st.session_state.get("live_port"),
                         count_in_bars=1.0 if count_in else 0.0,
                         bpm=sketch_bpm,
                         loop=bool(loop_play),
-                        click=False,  # silent count-in; UI never enables click
+                        click=use_click if count_in else False,
                     )
                     bits = [f"Streaming to {player.port_name}"]
                     if count_in:
-                        bits.append("1-bar count-in")
+                        bits.append(
+                            "1-bar count-in + soft click"
+                            if use_click
+                            else "1-bar count-in"
+                        )
                     if loop_play:
                         bits.append("looping")
                     st.session_state["live_message"] = " · ".join(bits) + "."
                     st.session_state["live_was_playing"] = True
                     # Hide first-run tip after a successful Play
                     st.session_state["iac_tip_dismissed"] = True
+                    _persist_live_prefs()
                     st.rerun()
                 except Exception as exc:
                     # Surface prior-join / open failures; keep Stop enabled if
@@ -780,6 +863,26 @@ else:
                 st.session_state["live_was_playing"] = False
                 st.session_state["live_message"] = "Stopped."
                 st.rerun()
+        with panic_col:
+            # Panic: manual CC123 flush on selected/open port — Playing or idle-with-port.
+            panic_port = st.session_state.get("live_port") or player.port_name
+            if st.button(
+                "Panic",
+                use_container_width=True,
+                disabled=not bool(panic_port),
+                key="panic_logic",
+                help="All notes off (CC123) on the selected MIDI port. "
+                "Does not Stop playback — use Stop to end the stream.",
+            ):
+                player.panic(panic_port)
+                st.session_state["live_message"] = (
+                    f"Panic — all notes off on {panic_port}."
+                )
+                st.rerun()
+
+        # Persist count-in / loop / soft-click / port when idle (checkbox toggles).
+        if not _transport_busy:
+            _persist_live_prefs()
 
         # Honest Playing caption: poll while active; clear when thread ends
         # or when the MIDI port disappears / send fails mid-play.
@@ -801,8 +904,7 @@ else:
                         st.rerun()
                         return
                     st.session_state["live_was_playing"] = True
-                    phase = player.phase
-                    label = "Count-in" if phase == "count_in" else "Playing"
+                    label = player.transport_caption()
                     loop_tag = " · looping" if player.looping else ""
                     st.caption(f"{label} → **{player.port_name}**{loop_tag}")
                     return
@@ -818,6 +920,8 @@ else:
             _playback_status_poll()
         elif st.session_state.get("live_message") == "Stopped.":
             st.caption("Stopped.")
+        elif str(st.session_state.get("live_message") or "").startswith("Panic"):
+            st.caption("Panic — all notes off.")
 
         st.markdown(SILENCE_CHECKLIST_HTML, unsafe_allow_html=True)
 

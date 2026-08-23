@@ -16,6 +16,8 @@ downloads/
 eggs/
 ENV/
 generated/
+.midi_gen_ui_prefs.json
+.midi_gen/
 htmlcov/
 .hypothesis/
 .idea/

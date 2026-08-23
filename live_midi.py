@@ -207,6 +207,8 @@ class LiveMidiPlayer:
         self._playing = False
         self._phase: str = "idle"  # idle | count_in | playing
         self._looping = False
+        self._count_in_bars: float = 0.0
+        self._count_in_end: Optional[float] = None  # perf_counter deadline
 
     @property
     def playing(self) -> bool:
@@ -232,6 +234,48 @@ class LiveMidiPlayer:
             return self._phase
 
     @property
+    def count_in_bars(self) -> float:
+        with self._lock:
+            return float(self._count_in_bars)
+
+    @property
+    def count_in_remaining_sec(self) -> Optional[float]:
+        """Seconds left in count-in, or None when not counting in."""
+        with self._lock:
+            if self._phase != "count_in" or self._count_in_end is None:
+                return None
+            alive = (
+                self._playing
+                and self._thread is not None
+                and self._thread.is_alive()
+            )
+            if not alive:
+                return None
+            end = self._count_in_end
+        return max(0.0, end - time.perf_counter())
+
+    def transport_caption(self) -> str:
+        """
+        Honest UI caption for the active phase.
+
+        Count-in → ``Count-in…`` (with bar count when known); else Playing.
+        Finished / idle captions are owned by the UI after the worker exits.
+        """
+        phase = self.phase
+        if phase == "count_in":
+            bars = self.count_in_bars
+            if bars > 0:
+                bar_txt = "1 bar" if abs(bars - 1.0) < 1e-9 else f"{bars:g} bars"
+                rem = self.count_in_remaining_sec
+                if rem is not None:
+                    return f"Count-in… ({bar_txt}, {rem:.1f}s)"
+                return f"Count-in… ({bar_txt})"
+            return "Count-in…"
+        if phase == "playing":
+            return "Playing"
+        return "Idle"
+
+    @property
     def looping(self) -> bool:
         with self._lock:
             alive = (
@@ -252,6 +296,7 @@ class LiveMidiPlayer:
                 self._playing = False
                 self._phase = "idle"
                 self._looping = False
+                self._count_in_end = None
                 playing = False
             port_name = self._port_name
         if not rtmidi_available():
@@ -337,6 +382,7 @@ class LiveMidiPlayer:
                     self._playing = False
                     self._phase = "idle"
                     self._looping = False
+                    self._count_in_end = None
                     # Drop identity so the abandoned finally does not clobber us.
                     if self._thread is prior:
                         self._thread = None
@@ -348,6 +394,8 @@ class LiveMidiPlayer:
             self._playing = True
             self._phase = "count_in" if count_in_sec > 0 else "playing"
             self._looping = bool(loop)
+            self._count_in_bars = count_bars if count_in_sec > 0 else 0.0
+            self._count_in_end = None
             stop_flag = self._stop
 
         def _wait_until(deadline: float) -> bool:
@@ -370,9 +418,11 @@ class LiveMidiPlayer:
             """Return True if stop requested during count-in."""
             if count_in_sec <= 0:
                 return False
+            start = time.perf_counter()
             with self._lock:
                 self._phase = "count_in"
-            start = time.perf_counter()
+                self._count_in_bars = count_bars
+                self._count_in_end = start + count_in_sec
             if click and click_beats > 0:
                 # Soft rim-ish click on ch 9 (GM drums) when possible — still
                 # same IAC bus; prefer silent count-in for clean region capture.
@@ -408,6 +458,7 @@ class LiveMidiPlayer:
             """Play one pass; return True if stop requested."""
             with self._lock:
                 self._phase = "playing"
+                self._count_in_end = None
             start = time.perf_counter()
             for abs_sec, msg in schedule:
                 if stop_flag.is_set():
@@ -468,6 +519,7 @@ class LiveMidiPlayer:
                         self._playing = False
                         self._phase = "idle"
                         self._looping = False
+                        self._count_in_end = None
                 if on_finished:
                     try:
                         on_finished()
@@ -501,6 +553,18 @@ class LiveMidiPlayer:
             self._playing = False
             self._phase = "idle"
             self._looping = False
+            self._count_in_end = None
+
+    def panic(self, port_name: Optional[str] = None) -> None:
+        """
+        Manual all-notes-off (CC123) on the selected/open port.
+
+        Does not stop playback — Panic is an explicit extra control beside Stop.
+        Uses the same ``panic_flush_named`` path as Hard Stop.
+        """
+        with self._lock:
+            target = port_name or self._port_name
+        panic_flush_named(target)
 
 
 _SHARED_PLAYER: Optional[LiveMidiPlayer] = None
