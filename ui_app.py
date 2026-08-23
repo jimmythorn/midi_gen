@@ -120,13 +120,6 @@ st.markdown(
       }
       .tip strong { color: var(--text); }
 
-      .record-note, .capture-order {
-        color: var(--muted);
-        font-size: 0.92rem;
-        margin: 0.35rem 0 0.85rem 0;
-      }
-      .capture-order strong { color: var(--text); }
-
       .iac-chip {
         display: inline-block;
         font-size: 0.82rem;
@@ -145,18 +138,58 @@ st.markdown(
         color: #f0b4a4;
       }
 
+      /* Audition → Capture: one visual unit; live stream ≠ region */
+      .audition-capture {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: color-mix(in srgb, var(--panel) 90%, black);
+        padding: 0.85rem 1rem 0.95rem 1rem;
+        margin: 0.35rem 0 0.85rem 0;
+        max-width: 40rem;
+      }
+      .audition-capture .strip-label {
+        color: var(--muted);
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        margin: 0 0 0.55rem 0;
+      }
+      .audition-capture .pair {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.75rem;
+        margin: 0 0 0.65rem 0;
+      }
+      .audition-capture .lane .title {
+        font-family: "Space Grotesk", sans-serif;
+        font-weight: 600;
+        font-size: 1.02rem;
+        color: var(--text);
+        margin: 0 0 0.15rem 0;
+      }
+      .audition-capture .lane .sub {
+        color: var(--muted);
+        font-size: 0.88rem;
+        margin: 0;
+        line-height: 1.35;
+      }
+      .audition-capture .order {
+        color: var(--muted);
+        font-size: 0.88rem;
+        margin: 0;
+        padding-top: 0.55rem;
+        border-top: 1px solid var(--line);
+      }
+      .audition-capture .order strong { color: var(--text); }
+
       .silence-check {
         color: var(--muted);
-        font-size: 0.9rem;
-        margin: 0.55rem 0 0.35rem 0;
-        max-width: 36rem;
+        font-size: 0.86rem;
+        margin: 0.45rem 0 0.25rem 0;
+        max-width: 40rem;
+        line-height: 1.4;
       }
       .silence-check strong { color: var(--text); }
-      .silence-check ul {
-        margin: 0.35rem 0 0 1.1rem;
-        padding: 0;
-      }
-      .silence-check li { margin: 0.15rem 0; }
 
       .metric-row {
         display: grid;
@@ -280,20 +313,26 @@ MULTI_PORT_HELP = (
     "same IAC bus you pick here — mismatched ports mean silence."
 )
 
-CAPTURE_ORDER_HTML = """
-<p class="capture-order"><strong>Capture order:</strong> Arm → Record in Logic → Play here.
-Live stream is not a region — Record in Logic to keep it.</p>
+AUDITION_CAPTURE_STRIP_HTML = """
+<div class="audition-capture">
+  <div class="strip-label">Audition → Capture</div>
+  <div class="pair">
+    <div class="lane">
+      <p class="title">Play (live)</p>
+      <p class="sub">Hear the sketch in Logic — stream only, nothing written.</p>
+    </div>
+    <div class="lane">
+      <p class="title">Record in Logic</p>
+      <p class="sub">Keep a region — live stream alone never writes the project.</p>
+    </div>
+  </div>
+  <p class="order"><strong>Capture order:</strong> Arm → Record in Logic → Play here.</p>
+</div>
 """
 
 SILENCE_CHECKLIST_HTML = """
-<div class="silence-check">
-  <strong>Hearing nothing?</strong>
-  <ul>
-    <li>Logic track <em>MIDI In</em> matches the port above</li>
-    <li>Track is record-enabled / hears MIDI input</li>
-    <li>Software instrument is loaded on the track</li>
-  </ul>
-</div>
+<p class="silence-check"><strong>Hearing nothing?</strong>
+MIDI In matches the port · track hears input · instrument loaded.</p>
 """
 
 
@@ -557,7 +596,7 @@ else:
                     st.session_state["pending_related_name"] = rel.name
                     st.rerun()
 
-    # --- Primary CTA: Play into Logic ---
+    # --- Primary CTA: Audition → Capture (Play into Logic) ---
     st.markdown("### Play into Logic")
 
     chip_col, refresh_col = st.columns([3, 1])
@@ -585,7 +624,7 @@ else:
         # Tip until first successful Play; chip is the always-on status signal.
         _show_iac_tip()
 
-        st.markdown(CAPTURE_ORDER_HTML, unsafe_allow_html=True)
+        st.markdown(AUDITION_CAPTURE_STRIP_HTML, unsafe_allow_html=True)
 
         if len(ports) > 1:
             st.selectbox(
@@ -607,6 +646,26 @@ else:
             if not port_looks_like_iac(ports[0]):
                 st.caption("Prefer enabling IAC Driver for Logic — then Refresh ports.")
 
+        # App-side only: silent count-in + loop so Record can catch a full pass.
+        if "live_count_in" not in st.session_state:
+            st.session_state["live_count_in"] = True
+        if "live_loop" not in st.session_state:
+            st.session_state["live_loop"] = False
+        opt_a, opt_b = st.columns(2)
+        with opt_a:
+            count_in = st.checkbox(
+                "Count-in (1 silent bar)",
+                key="live_count_in",
+                help="Gives you time after Arm→Record before notes start. "
+                "Silent so the region stays clean (no metronome MIDI).",
+            )
+        with opt_b:
+            loop_play = st.checkbox(
+                "Loop sketch",
+                key="live_loop",
+                help="Repeat until Stop — useful if you miss the first pass.",
+            )
+
         play_col, stop_col = st.columns([2, 1])
         with play_col:
             if st.button(
@@ -617,8 +676,20 @@ else:
                 key="play_logic",
             ):
                 try:
-                    player.play_file(path, st.session_state.get("live_port"))
-                    st.session_state["live_message"] = f"Streaming to {player.port_name}."
+                    sketch_bpm = float(options.get("bpm") or 120)
+                    player.play_file(
+                        path,
+                        st.session_state.get("live_port"),
+                        count_in_bars=1.0 if count_in else 0.0,
+                        bpm=sketch_bpm,
+                        loop=bool(loop_play),
+                    )
+                    bits = [f"Streaming to {player.port_name}"]
+                    if count_in:
+                        bits.append("1-bar count-in")
+                    if loop_play:
+                        bits.append("looping")
+                    st.session_state["live_message"] = " · ".join(bits) + "."
                     st.session_state["live_was_playing"] = True
                     # Hide first-run tip after a successful Play
                     st.session_state["iac_tip_dismissed"] = True
@@ -638,12 +709,6 @@ else:
                 st.session_state["live_message"] = "Stopped."
                 st.rerun()
 
-        st.markdown(
-            '<p class="record-note"><strong>Record in Logic to capture</strong> — '
-            "live stream alone never writes a region.</p>",
-            unsafe_allow_html=True,
-        )
-
         # Honest Playing caption: poll while active; clear when thread ends.
         if player.playing or st.session_state.get("live_was_playing"):
 
@@ -651,7 +716,10 @@ else:
             def _playback_status_poll() -> None:
                 if player.playing:
                     st.session_state["live_was_playing"] = True
-                    st.caption(f"Playing → **{player.port_name}**")
+                    phase = player.phase
+                    label = "Count-in" if phase == "count_in" else "Playing"
+                    loop_tag = " · looping" if player.looping else ""
+                    st.caption(f"{label} → **{player.port_name}**{loop_tag}")
                     return
                 # Worker finished (natural end or Stop already joined).
                 if st.session_state.pop("live_was_playing", False):
