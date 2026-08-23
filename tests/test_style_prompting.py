@@ -24,13 +24,18 @@ from midi_gen.musician_styles import (
 )
 from midi_gen.style_prompting import (
     FEATURED_STYLE_IDS,
+    double_bars,
     featured_style_cards,
     format_match_line,
+    format_plain_feel_line,
     format_recipe_one_liner,
+    half_bars,
+    mood_chip_packs,
     preview_recipe,
     related_from_lookup_result,
     related_profiles,
     resolve_happy_path_query,
+    surprise_related_profile,
     vibe_chips,
 )
 
@@ -113,6 +118,49 @@ def test_vibe_chips_are_examples_not_closed_set():
     assert resolve_happy_path_query("Philip Glass", "  ") == "Philip Glass"
 
 
+def test_mood_chip_packs_span_catalog_examples():
+    packs = mood_chip_packs()
+    assert 2 <= len(packs) <= 3
+    labels = {p.label for p in packs}
+    assert "Soft & sparse" in labels
+    assert "Pulse & phase" in labels
+    assert "Jazz & grit" in labels
+    all_chips = [c for p in packs for c in p.chips]
+    assert len(all_chips) >= 6
+    # Packs are entry points — chips still resolve across the full catalog
+    assert find_best_profile(all_chips[0]) is not None
+    assert find_best_profile("counterpoint").id == "bach_sequence"
+
+
+def test_half_double_bars_clamp():
+    assert half_bars(8) == 4
+    assert half_bars(3) == 2  # floor at 2
+    assert half_bars(2) == 2
+    assert double_bars(8) == 16
+    assert double_bars(20) == 32  # cap at 32
+    assert double_bars(32) == 32
+
+
+def test_plain_feel_line_and_surprise_related():
+    eno = get_profile_by_id("eno_ambient")
+    line = format_plain_feel_line(eno)
+    assert line.startswith("Sounds like Brian Eno")
+    assert "drone" in line
+    assert "slow" in line  # 72 BPM
+
+    glass = get_profile_by_id("glass_minimal")
+    glass_line = format_plain_feel_line(glass)
+    assert "Philip Glass" in glass_line
+    assert "arp" in glass_line
+
+    surprise = surprise_related_profile(eno, vibe_hint="ambient")
+    assert surprise is not None
+    assert surprise.id != eno.id
+    # Same as related[0] — named identity, not pure random
+    related0 = related_profiles(eno, limit=1, vibe_hint="ambient")[0]
+    assert surprise.id == related0.id
+
+
 def test_recipe_preview_and_match_line():
     who = preview_recipe(catalog_name="Erik Satie", vibe_text="", effects_preset="human_feel")
     assert who.path == "catalog"
@@ -120,6 +168,7 @@ def test_recipe_preview_and_match_line():
     assert "drone" in who.one_liner or "arp" in who.one_liner
     assert "Matched:" in who.match_line
     assert "catalog" in who.match_line
+    assert who.plain_feel_line.startswith("Sounds like Erik Satie")
 
     feel = preview_recipe(
         catalog_name="Philip Glass",
@@ -129,6 +178,7 @@ def test_recipe_preview_and_match_line():
     assert feel.path == "vibe"
     assert feel.profile.id == "eno_ambient"
     assert "Matched:" in feel.match_line
+    assert "Sounds like" in feel.plain_feel_line
 
     generic = preview_recipe(
         catalog_name="Philip Glass",

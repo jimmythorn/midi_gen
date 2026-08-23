@@ -58,6 +58,27 @@ VIBE_CHIPS: tuple[str, ...] = (
     "spare neoclassical",
 )
 
+# Playful packs spanning the full catalog — entry points, not a closed set.
+# Each chip still soft-matches any profile (aliases + tags).
+MOOD_CHIP_PACKS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "Soft & sparse",
+        ("ambient drone", "spare neoclassical", "worn tape piano"),
+    ),
+    (
+        "Pulse & phase",
+        ("minimal pulse", "glitchy idm", "impressionist wash"),
+    ),
+    (
+        "Jazz & grit",
+        ("angular jazz", "dense modal sheets"),
+    ),
+)
+
+# Sketch length bounds (match Advanced slider / create_arp clamps).
+BARS_MIN = 2
+BARS_MAX = 32
+
 
 @dataclass(frozen=True)
 class FeaturedStyleCard:
@@ -76,6 +97,7 @@ class RecipePreview:
     match_type: str  # catalog | sdk | hybrid | generic
     one_liner: str
     match_line: str
+    plain_feel_line: str
 
 
 def featured_style_cards(
@@ -95,6 +117,51 @@ def featured_style_cards(
 
 def vibe_chips() -> List[str]:
     return list(VIBE_CHIPS)
+
+
+@dataclass(frozen=True)
+class MoodChipPack:
+    label: str
+    chips: tuple[str, ...]
+
+
+def mood_chip_packs() -> List[MoodChipPack]:
+    """2–3 playful packs; chips remain examples, free-text stays first-class."""
+    return [MoodChipPack(label=label, chips=chips) for label, chips in MOOD_CHIP_PACKS]
+
+
+def clamp_bars(bars: int) -> int:
+    return max(BARS_MIN, min(BARS_MAX, int(bars)))
+
+
+def half_bars(bars: int) -> int:
+    """Halve sketch length for a shorter playable loop (floor at BARS_MIN)."""
+    return clamp_bars(max(BARS_MIN, int(bars) // 2))
+
+
+def double_bars(bars: int) -> int:
+    """Double sketch length for a longer playable loop (cap at BARS_MAX)."""
+    return clamp_bars(int(bars) * 2)
+
+
+def surprise_related_profile(
+    profile: MusicianStyleProfile,
+    *,
+    vibe_hint: str = "",
+    also_considered: Optional[Sequence[MusicianStyleProfile]] = None,
+) -> Optional[MusicianStyleProfile]:
+    """
+    Zero-decision dice into a related named style (related[0]).
+
+    Full-catalog related — not pure random, not a second catalog browser.
+    """
+    related = related_profiles(
+        profile,
+        limit=1,
+        also_considered=also_considered,
+        vibe_hint=vibe_hint,
+    )
+    return related[0] if related else None
 
 
 def _fallback_blurb(profile: MusicianStyleProfile) -> str:
@@ -152,7 +219,7 @@ def format_match_line(
     matched_locally: bool = True,
     used_cursor_sdk: bool = False,
 ) -> str:
-    """Matched: name · type · mode · effects"""
+    """Geek match transparency — Advanced only. Matched: name · type · mode · effects"""
     mtype = match_type or _match_type_for_profile(
         profile,
         matched_locally=matched_locally,
@@ -166,6 +233,24 @@ def format_match_line(
     return (
         f"Matched: {profile.name} · {mtype} · {profile.mode} · {preset_label}"
     )
+
+
+def _pace_word(bpm: int) -> str:
+    if bpm < 90:
+        return "slow"
+    if bpm > 130:
+        return "brisk"
+    return "mid"
+
+
+def format_plain_feel_line(profile: MusicianStyleProfile) -> str:
+    """
+    Plain-feel clarity for happy path (not geek match type).
+
+    Example: "Sounds like Brian Eno (drone · slow)"
+    """
+    gen = "drone" if profile.generation_type == "drone" else "arp"
+    return f"Sounds like {profile.name} ({gen} · {_pace_word(int(profile.bpm))})"
 
 
 def preview_recipe(
@@ -205,6 +290,7 @@ def preview_recipe(
             matched_locally=result.matched_locally,
             used_cursor_sdk=result.used_cursor_sdk,
         ),
+        plain_feel_line=format_plain_feel_line(profile),
     )
 
 
