@@ -20,7 +20,10 @@ if "midi_gen" not in sys.modules:
 from midi_gen.live_midi import (
     LiveMidiPlayer,
     _midi_file_to_schedule,
+    has_iac_port,
+    port_looks_like_iac,
     preferred_iac_port,
+    refresh_output_ports,
     rtmidi_available,
 )
 
@@ -41,6 +44,22 @@ def test_preferred_iac_port_prefers_iac_name():
     assert preferred_iac_port(["USB Midi", "IAC Driver Bus 1", "Other"]) == "IAC Driver Bus 1"
     assert preferred_iac_port(["Foo", "Bar"]) == "Foo"
     assert preferred_iac_port([]) is None
+
+
+def test_port_looks_like_iac_and_has_iac():
+    assert port_looks_like_iac("IAC Driver Bus 1")
+    assert port_looks_like_iac("iac driver bus 2")
+    assert not port_looks_like_iac("USB Midi")
+    assert has_iac_port(["USB Midi", "IAC Driver Bus 1"])
+    assert not has_iac_port(["USB Midi", "Network Session"])
+    assert not has_iac_port([])
+
+
+def test_refresh_output_ports_returns_list():
+    ports = refresh_output_ports()
+    assert isinstance(ports, list)
+    status_ports = LiveMidiPlayer().status(refresh=True).ports
+    assert isinstance(status_ports, list)
 
 
 def test_midi_file_schedule_orders_events(tmp_path):
@@ -66,6 +85,23 @@ def test_play_file_missing_raises(tmp_path):
     player = LiveMidiPlayer()
     with pytest.raises(FileNotFoundError):
         player.play_file(str(tmp_path / "nope.mid"), port_name="missing")
+
+
+def test_stop_clears_playing_flag(tmp_path):
+    """Stop(wait=True) must clear Playing so the UI never sticks."""
+    player = LiveMidiPlayer()
+    status = player.status()
+    if not status.available:
+        pytest.skip(status.error or "no MIDI ports")
+
+    path = tmp_path / "tiny.mid"
+    _write_tiny_midi(path)
+    port = preferred_iac_port(status.ports) or status.ports[0]
+    player.play_file(str(path), port)
+    assert player.playing
+    player.stop(wait=True)
+    assert not player.playing
+    assert player.status().playing is False
 
 
 def test_play_and_stop_with_virtual_port(tmp_path):

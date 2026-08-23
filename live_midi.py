@@ -57,15 +57,45 @@ def list_output_ports() -> List[str]:
         return []
 
 
+def port_looks_like_iac(name: str) -> bool:
+    """True when a port name looks like a macOS IAC Driver bus."""
+    return "iac" in (name or "").lower()
+
+
 def preferred_iac_port(ports: Optional[Sequence[str]] = None) -> Optional[str]:
     """Pick the best default port: IAC bus first, else first available."""
     names = list(ports) if ports is not None else list_output_ports()
     if not names:
         return None
     for name in names:
-        if "iac" in name.lower():
+        if port_looks_like_iac(name):
             return name
     return names[0]
+
+
+def has_iac_port(ports: Optional[Sequence[str]] = None) -> bool:
+    """True when any enumerated output looks like an IAC bus."""
+    names = list(ports) if ports is not None else list_output_ports()
+    return any(port_looks_like_iac(n) for n in names)
+
+
+def refresh_output_ports() -> List[str]:
+    """
+    Re-enumerate MIDI outputs without relaunching the app.
+
+    Call after enabling IAC mid-session so newly online buses appear.
+    """
+    if not rtmidi_available():
+        return []
+    try:
+        # Re-assert rtmidi backend in case ports came online after startup.
+        try:
+            mido.set_backend("mido.backends.rtmidi")
+        except Exception:
+            pass
+        return list(mido.get_output_names())
+    except Exception:
+        return []
 
 
 def _all_notes_off(port: mido.ports.BaseOutput, channels: range = range(16)) -> None:
@@ -107,18 +137,23 @@ class LiveMidiPlayer:
         with self._lock:
             return self._error
 
-    def status(self) -> LiveMidiStatus:
-        ports = list_output_ports()
+    def status(self, *, refresh: bool = False) -> LiveMidiStatus:
+        ports = refresh_output_ports() if refresh else list_output_ports()
         with self._lock:
             err = self._error
-            playing = self._playing and self._thread is not None and self._thread.is_alive()
+            thread = self._thread
+            playing = self._playing and thread is not None and thread.is_alive()
+            # Honest flag: if the worker already exited, never report Playing.
+            if self._playing and (thread is None or not thread.is_alive()):
+                self._playing = False
+                playing = False
             port_name = self._port_name
         if not rtmidi_available():
             err = err or f"python-rtmidi not available: {_RTMIDI_IMPORT_ERROR}"
         elif not ports:
             err = err or (
                 "No MIDI output ports found. On Mac: enable IAC Driver in "
-                "Audio MIDI Setup, then relaunch this app."
+                "Audio MIDI Setup, then hit Refresh ports."
             )
         return LiveMidiStatus(
             available=rtmidi_available() and bool(ports),
@@ -146,7 +181,7 @@ class LiveMidiPlayer:
             raise RuntimeError(f"python-rtmidi not available: {_RTMIDI_IMPORT_ERROR}")
         if not ports:
             raise RuntimeError(
-                "No MIDI output ports. Enable IAC Driver (Mac) or another virtual MIDI port."
+                "No MIDI output ports. Enable IAC Driver (Mac), then Refresh ports."
             )
 
         target = port_name or preferred_iac_port(ports)
@@ -219,8 +254,13 @@ class LiveMidiPlayer:
             self._thread = thread
         thread.start()
 
-    def stop(self, wait: bool = False, timeout: float = 2.0) -> None:
-        """Request stop; join optionally."""
+    def stop(self, wait: bool = True, timeout: float = 2.0) -> None:
+        """
+        Request stop and clear Playing once the worker exits.
+
+        Default wait=True so the UI does not linger on Playing and hanging
+        notes are flushed (all-notes-off in the worker finally block).
+        """
         with self._lock:
             self._stop.set()
             thread = self._thread
@@ -228,6 +268,9 @@ class LiveMidiPlayer:
             thread.join(timeout=timeout)
         with self._lock:
             if not (self._thread and self._thread.is_alive()):
+                self._playing = False
+            elif wait:
+                # Timed out — still clear Playing so the UI is honest.
                 self._playing = False
 
 

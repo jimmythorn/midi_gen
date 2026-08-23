@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sys
 import types
+from datetime import timedelta
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent
@@ -24,12 +25,18 @@ if "midi_gen" not in sys.modules:
 
 import streamlit as st
 
+from midi_gen.audio_preview import describe_preview, render_midi_to_wav_bytes
 from midi_gen.cursor_style_lookup import cursor_sdk_available, generate_midi_for_style
 from midi_gen.effects_presets import EFFECT_PARAM_HELP, explain_effects_config, list_presets
+from midi_gen.live_midi import (
+    get_shared_player,
+    has_iac_port,
+    port_looks_like_iac,
+    preferred_iac_port,
+    refresh_output_ports,
+)
 from midi_gen.musician_styles import list_musicians, list_styles
 from midi_gen.preview import events_to_roll_rows, format_summary_text, summarize_midi_file
-from midi_gen.audio_preview import describe_preview, render_midi_to_wav_bytes
-from midi_gen.live_midi import get_shared_player, preferred_iac_port
 from midi_gen.style_prompting import (
     featured_style_cards,
     format_match_line,
@@ -113,11 +120,43 @@ st.markdown(
       }
       .tip strong { color: var(--text); }
 
-      .record-note {
+      .record-note, .capture-order {
         color: var(--muted);
         font-size: 0.92rem;
         margin: 0.35rem 0 0.85rem 0;
       }
+      .capture-order strong { color: var(--text); }
+
+      .iac-chip {
+        display: inline-block;
+        font-size: 0.82rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        padding: 0.28rem 0.65rem;
+        border-radius: 6px;
+        margin: 0.15rem 0 0.55rem 0;
+      }
+      .iac-chip.ok {
+        background: color-mix(in srgb, var(--accent) 22%, var(--panel));
+        color: var(--accent);
+      }
+      .iac-chip.miss {
+        background: color-mix(in srgb, #e07a5f 18%, var(--panel));
+        color: #f0b4a4;
+      }
+
+      .silence-check {
+        color: var(--muted);
+        font-size: 0.9rem;
+        margin: 0.55rem 0 0.35rem 0;
+        max-width: 36rem;
+      }
+      .silence-check strong { color: var(--text); }
+      .silence-check ul {
+        margin: 0.35rem 0 0 1.1rem;
+        padding: 0;
+      }
+      .silence-check li { margin: 0.15rem 0; }
 
       .metric-row {
         display: grid;
@@ -241,12 +280,55 @@ MULTI_PORT_HELP = (
     "same IAC bus you pick here — mismatched ports mean silence."
 )
 
+CAPTURE_ORDER_HTML = """
+<p class="capture-order"><strong>Capture order:</strong> Arm → Record in Logic → Play here.
+Live stream is not a region — Record in Logic to keep it.</p>
+"""
+
+SILENCE_CHECKLIST_HTML = """
+<div class="silence-check">
+  <strong>Hearing nothing?</strong>
+  <ul>
+    <li>Logic track <em>MIDI In</em> matches the port above</li>
+    <li>Track is record-enabled / hears MIDI input</li>
+    <li>Software instrument is loaded on the track</li>
+  </ul>
+</div>
+"""
+
 
 def _show_iac_tip() -> None:
     """First-run IAC tip; hidden after a successful Play (session)."""
     if st.session_state.get("iac_tip_dismissed"):
         return
     st.markdown(IAC_FIRST_RUN_TIP, unsafe_allow_html=True)
+
+
+def _render_iac_status_chip(ports: list[str]) -> None:
+    """Compact found/missing chip — preferred over tip-only homework."""
+    if has_iac_port(ports):
+        name = preferred_iac_port(ports) or "IAC"
+        st.markdown(
+            f'<span class="iac-chip ok">IAC found · {name}</span>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<span class="iac-chip miss">IAC missing — enable Device is online, then Refresh</span>',
+            unsafe_allow_html=True,
+        )
+
+
+def _apply_refreshed_ports(ports: list[str]) -> None:
+    """Prefer IAC after a mid-session refresh; drop stale selections."""
+    preferred = preferred_iac_port(ports)
+    current = st.session_state.get("live_port")
+    if preferred and (not current or current not in ports or not port_looks_like_iac(current)):
+        st.session_state["live_port"] = preferred
+    elif current and current not in ports:
+        st.session_state.pop("live_port", None)
+        if preferred:
+            st.session_state["live_port"] = preferred
 
 
 # --- Hero: brand + one job ---
@@ -428,8 +510,12 @@ if st.session_state.get("generate_error"):
 
 run = st.session_state.get("last_run")
 player = get_shared_player()
-live = player.status()
+# Honor an explicit mid-session Refresh request before painting status.
+_force_refresh = st.session_state.pop("refresh_midi_ports", False)
+live = player.status(refresh=_force_refresh)
 ports = live.ports
+if _force_refresh:
+    _apply_refreshed_ports(ports)
 default_port = preferred_iac_port(ports) or (ports[0] if ports else None)
 if "live_port" not in st.session_state and default_port:
     st.session_state["live_port"] = default_port
@@ -473,14 +559,34 @@ else:
 
     # --- Primary CTA: Play into Logic ---
     st.markdown("### Play into Logic")
+
+    chip_col, refresh_col = st.columns([3, 1])
+    with chip_col:
+        _render_iac_status_chip(ports)
+    with refresh_col:
+        if st.button("Refresh ports", use_container_width=True, key="refresh_ports"):
+            st.session_state["refresh_midi_ports"] = True
+            refreshed = refresh_output_ports()
+            _apply_refreshed_ports(refreshed)
+            st.session_state["live_message"] = (
+                f"Ports refreshed · {len(refreshed)} available."
+                if refreshed
+                else "No ports yet — enable IAC, then Refresh again."
+            )
+            st.rerun()
+
     if not live.available:
         _show_iac_tip()
         st.warning(
             live.error
-            or "No MIDI ports available. Enable IAC Driver, then relaunch this app."
+            or "No MIDI ports available. Enable IAC Driver, then Refresh ports."
         )
     else:
+        # Tip until first successful Play; chip is the always-on status signal.
         _show_iac_tip()
+
+        st.markdown(CAPTURE_ORDER_HTML, unsafe_allow_html=True)
+
         if len(ports) > 1:
             st.selectbox(
                 "MIDI output port",
@@ -488,12 +594,18 @@ else:
                 key="live_port",
                 help=MULTI_PORT_HELP,
             )
-            st.caption(
-                "Logic MIDI In must match the IAC bus chosen above."
-            )
+            st.caption("Logic MIDI In must match the IAC bus chosen above.")
+            selected = st.session_state.get("live_port") or ""
+            if selected and not port_looks_like_iac(selected) and has_iac_port(ports):
+                st.warning(
+                    "Selected port is not IAC — prefer an IAC Driver bus before Play "
+                    "(mismatched MIDI In usually means silence)."
+                )
         else:
             st.caption(f"Port: **{ports[0]}**")
             st.session_state["live_port"] = ports[0]
+            if not port_looks_like_iac(ports[0]):
+                st.caption("Prefer enabling IAC Driver for Logic — then Refresh ports.")
 
         play_col, stop_col = st.columns([2, 1])
         with play_col:
@@ -507,11 +619,13 @@ else:
                 try:
                     player.play_file(path, st.session_state.get("live_port"))
                     st.session_state["live_message"] = f"Streaming to {player.port_name}."
-                    # Optional: hide first-run tip after a successful Play
+                    st.session_state["live_was_playing"] = True
+                    # Hide first-run tip after a successful Play
                     st.session_state["iac_tip_dismissed"] = True
                     st.rerun()
                 except Exception as exc:
                     st.session_state["live_message"] = f"Live MIDI failed: {exc}"
+                    st.session_state["live_was_playing"] = False
         with stop_col:
             if st.button(
                 "Stop",
@@ -519,17 +633,39 @@ else:
                 disabled=not player.playing,
                 key="stop_logic",
             ):
-                player.stop(wait=False)
+                player.stop(wait=True)
+                st.session_state["live_was_playing"] = False
                 st.session_state["live_message"] = "Stopped."
+                st.rerun()
 
         st.markdown(
             '<p class="record-note"><strong>Record in Logic to capture</strong> — '
-            "live stream alone never writes a region. Arm the track and hit Record "
-            "while this plays.</p>",
+            "live stream alone never writes a region.</p>",
             unsafe_allow_html=True,
         )
-        if player.playing:
-            st.caption(f"Playing → **{player.port_name}**")
+
+        # Honest Playing caption: poll while active; clear when thread ends.
+        if player.playing or st.session_state.get("live_was_playing"):
+
+            @st.fragment(run_every=timedelta(milliseconds=400))
+            def _playback_status_poll() -> None:
+                if player.playing:
+                    st.session_state["live_was_playing"] = True
+                    st.caption(f"Playing → **{player.port_name}**")
+                    return
+                # Worker finished (natural end or Stop already joined).
+                if st.session_state.pop("live_was_playing", False):
+                    msg = st.session_state.get("live_message") or ""
+                    if msg.startswith("Streaming"):
+                        st.session_state["live_message"] = "Finished."
+                    st.rerun()
+
+            _playback_status_poll()
+        elif st.session_state.get("live_message") == "Stopped.":
+            st.caption("Stopped.")
+
+        st.markdown(SILENCE_CHECKLIST_HTML, unsafe_allow_html=True)
+
         if st.session_state.get("live_message"):
             st.info(st.session_state["live_message"])
         if player.last_error:
