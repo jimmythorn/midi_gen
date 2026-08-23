@@ -19,10 +19,11 @@ FULL_SCALE_INTERVALS = {
 }
 
 # Characteristic non-triad color tones. Strong beats keep chord tones;
-# weak / embellish slots can carry these so modes don't collapse to wallpaper.
+# approach slots can carry these so modes don't collapse to wallpaper.
+# major/minor are empty: triad IS the identity — color is a modal problem.
 MODE_COLOR_INTERVALS = {
-    'major': [2, 9],          # 9 + 6
-    'minor': [2, 10],         # 9 + b7
+    'major': [],              # triad = identity
+    'minor': [],              # triad = identity
     'dorian': [2, 9],         # nat9 + nat6 (Dorian fingerprint)
     'phrygian': [1],          # b2
     'lydian': [6],            # #4

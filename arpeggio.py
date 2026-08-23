@@ -38,9 +38,10 @@ def paint_mode_color(
     accent_every: int = 4,
 ) -> list:
     """
-    Keep chord tones on strong beats; place characteristic color on weak /
-    embellish slots. Guarantees at least one color tone in the phrase when
-    the mode defines any.
+    Keep chord tones on strong beats; place characteristic color on approach
+    slots only (one step before each strong beat). Sparse accents — not
+    scale-fill. If no color landed, force one on the first weak slot so
+    modal phrases still get ~one color hit every 1–2 bars.
     """
     if not notes:
         return notes
@@ -50,17 +51,12 @@ def paint_mode_color(
 
     color_pcs = {n % 12 for n in color_notes}
     painted = list(notes)
-    # Strong: beat anchors (every accent_every). Weak: approach / off-beat slots.
     period = max(2, int(accent_every))
 
     for i, note in enumerate(painted):
-        is_strong = (i % period) == 0
-        if is_strong:
-            continue
-        # Prefer color on approach slots (one before a strong beat) and mid-weak.
+        # Approach only: index immediately before a strong beat.
         is_approach = ((i + 1) % period) == 0
-        is_mid_weak = (i % period) == (period // 2)
-        if is_approach or is_mid_weak or (i % 2 == 1 and period <= 2):
+        if is_approach:
             painted[i] = _nearest_color_note(note, color_notes)
 
     if not any((n % 12) in color_pcs for n in painted):

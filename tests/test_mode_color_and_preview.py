@@ -58,6 +58,9 @@ def test_lydian_arpeggio_includes_sharp_four():
     )
     pcs = {n % 12 for n in notes}
     assert color_pcs & pcs, f"expected Lydian #4 in {pcs}"
+    # Sparse: approach-only → well under half the cell is color
+    color_count = sum(1 for n in notes if (n % 12) in color_pcs)
+    assert 1 <= color_count <= 3, f"color density too high: {color_count}/8 in {notes}"
 
 
 def test_dorian_arpeggio_includes_nat6_or_9():
@@ -78,6 +81,52 @@ def test_dorian_arpeggio_includes_nat6_or_9():
     )
     pcs = {n % 12 for n in notes}
     assert color_pcs & pcs
+
+
+def test_major_minor_have_no_mode_color_intervals():
+    root = note_str_to_midi("C4")
+    assert get_mode_color_pitch_classes(root, "major") == []
+    assert get_mode_color_pitch_classes(root, "minor") == []
+    triad_maj = set(get_scale(root, "major", use_chord_tones=True))
+    notes = create_arpeggio(
+        root=root,
+        mode="major",
+        length=8,
+        min_octave=4,
+        max_octave=5,
+        arp_mode="up",
+        range_octaves=1,
+        evolution_rate=0.0,
+        repetition_factor=10,
+        use_chord_tones=True,
+        mode_color=True,
+    )
+    assert {n % 12 for n in notes} <= triad_maj
+
+
+def test_glass_profile_stays_triad_clean():
+    from midi_gen.musician_styles import find_best_profile
+
+    glass = find_best_profile("Philip Glass")
+    assert glass is not None
+    assert glass.mode == "minor"
+    assert get_mode_color_pitch_classes(note_str_to_midi(glass.root_notes[0]), glass.mode) == []
+    root = note_str_to_midi(glass.root_notes[0])
+    triad = set(get_scale(root, glass.mode, use_chord_tones=True))
+    notes = create_arpeggio(
+        root=root,
+        mode=glass.mode,
+        length=glass.arp_steps,
+        min_octave=glass.min_octave,
+        max_octave=glass.max_octave,
+        arp_mode=glass.arp_mode,
+        range_octaves=glass.range_octaves,
+        evolution_rate=0.0,
+        repetition_factor=10,
+        use_chord_tones=glass.use_chord_tones,
+        mode_color=glass.mode_color,
+    )
+    assert {n % 12 for n in notes} <= triad
 
 
 def test_mode_color_can_be_disabled():
@@ -101,10 +150,11 @@ def test_mode_color_can_be_disabled():
     assert pcs <= set(get_scale(root, "lydian", use_chord_tones=True))
 
 
-def test_paint_mode_color_keeps_strong_beats_as_chord_tones():
+def test_paint_mode_color_approach_only_sparse():
     root = note_str_to_midi("C4")
     triad = get_scale(root, "mixolydian", use_chord_tones=True)
-    # Fabricate a triad-only pattern
+    color_pcs = set(get_mode_color_pitch_classes(root, "mixolydian"))
+    # Fabricate a triad-only 8-step cell
     pattern = [
         note_str_to_midi("C4"),
         note_str_to_midi("E4"),
@@ -119,8 +169,32 @@ def test_paint_mode_color_keeps_strong_beats_as_chord_tones():
     # Strong beats 0,4 remain chord tones
     assert painted[0] % 12 in triad
     assert painted[4] % 12 in triad
-    color_pcs = set(get_mode_color_pitch_classes(root, "mixolydian"))
-    assert any(n % 12 in color_pcs for n in painted)
+    # Mid-weak slots (1, 2, 5, 6) stay triad — only approach (3, 7) paint
+    assert painted[1] % 12 in triad
+    assert painted[2] % 12 in triad
+    assert painted[5] % 12 in triad
+    assert painted[6] % 12 in triad
+    assert painted[3] % 12 in color_pcs
+    assert painted[7] % 12 in color_pcs
+    color_count = sum(1 for n in painted if (n % 12) in color_pcs)
+    assert color_count == 2, f"expected 2 approach accents, got {color_count}: {painted}"
+
+
+def test_paint_force_one_if_missing_when_no_approach():
+    """Short cell with no approach slot still gets one forced color hit."""
+    root = note_str_to_midi("C4")
+    color_pcs = set(get_mode_color_pitch_classes(root, "lydian"))
+    # length 1 has no approach before a strong beat under period=4
+    painted = paint_mode_color(
+        [note_str_to_midi("C4")],
+        root,
+        "lydian",
+        4,
+        5,
+        accent_every=4,
+    )
+    assert painted[0] % 12 in color_pcs
+
 
 
 def test_drone_lydian_includes_color_tone():
