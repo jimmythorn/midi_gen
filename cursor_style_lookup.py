@@ -39,15 +39,31 @@ Return ONLY a single JSON object (no markdown) with these keys:
   "min_octave": 2-5,
   "max_octave": 3-6,
   "use_chord_tones": true/false,
+  "mode_color": true/false OR {"enabled": true, "intervals": [2, 9], "accent_every": 4},
   "arp_mode": "up|down|up_down|random|order",
   "arp_steps": 4|8|16,
   "range_octaves": 1-3,
   "evolution_rate": 0.0-1.0,
   "repetition_factor": 1-10,
+  "embellish": true/false,
+  "rhythmic_variation": true/false,
+  "chord_progression": ["D3", "A3", "G3", "D3"] or null,
+  "development": null OR {
+    "enabled": true,
+    "seed_bars": 1|2,
+    "mutate_every_n": 1-4,
+    "mutate_ops": ["add_attack", "add_rest", "invert", "thin", "phase_creep"],
+    "phase_creep": true/false,
+    "additive_only": true/false,
+    "max_phase": 0-2
+  },
   "effects_preset": "clean|subtle_tape|worn_tape|human_feel|tape_and_human"
 }
 Choose parameters that evoke the musician's stylistic tendencies as a
 sketch for algorithmic MIDI — not a literal transcription.
+Optional nested blocks (mode_color dict, development, arp embellish /
+rhythmic_variation / chord_progression) refine evolution and color;
+omit them or use null/false for static backward-compatible tiling.
 """
 
 

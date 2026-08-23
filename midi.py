@@ -73,38 +73,52 @@ class MidiProcessor:
         
         if generation_type == 'arpeggio':
             sixteenth_note_duration_ticks = DEFAULT_TICKS_PER_BEAT // 4
+            # steps_per_note: 1=16th, 2=8th, 4=quarter — set by create_arp so
+            # MIDI note length matches the arp_steps / repeat_pattern labels.
+            steps_per_note = max(1, int(options.get('steps_per_note', 1)))
             current_tick = 0
-            
-            for step_index, raw_note_value in enumerate(event_list):
-                # Only None (or legacy empty) is a rest — MIDI note 0 is a valid pitch (C-1).
+            i = 0
+            n_events = len(event_list)
+
+            while i < n_events:
+                raw_note_value = event_list[i]
+                # Each attack (or rest) occupies a note-slot of steps_per_note
+                # sixteenths. Padding Nones that follow an attack are absorbed
+                # into that slot's duration — not treated as separate rests.
+                slot_steps = steps_per_note
+                duration_ticks = sixteenth_note_duration_ticks * slot_steps
+
                 if raw_note_value is None:
-                    current_tick += sixteenth_note_duration_ticks
+                    current_tick += duration_ticks
+                    i += slot_steps
                     continue
-                
+
                 # Create note context for this step
                 ctx = create_note_context(
                     note=int(raw_note_value),
                     velocity=64,
                     tick=current_tick,
                     options=options,
-                    duration_ticks=sixteenth_note_duration_ticks,
-                    is_first_note=(step_index == 0),
-                    is_last_note=(step_index == len(event_list) - 1)
+                    duration_ticks=duration_ticks,
+                    is_first_note=(i == 0),
+                    is_last_note=(i >= n_events - slot_steps)
                 )
-                
+
                 # Process through note-level effects
                 processed_ctx = self.effect_chain.process_note(ctx)
-                
-                # Create note events if note is valid
+
+                # Create note events if note is valid (note 0 is a rare edge —
+                # treat as silent to avoid C-1 accidents from clamp bugs).
                 if processed_ctx['note'] > 0:
                     processed_events.extend([
-                        ('note_on', current_tick, processed_ctx['note'], 
+                        ('note_on', current_tick, processed_ctx['note'],
                          processed_ctx['velocity'], processed_ctx['channel']),
-                        ('note_off', current_tick + sixteenth_note_duration_ticks,
+                        ('note_off', current_tick + duration_ticks,
                          processed_ctx['note'], 0, processed_ctx['channel'])
                     ])
-                
-                current_tick += sixteenth_note_duration_ticks
+
+                current_tick += duration_ticks
+                i += slot_steps
                 
         elif generation_type == 'drone':
             # For drones, we need to track the maximum tick for proper duration calculation
