@@ -131,11 +131,17 @@ def test_all_notes_off_sends_cc123_on_fake_port():
         if m.type == "control_change" and m.control == 123
     ]
     bends = [m for m in port.sent if m.type == "pitchwheel"]
-    assert len(cc123) == 16
+    assert len(cc123) == 16, "panic flush must send CC123 on every channel"
+    assert all(m.control == 123 for m in cc123)
     assert all(m.value == 0 for m in cc123)
     assert {m.channel for m in cc123} == set(range(16))
     assert len(bends) == 16
     assert all(m.pitch == 0 for m in bends)
+    # No other CC besides 123 in a pure panic flush.
+    other_cc = [
+        m for m in port.sent if m.type == "control_change" and m.control != 123
+    ]
+    assert other_cc == []
 
 
 def test_all_notes_off_alias_matches_panic():
@@ -151,8 +157,8 @@ def test_all_notes_off_alias_matches_panic():
     ]
 
 
-def test_stop_panic_flush_opens_named_port(tmp_path):
-    """Stop must panic-flush via CC123 even when using a named port path."""
+def test_stop_panic_flush_sends_cc123_on_fake_port(tmp_path):
+    """Stop() must deliver CC123 all-notes-off via named-port panic flush."""
     fake = FakeMidiPort()
     opened: list[str] = []
 
@@ -168,7 +174,6 @@ def test_stop_panic_flush_opens_named_port(tmp_path):
         "midi_gen.live_midi.rtmidi_available", return_value=True
     ), patch("midi_gen.live_midi.mido.open_output", side_effect=_open):
         player.play_file(str(path), "Fake Bus", count_in_bars=0, loop=False)
-        # Let the worker open and start.
         deadline = time.time() + 1.0
         while not player.playing and time.time() < deadline:
             time.sleep(0.01)
@@ -176,10 +181,29 @@ def test_stop_panic_flush_opens_named_port(tmp_path):
 
     assert not player.playing
     assert player.phase == "idle"
-    # At least one open was play; Stop's panic_flush_named opens again (or worker).
     assert "Fake Bus" in opened
+    # Worker finally and/or Stop's panic_flush_named both send CC123 — at least one full set.
     cc123 = [m for m in fake.sent if m.type == "control_change" and m.control == 123]
-    assert len(cc123) >= 16  # at least one full panic flush
+    assert len(cc123) >= 16
+    assert all(m.control == 123 and m.value == 0 for m in cc123)
+    assert set(range(16)).issubset({m.channel for m in cc123})
+
+
+def test_panic_flush_named_sends_cc123_on_fake_port():
+    """Named-port Hard Stop path: open → CC123×16 → close (isolated unit)."""
+    fake = FakeMidiPort()
+
+    with patch("midi_gen.live_midi.mido.open_output", return_value=fake) as opener:
+        from midi_gen.live_midi import panic_flush_named
+
+        panic_flush_named("Fake Bus")
+        opener.assert_called_once_with("Fake Bus")
+
+    cc123 = [m for m in fake.sent if m.type == "control_change" and m.control == 123]
+    assert len(cc123) == 16
+    assert all(m.value == 0 for m in cc123)
+    assert {m.channel for m in cc123} == set(range(16))
+    assert fake.closed is True
 
 
 def test_send_fail_clears_playing_and_sets_port_lost(tmp_path):
@@ -330,3 +354,26 @@ def test_ui_count_in_default_is_false():
     src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
     assert 'st.session_state["live_count_in"] = False' in src
     assert 'st.session_state["live_count_in"] = True' not in src
+
+
+def test_ui_crisp_audit_extras_a_through_e():
+    """Source-level guards for transport freeze, Generate stop, count-in honesty."""
+    src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
+    # A — freeze transport chrome while playing
+    assert "disabled=_transport_busy" in src
+    assert '_transport_busy = bool(player.playing)' in src
+    # B — Refresh must not clobber Streaming mid-play
+    assert "if _force_refresh and _transport_busy" in src
+    assert "if player.playing:" in src  # refresh click guard
+    # C — Stop before Generate writes new MIDI
+    assert "player.stop(wait=True)" in src
+    assert src.index("player.stop(wait=True)") < src.index("generate_midi_for_style(")
+    # D — count-in honesty microcopy
+    assert "not synced to Logic" in src
+    assert "sketch BPM" in src
+    # E — last_error → live_message; keep Stop when was_playing / failed Play
+    assert 'st.session_state["live_message"] = err' in src
+    assert 'st.session_state["live_was_playing"] = bool(player.playing)' in src
+    # Natural end always sets Finished (no Streaming-prefix requirement).
+    assert 'st.session_state["live_message"] = "Finished."' in src
+    assert 'msg.startswith("Streaming")' not in src

@@ -542,8 +542,13 @@ st.markdown("</div>", unsafe_allow_html=True)
 if st.session_state.pop("auto_generate", False):
     generate = True
 
+player = get_shared_player()
+
 # --- Generate ---
 if generate:
+    # Stop any in-flight clip before writing a new sketch (no old stream over new MIDI).
+    player.stop(wait=True)
+    st.session_state["live_was_playing"] = False
     with st.spinner("Resolving style and writing MIDI…"):
         overrides = {
             "effects_preset": effects_preset,
@@ -584,9 +589,13 @@ if st.session_state.get("generate_error"):
     st.error(f"Generation failed: {st.session_state['generate_error']}")
 
 run = st.session_state.get("last_run")
-player = get_shared_player()
+# Freeze transport chrome while count-in / playing (Play is already disabled).
+_transport_busy = bool(player.playing)
 # Honor an explicit mid-session Refresh request before painting status.
 _force_refresh = st.session_state.pop("refresh_midi_ports", False)
+if _force_refresh and _transport_busy:
+    # Don't refresh / clobber Streaming status while a clip is active.
+    _force_refresh = False
 live = player.status(refresh=_force_refresh)
 ports = live.ports
 if _force_refresh:
@@ -639,16 +648,26 @@ else:
     with chip_col:
         _render_iac_status_chip(ports)
     with refresh_col:
-        if st.button("Refresh ports", use_container_width=True, key="refresh_ports"):
-            st.session_state["refresh_midi_ports"] = True
-            refreshed = refresh_output_ports()
-            _apply_refreshed_ports(refreshed)
-            st.session_state["live_message"] = (
-                f"Ports refreshed · {len(refreshed)} available."
-                if refreshed
-                else "No ports yet — enable IAC, then Refresh again."
-            )
-            st.rerun()
+        if st.button(
+            "Refresh ports",
+            use_container_width=True,
+            key="refresh_ports",
+            disabled=_transport_busy,
+            help="Disabled while Playing — Stop first.",
+        ):
+            # Guard: never clobber Streaming / status mid-play (Finished transition).
+            if player.playing:
+                st.rerun()
+            else:
+                st.session_state["refresh_midi_ports"] = True
+                refreshed = refresh_output_ports()
+                _apply_refreshed_ports(refreshed)
+                st.session_state["live_message"] = (
+                    f"Ports refreshed · {len(refreshed)} available."
+                    if refreshed
+                    else "No ports yet — enable IAC, then Refresh again."
+                )
+                st.rerun()
 
     if not live.available:
         _show_iac_tip()
@@ -666,6 +685,7 @@ else:
                 options=ports,
                 key="live_port",
                 help=MULTI_PORT_HELP,
+                disabled=_transport_busy,
             )
             st.caption("Logic MIDI In must match the IAC bus chosen above.")
             selected = st.session_state.get("live_port") or ""
@@ -692,15 +712,22 @@ else:
             count_in = st.checkbox(
                 "Count-in (1 silent bar)",
                 key="live_count_in",
+                disabled=_transport_busy,
                 help="Opt in before Record/Capture for time after Arm→Record. "
-                "Off by default for instant audition. Silent (no metronome MIDI).",
+                "Off by default for instant audition. App-side silent bar at sketch "
+                "BPM — not synced to Logic’s clock or metronome.",
             )
         with opt_b:
             loop_play = st.checkbox(
                 "Loop sketch",
                 key="live_loop",
+                disabled=_transport_busy,
                 help="Repeat until Stop — useful if you miss the first pass.",
             )
+        st.caption(
+            "Count-in is an app-side silent bar at sketch BPM — "
+            "not synced to Logic’s clock or metronome."
+        )
         st.markdown(AUDITION_CAPTURE_STRIP_BOTTOM_HTML, unsafe_allow_html=True)
 
         play_col, stop_col = st.columns([2, 1])
@@ -732,13 +759,20 @@ else:
                     st.session_state["iac_tip_dismissed"] = True
                     st.rerun()
                 except Exception as exc:
+                    # Surface prior-join / open failures; keep Stop enabled if
+                    # a worker is still alive so the user can panic-stop.
                     st.session_state["live_message"] = f"Live MIDI failed: {exc}"
-                    st.session_state["live_was_playing"] = False
+                    st.session_state["live_was_playing"] = bool(player.playing)
         with stop_col:
+            # Keep Stop enabled while Playing, or after a failed Play that left
+            # a worker alive (prior-join / RuntimeError surface path).
+            stop_enabled = player.playing or bool(
+                st.session_state.get("live_was_playing")
+            )
             if st.button(
                 "Stop",
                 use_container_width=True,
-                disabled=not player.playing,
+                disabled=not stop_enabled,
                 key="stop_logic",
             ):
                 player.stop(wait=True)
@@ -772,13 +806,12 @@ else:
                     st.caption(f"{label} → **{player.port_name}**{loop_tag}")
                     return
                 # Worker finished (natural end, Stop, or port/send failure).
+                # Clear Playing / was_playing regardless of live_message prefix.
                 if st.session_state.pop("live_was_playing", False):
                     if err:
                         st.session_state["live_message"] = err
                     else:
-                        msg = st.session_state.get("live_message") or ""
-                        if msg.startswith("Streaming"):
-                            st.session_state["live_message"] = "Finished."
+                        st.session_state["live_message"] = "Finished."
                     st.rerun()
 
             _playback_status_poll()
@@ -787,10 +820,16 @@ else:
 
         st.markdown(SILENCE_CHECKLIST_HTML, unsafe_allow_html=True)
 
+        # If the worker exited with last_error outside the poll, still surface it.
+        if player.last_error and not player.playing:
+            if st.session_state.get("live_message") != player.last_error:
+                st.session_state["live_message"] = player.last_error
+            st.session_state["live_was_playing"] = False
+
         live_msg = st.session_state.get("live_message")
         if live_msg:
-            if "port lost" in live_msg.lower() or (
-                player.last_error and "port lost" in (player.last_error or "").lower()
+            if "port lost" in live_msg.lower() or "failed" in live_msg.lower() or (
+                player.last_error and live_msg == player.last_error
             ):
                 st.error(live_msg)
             else:
