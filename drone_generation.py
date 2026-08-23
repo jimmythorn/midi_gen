@@ -81,7 +81,8 @@ def generate_drone_events(options: Dict, processed_root_notes_midi: List[int]) -
         num_chord_notes = len(base_chord_notes)
         if num_chord_notes == 0: continue # Should not happen if fallback works
 
-        print(f"[DRONE DEBUG] Root: {root_midi_note}, Mode: {mode}, Base Chord: {base_chord_notes}, Segment Bars: {segment_duration_bars}")
+        if options.get('debug'):
+            print(f"[DRONE DEBUG] Root: {root_midi_note}, Mode: {mode}, Base Chord: {base_chord_notes}, Segment Bars: {segment_duration_bars}")
 
         # Get full scale notes in a relevant range for diatonic walkdowns
         full_scale_pitch_classes = get_scale(root_midi_note, mode, use_chord_tones=False)
@@ -155,71 +156,68 @@ def generate_drone_events(options: Dict, processed_root_notes_midi: List[int]) -
                     doubled_note_target = max(0, min(127, doubled_note_target))
                     low, high = midi_octave_bounds(min_octave_param, max_octave_param + 1)
                     if not (low <= doubled_note_target <= high):
-                        continue 
-                    actual_walk_notes_to_play: List[int] = [] # Initialize to empty list
-                    actual_total_walkdown_duration = 0
-                    
-                    if enable_walkdowns and walkdown_num_steps_config > 0 and walkdown_step_ticks_config > 0:
-                        potential_total_walkdown_duration = walkdown_num_steps_config * walkdown_step_ticks_config
-                        if interval_actual_duration_ticks >= potential_total_walkdown_duration + min_target_sustain_ticks:
-                            # Try to build diatonic walk sequence (simplified)
-                            temp_walk_notes = []
-                            for step_index_from_target in range(walkdown_num_steps_config, 0, -1): # e.g., 2, 1 for 2 steps
-                                found_step_note: Optional[int] = None
-                                if doubled_note_target > note_being_doubled_source: # Doubled upwards, walk from below
-                                    # Find the Nth diatonic note below doubled_note_target
-                                    notes_below = [n for n in diatonic_notes_in_range if n < doubled_note_target]
-                                    if len(notes_below) >= step_index_from_target:
-                                        found_step_note = notes_below[-step_index_from_target] # Nth from end of sorted list of notes below
-                                else: # Doubled downwards, walk from above
-                                    # Find the Nth diatonic note above doubled_note_target
-                                    notes_above = [n for n in diatonic_notes_in_range if n > doubled_note_target]
-                                    if len(notes_above) >= step_index_from_target:
-                                        found_step_note = notes_above[step_index_from_target - 1] # Nth from beginning of sorted list of notes above
-                                
-                                if found_step_note is not None:
-                                    if not temp_walk_notes or found_step_note != temp_walk_notes[-1]: # Avoid duplicate sequential notes
-                                        temp_walk_notes.append(found_step_note)
-                                else:
-                                    # Optional: could fallback to chromatic if diatonic step not found, or just make walk shorter
-                                    pass # Step not found, walk will be shorter
-                            
-                            actual_walk_notes_to_play = temp_walk_notes
-                            actual_total_walkdown_duration = len(actual_walk_notes_to_play) * walkdown_step_ticks_config
-                        
-                        # Add walkdown notes if any were generated
-                        current_walk_event_tick_offset = 0
-                        for walk_note in actual_walk_notes_to_play: # Will be empty if walkdown failed or disabled
-                            final_drone_events.append((
-                                walk_note, 
-                                interval_start_abs_tick + current_walk_event_tick_offset, 
-                                walkdown_step_ticks_config, 
-                                base_velocity - 15 # Softer walk notes
-                            ))
-                            current_walk_event_tick_offset += walkdown_step_ticks_config
-                        
-                        # Add the target doubled note (with adjusted start/duration if walkdown occurred)
-                        target_note_start_tick = interval_start_abs_tick + actual_total_walkdown_duration
-                        target_note_duration = interval_actual_duration_ticks - actual_total_walkdown_duration
-                        
-                        if target_note_duration >= min_target_sustain_ticks: # Ensure target note has some sound
-                            final_drone_events.append((
-                                doubled_note_target, 
-                                target_note_start_tick, 
-                                target_note_duration, 
-                                base_velocity
-                            ))
-                        elif not actual_walk_notes_to_play: # No walkdown, but target note itself is too short, play for full interval
-                            final_drone_events.append((
-                                doubled_note_target, 
-                                interval_start_abs_tick, 
-                                interval_actual_duration_ticks, 
-                                base_velocity
-                            )) # If walkdown failed AND target is too short, original logic plays it full duration.
-                            # This else branch ensures if no walkdown notes, the doubled_note_target is still played if it was chosen.
+                        continue
 
-                        if actual_walk_notes_to_play or target_note_duration >= min_target_sustain_ticks or not enable_walkdowns : # If walkdown happened OR target note is long enough OR walkdowns disabled but doubling happened
-                            has_doubled_a_note_this_interval = True; break # Mark doubling done for this interval
+                    actual_walk_notes_to_play: List[int] = []
+                    actual_total_walkdown_duration = 0
+                    can_afford_walk = (
+                        enable_walkdowns
+                        and walkdown_num_steps_config > 0
+                        and walkdown_step_ticks_config > 0
+                        and interval_actual_duration_ticks
+                        >= (walkdown_num_steps_config * walkdown_step_ticks_config) + min_target_sustain_ticks
+                    )
+
+                    if can_afford_walk:
+                        temp_walk_notes = []
+                        for step_index_from_target in range(walkdown_num_steps_config, 0, -1):
+                            found_step_note: Optional[int] = None
+                            if doubled_note_target > note_being_doubled_source:
+                                notes_below = [n for n in diatonic_notes_in_range if n < doubled_note_target]
+                                if len(notes_below) >= step_index_from_target:
+                                    found_step_note = notes_below[-step_index_from_target]
+                            else:
+                                notes_above = [n for n in diatonic_notes_in_range if n > doubled_note_target]
+                                if len(notes_above) >= step_index_from_target:
+                                    found_step_note = notes_above[step_index_from_target - 1]
+
+                            if found_step_note is not None:
+                                if not temp_walk_notes or found_step_note != temp_walk_notes[-1]:
+                                    temp_walk_notes.append(found_step_note)
+
+                        actual_walk_notes_to_play = temp_walk_notes
+                        actual_total_walkdown_duration = (
+                            len(actual_walk_notes_to_play) * walkdown_step_ticks_config
+                        )
+
+                    # Walk-in notes (only when walkdowns produced steps)
+                    current_walk_event_tick_offset = 0
+                    for walk_note in actual_walk_notes_to_play:
+                        final_drone_events.append((
+                            walk_note,
+                            interval_start_abs_tick + current_walk_event_tick_offset,
+                            walkdown_step_ticks_config,
+                            max(1, base_velocity - 15),
+                        ))
+                        current_walk_event_tick_offset += walkdown_step_ticks_config
+
+                    # Always emit the doubled target when doubling fires
+                    target_note_start_tick = interval_start_abs_tick + actual_total_walkdown_duration
+                    target_note_duration = interval_actual_duration_ticks - actual_total_walkdown_duration
+                    if target_note_duration < min_target_sustain_ticks:
+                        # Fall back to full-interval sustain if walk ate too much time
+                        target_note_start_tick = interval_start_abs_tick
+                        target_note_duration = interval_actual_duration_ticks
+
+                    if target_note_duration > 0:
+                        final_drone_events.append((
+                            doubled_note_target,
+                            target_note_start_tick,
+                            target_note_duration,
+                            base_velocity,
+                        ))
+                        has_doubled_a_note_this_interval = True
+                        break
 
             current_segment_tick_offset += interval_actual_duration_ticks
             variation_pattern_counter += 1

@@ -13,10 +13,9 @@ from .effects_base import (
 from .midi_types import (
     MidiInstruction, WobbleState, Tick, NoteValue, Velocity,
     MIDI_PITCH_BEND_CENTER, MIDI_PITCH_BEND_MIN, MIDI_PITCH_BEND_MAX,
-    DEFAULT_PITCH_BEND_UPDATE_RATE, PITCH_BEND_THRESHOLD,
+    PITCH_BEND_THRESHOLD,
     DEFAULT_BEND_UP_CENTS, DEFAULT_BEND_DOWN_CENTS,
-    DEFAULT_RANDOMNESS, DEFAULT_TICKS_PER_BEAT,
-    MIN_TIME_BETWEEN_BENDS_MS
+    DEFAULT_TICKS_PER_BEAT,
 )
 
 class EffectRegistry:
@@ -36,14 +35,14 @@ class EffectRegistry:
             update_rate = float(
                 effect_conf.get(
                     'pitch_bend_update_rate',
-                    max(DEFAULT_PITCH_BEND_UPDATE_RATE, flutter_rate * 4.0),
+                    max(TAPE_DEFAULT_PITCH_BEND_UPDATE_RATE, flutter_rate * 4.0),
                 )
             )
             config = TapeWobbleConfiguration(
                 # Note-sync contour shares wow depth; LFOs carry the labeled rates/depths
                 bend_up_cents=wow_depth * 0.5,
                 bend_down_cents=wow_depth * 0.5,
-                randomness=effect_conf.get('randomness', DEFAULT_RANDOMNESS),
+                randomness=effect_conf.get('randomness', TAPE_DEFAULT_RANDOMNESS),
                 depth_units=effect_conf.get('depth_units', 'cents'),
                 pitch_bend_update_rate=update_rate,
                 wow_rate_hz=wow_rate,
@@ -62,17 +61,17 @@ class EffectRegistry:
             
         return None
 
-# Constants for tape wobble effect
+# Constants for tape wobble effect (local names — do not shadow midi_types imports)
 SEMITONES_PER_BEND = 2.0  # Standard pitch bend range
-MIN_TIME_BETWEEN_BENDS_MS = 5.0  # Minimum time between pitch bend messages
+TAPE_MIN_TIME_BETWEEN_BENDS_MS = 5.0  # Minimum time between pitch bend messages
 
 # Default values for tape wobble configuration
 DEFAULT_WOW_RATE_HZ = 0.5
 DEFAULT_WOW_DEPTH = 20.0  # cents
 DEFAULT_FLUTTER_RATE_HZ = 7.0
 DEFAULT_FLUTTER_DEPTH = 5.0  # cents
-DEFAULT_RANDOMNESS = 1.0
-DEFAULT_PITCH_BEND_UPDATE_RATE = 30.0
+TAPE_DEFAULT_RANDOMNESS = 0.35
+TAPE_DEFAULT_PITCH_BEND_UPDATE_RATE = 30.0
 
 # Default values for humanize velocity configuration
 DEFAULT_HUMANIZE_RANGE = 10
@@ -110,9 +109,9 @@ class TapeWobbleConfiguration(EffectConfiguration):
     """Configuration for tape wobble effect."""
     bend_up_cents: float = DEFAULT_BEND_UP_CENTS
     bend_down_cents: float = DEFAULT_BEND_DOWN_CENTS
-    randomness: float = DEFAULT_RANDOMNESS
+    randomness: float = TAPE_DEFAULT_RANDOMNESS
     depth_units: str = 'cents'
-    pitch_bend_update_rate: float = DEFAULT_PITCH_BEND_UPDATE_RATE
+    pitch_bend_update_rate: float = TAPE_DEFAULT_PITCH_BEND_UPDATE_RATE
     # Classic tape LFOs (applied on top of note-synchronized contour)
     wow_rate_hz: float = DEFAULT_WOW_RATE_HZ
     wow_depth_cents: float = DEFAULT_WOW_DEPTH
@@ -161,7 +160,7 @@ def tape_wobble(options: dict) -> List[tuple[float, int]]:
     wow_depth = options.get('wow_depth', DEFAULT_WOW_DEPTH)
     flutter_rate = options.get('flutter_rate_hz', DEFAULT_FLUTTER_RATE_HZ)
     flutter_depth = options.get('flutter_depth', DEFAULT_FLUTTER_DEPTH)
-    randomness = options.get('randomness', DEFAULT_RANDOMNESS)
+    randomness = options.get('randomness', TAPE_DEFAULT_RANDOMNESS)
     depth_units = options.get('depth_units', 'cents')
     
     if debug:
@@ -177,7 +176,7 @@ def tape_wobble(options: dict) -> List[tuple[float, int]]:
     min_sample_rate = max(
         wow_rate * nyquist_factor,
         flutter_rate * nyquist_factor,
-        DEFAULT_PITCH_BEND_UPDATE_RATE
+        TAPE_DEFAULT_PITCH_BEND_UPDATE_RATE
     )
     sample_rate_hz = min(50, max(10, int(min_sample_rate)))
     if debug:
@@ -233,7 +232,7 @@ def tape_wobble(options: dict) -> List[tuple[float, int]]:
         time_since_last = t - last_emission_time
         value_change = abs(bend_value - last_emitted_value)
         
-        if (time_since_last >= MIN_TIME_BETWEEN_BENDS_MS / 1000.0 and 
+        if (time_since_last >= TAPE_MIN_TIME_BETWEEN_BENDS_MS / 1000.0 and 
             value_change >= PITCH_BEND_THRESHOLD):
             wobble_data.append((t, bend_value))
             last_emitted_value = bend_value
@@ -468,7 +467,7 @@ class TapeWobbleEffect(MidiEffect):
             time_since_last = t - last_emission_time
             value_change = abs(bend_value - last_emitted_value)
             
-            if (time_since_last >= MIN_TIME_BETWEEN_BENDS_MS / 1000.0 and 
+            if (time_since_last >= TAPE_MIN_TIME_BETWEEN_BENDS_MS / 1000.0 and 
                 (value_change >= PITCH_BEND_THRESHOLD or time_since_last >= 0.1)):
                 wobble_data.append((t, bend_value))
                 last_emitted_value = bend_value
@@ -529,11 +528,8 @@ class HumanizeVelocityEffect(MidiEffect):
     
     def _calculate_beat_emphasis(self, ctx: NoteContext) -> int:
         """Calculate velocity emphasis based on beat position."""
-        tick = ctx.get('tick', 0)
-        ticks_per_beat = ctx.get('options', {}).get('ticks_per_beat', DEFAULT_TICKS_PER_BEAT)
-        
-        # Calculate beat position
-        beat_position = (tick % (ticks_per_beat * 4)) / ticks_per_beat
+        # Prefer precomputed musical context from create_note_context
+        beat_position = float(ctx.get('beat_position', 0.0))
         
         emphasis = 0
         if beat_position < 0.1:  # Downbeat
