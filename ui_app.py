@@ -27,6 +27,7 @@ from midi_gen.effects_presets import EFFECT_PARAM_HELP, explain_effects_config, 
 from midi_gen.musician_styles import list_musicians, list_styles
 from midi_gen.preview import events_to_roll_rows, format_summary_text, summarize_midi_file
 from midi_gen.audio_preview import describe_preview, render_midi_to_wav_bytes
+from midi_gen.live_midi import get_shared_player, preferred_iac_port
 
 
 st.set_page_config(
@@ -282,6 +283,66 @@ else:
         st.caption(run.get("preview_caption") or "Simple synth preview (not a DAW instrument).")
         if run.get("wav_bytes"):
             st.audio(run["wav_bytes"], format="audio/wav")
+
+        st.markdown("#### Play into Logic (IAC)")
+        player = get_shared_player()
+        live = player.status()
+        ports = live.ports
+        default_port = preferred_iac_port(ports) or (ports[0] if ports else None)
+        if "live_port" not in st.session_state and default_port:
+            st.session_state["live_port"] = default_port
+
+        if not live.available:
+            st.warning(
+                live.error
+                or "No MIDI ports available. On Mac, enable IAC Driver in Audio MIDI Setup."
+            )
+        else:
+            st.selectbox(
+                "MIDI output port",
+                options=ports,
+                key="live_port",
+                help="Prefer an IAC Driver bus. In Logic, set the track MIDI In to that bus.",
+            )
+            play_col, stop_col = st.columns(2)
+            with play_col:
+                if st.button(
+                    "Play into Logic",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=player.playing,
+                ):
+                    try:
+                        player.play_file(path, st.session_state.get("live_port"))
+                        st.session_state["live_message"] = (
+                            f"Streaming to {player.port_name}. "
+                            "Arm/record in Logic if you want a region."
+                        )
+                    except Exception as exc:
+                        st.session_state["live_message"] = f"Live MIDI failed: {exc}"
+            with stop_col:
+                if st.button("Stop", use_container_width=True, disabled=not player.playing):
+                    player.stop(wait=False)
+                    st.session_state["live_message"] = "Stopped live MIDI."
+
+            if player.playing:
+                st.caption(f"Playing → **{player.port_name}**")
+            if st.session_state.get("live_message"):
+                st.info(st.session_state["live_message"])
+            if player.last_error:
+                st.error(player.last_error)
+
+        with st.expander("Logic Pro setup (once)"):
+            st.markdown(
+                """
+1. Open **Audio MIDI Setup** → Window → **Show MIDI Studio**.
+2. Double-click **IAC Driver** → enable **Device is online** (add a bus if needed).
+3. In **Logic Pro**, create/select a Software Instrument track.
+4. Set that track’s **MIDI In** to the IAC bus (e.g. `IAC Driver Bus 1`).
+5. Click **Play into Logic** here. Hit **Record** in Logic if you want a captured region.
+                """
+            )
+
         st.download_button(
             "Download MIDI",
             data=midi_bytes,

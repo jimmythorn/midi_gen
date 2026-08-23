@@ -9,7 +9,7 @@ Honest baseline: output is musically usable as a starting sketch, not a finished
 - **Musician / style lab** — query “Philip Glass”, “ambient drone”, “angular jazz”, etc.
 - **Cursor SDK hook** — when `CURSOR_API_KEY` is set, an agent can refine the style → generation recipe as JSON; otherwise the local catalog is used.
 - **Effects presets** — Clean / Human feel / Subtle tape / Worn tape / Tape + human, explained in plain language (Hz/cents stay under the hood).
-- **Streamlit test UI** — generate, inspect note preview + stats, download `.mid`.
+- **Streamlit test UI** — generate, inspect note preview + stats, download `.mid` / WAV, **Play into Logic via IAC**.
 
 ## Quick start
 
@@ -18,7 +18,7 @@ pip install -e .
 ./run_ui.sh
 ```
 
-Open **http://127.0.0.1:8501** — generate from a musician/style query, **listen to the WAV preview**, inspect notes, download MIDI/WAV.
+Open **http://127.0.0.1:8501** — generate from a musician/style query, **listen to the WAV preview**, **Play into Logic** (IAC), inspect notes, download MIDI/WAV.
 
 CLI (optional):
 
@@ -27,6 +27,15 @@ python3 -m midi_gen
 ```
 
 Optional Cursor SDK enrichment: `export CURSOR_API_KEY=crsr_...` before `./run_ui.sh`.
+
+## Play into Logic Pro (IAC)
+
+1. **Audio MIDI Setup** → MIDI Studio → **IAC Driver** → enable **Device is online**.
+2. In Logic, set a Software Instrument track’s **MIDI In** to that IAC bus.
+3. In the Style Lab UI, choose the IAC port → **Play into Logic**.
+4. Optional: hit **Record** in Logic to capture a region (live stream alone does not write the project).
+
+Requires `python-rtmidi` (installed with the package).
 
 ## Style lookup
 
