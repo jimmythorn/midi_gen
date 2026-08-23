@@ -156,6 +156,19 @@ st.markdown(
         border: none !important;
         font-weight: 700 !important;
       }
+
+      /* Bigger primary Generate CTA */
+      div[data-testid="stVerticalBlock"] > div:has(> div > button[kind="primary"][data-testid="baseButton-primary"]) button[kind="primary"] {
+        min-height: 3rem;
+        font-size: 1.05rem !important;
+        padding: 0.65rem 1.25rem !important;
+      }
+      .generate-wrap button[kind="primary"] {
+        min-height: 3.1rem !important;
+        font-size: 1.1rem !important;
+        letter-spacing: 0.01em;
+        width: 100%;
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -203,19 +216,22 @@ vibe = st.text_input(
 )
 query = vibe.strip() if vibe.strip() else catalog
 
-ctrl1, ctrl2 = st.columns([1.6, 1])
-with ctrl1:
-    effects_preset = st.selectbox(
-        "Effects",
-        options=preset_ids,
-        format_func=lambda i: preset_labels[i],
-        index=preset_ids.index("tape_and_human"),
-        help="Plain-language processing applied after notes are written.",
-    )
-with ctrl2:
-    bars = st.slider("Bars", 2, 32, int(st.session_state.get("bars", 8)))
+effects_preset = st.selectbox(
+    "Effects",
+    options=preset_ids,
+    format_func=lambda i: preset_labels[i],
+    index=preset_ids.index("tape_and_human"),
+    help="Plain-language processing applied after notes are written.",
+)
 
 with st.expander("Advanced"):
+    bars = st.slider(
+        "Bars",
+        2,
+        32,
+        int(st.session_state.get("bars", 8)),
+        help="Defaults to the catalog profile length when left alone.",
+    )
     use_sdk = st.toggle(
         "Cursor SDK enrichment",
         value=False,
@@ -231,7 +247,9 @@ with st.expander("Advanced"):
         value=0,
     )
 
-generate = st.button("Generate", type="primary", use_container_width=False)
+st.markdown('<div class="generate-wrap">', unsafe_allow_html=True)
+generate = st.button("Generate", type="primary", use_container_width=True)
+st.markdown("</div>", unsafe_allow_html=True)
 
 # --- Generate ---
 if generate:
@@ -351,15 +369,8 @@ else:
         if player.last_error:
             st.error(player.last_error)
 
-    # --- Secondary: Listen (bend-aware) + Download ---
-    st.markdown("### Listen & download")
-    st.caption(
-        "Quick preview (sine) — Play into Logic for real feel. "
-        + (run.get("preview_caption") or "")
-    )
-    if run.get("wav_bytes"):
-        st.audio(run["wav_bytes"], format="audio/wav")
-
+    # --- Secondary: Download first, then Listen preview ---
+    st.markdown("### Download")
     dl1, dl2 = st.columns(2)
     with dl1:
         st.download_button(
@@ -378,6 +389,14 @@ else:
             use_container_width=True,
             disabled=not bool(run.get("wav_bytes")),
         )
+
+    st.markdown("### Listen")
+    st.caption(
+        "Quick sine preview — Play into Logic for real feel. "
+        + (run.get("preview_caption") or "")
+    )
+    if run.get("wav_bytes"):
+        st.audio(run["wav_bytes"], format="audio/wav")
 
     # --- Geek / Debug (collapsed lab chrome) ---
     with st.expander("Geek / Debug"):

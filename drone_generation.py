@@ -200,75 +200,89 @@ def generate_drone_events(options: Dict, processed_root_notes_midi: List[int]) -
             shuffled_sources_for_doubling = list(notes_for_direct_play_and_doubling_source) # Create a copy to shuffle
             random.shuffle(shuffled_sources_for_doubling)
 
-            for note_being_doubled_source in shuffled_sources_for_doubling: 
-                if not has_doubled_a_note_this_interval and random.random() < octave_doubling_chance:
-                    direction = random.choice([-12, 12])
-                    doubled_note_target = note_being_doubled_source + direction
-                    doubled_note_target = max(0, min(127, doubled_note_target))
-                    low, high = midi_octave_bounds(min_octave_param, max_octave_param + 1)
-                    if not (low <= doubled_note_target <= high):
-                        continue
+            # Octave doubling is independent of walkdowns: always emit the
+            # doubled target when chance fires; walk-in is an optional garnish.
+            for note_being_doubled_source in shuffled_sources_for_doubling:
+                if has_doubled_a_note_this_interval:
+                    break
+                if random.random() >= octave_doubling_chance:
+                    continue
 
-                    actual_walk_notes_to_play: List[int] = []
-                    actual_total_walkdown_duration = 0
-                    can_afford_walk = (
-                        enable_walkdowns
-                        and walkdown_num_steps_config > 0
-                        and walkdown_step_ticks_config > 0
-                        and interval_actual_duration_ticks
-                        >= (walkdown_num_steps_config * walkdown_step_ticks_config) + min_target_sustain_ticks
+                direction = random.choice([-12, 12])
+                # Never emit MIDI note 0 (C-1) — clamp floor matches arp/midi path.
+                doubled_note_target = max(1, min(127, note_being_doubled_source + direction))
+                low, high = midi_octave_bounds(min_octave_param, max_octave_param + 1)
+                if not (low <= doubled_note_target <= high):
+                    continue
+
+                actual_walk_notes_to_play: List[int] = []
+                actual_total_walkdown_duration = 0
+                can_afford_walk = (
+                    enable_walkdowns
+                    and walkdown_num_steps_config > 0
+                    and walkdown_step_ticks_config > 0
+                    and interval_actual_duration_ticks
+                    >= (walkdown_num_steps_config * walkdown_step_ticks_config)
+                    + min_target_sustain_ticks
+                )
+
+                if can_afford_walk:
+                    temp_walk_notes = []
+                    for step_index_from_target in range(walkdown_num_steps_config, 0, -1):
+                        found_step_note: Optional[int] = None
+                        if doubled_note_target > note_being_doubled_source:
+                            notes_below = [
+                                n for n in diatonic_notes_in_range if n < doubled_note_target
+                            ]
+                            if len(notes_below) >= step_index_from_target:
+                                found_step_note = notes_below[-step_index_from_target]
+                        else:
+                            notes_above = [
+                                n for n in diatonic_notes_in_range if n > doubled_note_target
+                            ]
+                            if len(notes_above) >= step_index_from_target:
+                                found_step_note = notes_above[step_index_from_target - 1]
+
+                        if found_step_note is not None:
+                            clamped = max(1, min(127, found_step_note))
+                            if not temp_walk_notes or clamped != temp_walk_notes[-1]:
+                                temp_walk_notes.append(clamped)
+
+                    actual_walk_notes_to_play = temp_walk_notes
+                    actual_total_walkdown_duration = (
+                        len(actual_walk_notes_to_play) * walkdown_step_ticks_config
                     )
 
-                    if can_afford_walk:
-                        temp_walk_notes = []
-                        for step_index_from_target in range(walkdown_num_steps_config, 0, -1):
-                            found_step_note: Optional[int] = None
-                            if doubled_note_target > note_being_doubled_source:
-                                notes_below = [n for n in diatonic_notes_in_range if n < doubled_note_target]
-                                if len(notes_below) >= step_index_from_target:
-                                    found_step_note = notes_below[-step_index_from_target]
-                            else:
-                                notes_above = [n for n in diatonic_notes_in_range if n > doubled_note_target]
-                                if len(notes_above) >= step_index_from_target:
-                                    found_step_note = notes_above[step_index_from_target - 1]
+                # Walk-in notes only when walkdowns produced steps
+                current_walk_event_tick_offset = 0
+                for walk_note in actual_walk_notes_to_play:
+                    final_drone_events.append((
+                        walk_note,
+                        interval_start_abs_tick + current_walk_event_tick_offset,
+                        walkdown_step_ticks_config,
+                        max(1, base_velocity - 15),
+                    ))
+                    current_walk_event_tick_offset += walkdown_step_ticks_config
 
-                            if found_step_note is not None:
-                                if not temp_walk_notes or found_step_note != temp_walk_notes[-1]:
-                                    temp_walk_notes.append(found_step_note)
+                # Always emit the doubled target when doubling fires
+                target_note_start_tick = interval_start_abs_tick + actual_total_walkdown_duration
+                target_note_duration = (
+                    interval_actual_duration_ticks - actual_total_walkdown_duration
+                )
+                if target_note_duration < min_target_sustain_ticks:
+                    # Fall back to full-interval sustain if walk ate too much time
+                    target_note_start_tick = interval_start_abs_tick
+                    target_note_duration = interval_actual_duration_ticks
 
-                        actual_walk_notes_to_play = temp_walk_notes
-                        actual_total_walkdown_duration = (
-                            len(actual_walk_notes_to_play) * walkdown_step_ticks_config
-                        )
-
-                    # Walk-in notes (only when walkdowns produced steps)
-                    current_walk_event_tick_offset = 0
-                    for walk_note in actual_walk_notes_to_play:
-                        final_drone_events.append((
-                            walk_note,
-                            interval_start_abs_tick + current_walk_event_tick_offset,
-                            walkdown_step_ticks_config,
-                            max(1, base_velocity - 15),
-                        ))
-                        current_walk_event_tick_offset += walkdown_step_ticks_config
-
-                    # Always emit the doubled target when doubling fires
-                    target_note_start_tick = interval_start_abs_tick + actual_total_walkdown_duration
-                    target_note_duration = interval_actual_duration_ticks - actual_total_walkdown_duration
-                    if target_note_duration < min_target_sustain_ticks:
-                        # Fall back to full-interval sustain if walk ate too much time
-                        target_note_start_tick = interval_start_abs_tick
-                        target_note_duration = interval_actual_duration_ticks
-
-                    if target_note_duration > 0:
-                        final_drone_events.append((
-                            doubled_note_target,
-                            target_note_start_tick,
-                            target_note_duration,
-                            base_velocity,
-                        ))
-                        has_doubled_a_note_this_interval = True
-                        break
+                if target_note_duration > 0:
+                    final_drone_events.append((
+                        doubled_note_target,
+                        target_note_start_tick,
+                        target_note_duration,
+                        base_velocity,
+                    ))
+                    has_doubled_a_note_this_interval = True
+                    break
 
             current_segment_tick_offset += interval_actual_duration_ticks
             variation_pattern_counter += 1
