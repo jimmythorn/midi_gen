@@ -1,5 +1,5 @@
 from .scale import get_scale
-from .notes import pitch_class_at_octave
+from .notes import pitch_class_at_octave, midi_octave_bounds
 import random
 import math
 
@@ -35,9 +35,17 @@ def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4,
 
     arpeggio_source_notes = []
     
-    # Build the source notes across octaves (written octave → MIDI)
-    for octave in range(min_octave, min_octave + range_octaves + 1):
-        arpeggio_source_notes.extend([pitch_class_at_octave(note, octave) for note in pitch_classes])
+    # Build the source notes across octaves (written octave → MIDI),
+    # clamped to the declared [min_octave, max_octave] window.
+    top_octave = min(max_octave, min_octave + max(0, range_octaves))
+    if top_octave < min_octave:
+        top_octave = min_octave
+    low_bound, high_bound = midi_octave_bounds(min_octave, max_octave)
+    for octave in range(min_octave, top_octave + 1):
+        for note in pitch_classes:
+            midi_note = pitch_class_at_octave(note, octave)
+            if low_bound <= midi_note <= high_bound:
+                arpeggio_source_notes.append(midi_note)
     
     # Ensure arpeggio_source_notes is not empty if pitch_classes was valid but octaves didn't yield notes
     if not arpeggio_source_notes:
@@ -150,9 +158,10 @@ def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4,
             # Get pitch classes for the new chord root and current mode (and use_chord_tones setting)
             current_chord_pitch_classes = get_scale(new_root, mode, use_chord_tones=use_chord_tones)
             
-            # Build full range of notes for this chord
+            # Build full range of notes for this chord (respect max_octave)
             current_chord_full_range = []
-            for octave in range(min_octave, min_octave + range_octaves + 1):
+            top = min(max_octave, min_octave + max(0, range_octaves))
+            for octave in range(min_octave, top + 1):
                 current_chord_full_range.extend([pitch_class_at_octave(pc, octave) for pc in current_chord_pitch_classes])
             
             if not current_chord_full_range: # Fallback if no notes generated

@@ -218,24 +218,31 @@ if generate:
         }
         if bpm_override:
             overrides["bpm"] = int(bpm_override)
-        path, result, options = generate_midi_for_style(
-            query,
-            use_cursor_sdk=use_sdk,
-            overrides=overrides,
-        )
-        summary = summarize_midi_file(path)
-        wav_bytes = render_midi_to_wav_bytes(path)
-        st.session_state["last_run"] = {
-            "path": path,
-            "result": result,
-            "options": options,
-            "summary": summary,
-            "query": query,
-            "wav_bytes": wav_bytes,
-            "preview_caption": describe_preview(path),
-        }
+        try:
+            path, result, options = generate_midi_for_style(
+                query,
+                use_cursor_sdk=use_sdk,
+                overrides=overrides,
+            )
+            summary = summarize_midi_file(path)
+            wav_bytes = render_midi_to_wav_bytes(path)
+            st.session_state["last_run"] = {
+                "path": path,
+                "result": result,
+                "options": options,
+                "summary": summary,
+                "query": query,
+                "wav_bytes": wav_bytes,
+                "preview_caption": describe_preview(path),
+            }
+            st.session_state.pop("generate_error", None)
+        except Exception as exc:
+            st.session_state["generate_error"] = str(exc)
 
 # --- Test output (persists across reruns) ---
+if st.session_state.get("generate_error"):
+    st.error(f"Generation failed: {st.session_state['generate_error']}")
+
 run = st.session_state.get("last_run")
 if not run:
     st.info("Enter a musician or style, then generate to see test output here.")

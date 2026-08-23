@@ -16,14 +16,16 @@ from typing import Callable, List, Optional, Sequence, Tuple
 
 import mido
 
+from .midi_tempo import midi_file_schedule
+
 try:
-    import rtmidi  # noqa: F401 — presence check; mido opens via midi/rtmidi backend
+    import rtmidi  # noqa: F401
     _RTMIDI_IMPORT_ERROR: Optional[Exception] = None
-except Exception as exc:  # pragma: no cover - environment dependent
+except Exception as exc:  # pragma: no cover
     _RTMIDI_IMPORT_ERROR = exc
 
 
-ScheduledMsg = Tuple[float, mido.Message]  # abs seconds, message
+ScheduledMsg = Tuple[float, mido.Message]
 
 
 @dataclass
@@ -45,7 +47,6 @@ def list_output_ports() -> List[str]:
     if not rtmidi_available():
         return []
     try:
-        # Ensure rtmidi backend (needed on some installs)
         if getattr(mido.backend, "module_name", "") != "mido.backends.rtmidi":
             try:
                 mido.set_backend("mido.backends.rtmidi")
@@ -62,37 +63,9 @@ def preferred_iac_port(ports: Optional[Sequence[str]] = None) -> Optional[str]:
     if not names:
         return None
     for name in names:
-        lower = name.lower()
-        if "iac" in lower:
+        if "iac" in name.lower():
             return name
     return names[0]
-
-
-def _midi_file_to_schedule(path: str) -> Tuple[List[ScheduledMsg], float]:
-    """
-    Flatten a MIDI file into absolute-second message times using its tempo map.
-    """
-    mid = mido.MidiFile(path)
-    # merge_tracks preserves tempo messages for tick2second via play(),
-    # but we need a static schedule for interruptible playback.
-    ticks_per_beat = mid.ticks_per_beat or 480
-    tempo = 500000  # µs per beat (120 BPM)
-    abs_tick = 0
-    schedule: List[ScheduledMsg] = []
-
-    for msg in mido.merge_tracks(mid.tracks):
-        abs_tick += msg.time
-        if msg.type == "set_tempo":
-            tempo = msg.tempo
-            continue
-        if msg.is_meta:
-            continue
-        seconds = mido.tick2second(abs_tick, ticks_per_beat, tempo)
-        # Copy without delta time — rtmidi send expects zero-time messages
-        schedule.append((seconds, msg.copy(time=0)))
-
-    duration = schedule[-1][0] if schedule else 0.0
-    return schedule, duration
 
 
 def _all_notes_off(port: mido.ports.BaseOutput, channels: range = range(16)) -> None:
@@ -121,19 +94,25 @@ class LiveMidiPlayer:
 
     @property
     def playing(self) -> bool:
-        return self._playing and self._thread is not None and self._thread.is_alive()
+        with self._lock:
+            return self._playing and self._thread is not None and self._thread.is_alive()
 
     @property
     def port_name(self) -> Optional[str]:
-        return self._port_name
+        with self._lock:
+            return self._port_name
 
     @property
     def last_error(self) -> Optional[str]:
-        return self._error
+        with self._lock:
+            return self._error
 
     def status(self) -> LiveMidiStatus:
         ports = list_output_ports()
-        err = self._error
+        with self._lock:
+            err = self._error
+            playing = self._playing and self._thread is not None and self._thread.is_alive()
+            port_name = self._port_name
         if not rtmidi_available():
             err = err or f"python-rtmidi not available: {_RTMIDI_IMPORT_ERROR}"
         elif not ports:
@@ -143,8 +122,8 @@ class LiveMidiPlayer:
             )
         return LiveMidiStatus(
             available=rtmidi_available() and bool(ports),
-            playing=self.playing,
-            port_name=self._port_name,
+            playing=playing,
+            port_name=port_name,
             ports=ports,
             error=err,
             backend="mido+rtmidi" if rtmidi_available() else None,
@@ -174,22 +153,30 @@ class LiveMidiPlayer:
         if target is None:
             raise RuntimeError("No MIDI output port selected.")
         if target not in ports:
-            # Allow substring match (Logic / OS rename quirks)
             match = next((p for p in ports if target.lower() in p.lower()), None)
             if match is None:
                 raise RuntimeError(f"Port not found: {target!r}. Available: {ports}")
             target = match
 
-        schedule, _duration = _midi_file_to_schedule(str(midi_path))
+        schedule, _duration = midi_file_schedule(str(midi_path))
         if not schedule:
             raise RuntimeError("MIDI file has no playable messages.")
 
-        self.stop(wait=True)
+        with self._lock:
+            self._stop.set()
+            prior = self._thread
 
-        self._stop.clear()
-        self._error = None
-        self._port_name = target
-        self._playing = True
+        if prior is not None and prior.is_alive():
+            prior.join(timeout=2.0)
+            if prior.is_alive():
+                raise RuntimeError("Previous live MIDI playback did not stop in time.")
+
+        with self._lock:
+            self._stop = threading.Event()
+            self._error = None
+            self._port_name = target
+            self._playing = True
+            stop_flag = self._stop
 
         def _run() -> None:
             port = None
@@ -197,21 +184,21 @@ class LiveMidiPlayer:
                 port = mido.open_output(target)
                 start = time.perf_counter()
                 for abs_sec, msg in schedule:
-                    if self._stop.is_set():
+                    if stop_flag.is_set():
                         break
                     delay = abs_sec - (time.perf_counter() - start)
                     if delay > 0:
-                        # Wait in slices so stop() is responsive
                         end_wait = time.perf_counter() + delay
                         while time.perf_counter() < end_wait:
-                            if self._stop.is_set():
+                            if stop_flag.is_set():
                                 break
-                            time.sleep(min(0.01, end_wait - time.perf_counter()))
-                    if self._stop.is_set():
+                            time.sleep(min(0.01, max(0.0, end_wait - time.perf_counter())))
+                    if stop_flag.is_set():
                         break
                     port.send(msg)
             except Exception as exc:
-                self._error = str(exc)
+                with self._lock:
+                    self._error = str(exc)
             finally:
                 if port is not None:
                     try:
@@ -219,27 +206,31 @@ class LiveMidiPlayer:
                         port.close()
                     except Exception:
                         pass
-                self._playing = False
+                with self._lock:
+                    self._playing = False
                 if on_finished:
                     try:
                         on_finished()
                     except Exception:
                         pass
 
-        self._thread = threading.Thread(target=_run, name="live-midi-player", daemon=True)
-        self._thread.start()
+        thread = threading.Thread(target=_run, name="live-midi-player", daemon=True)
+        with self._lock:
+            self._thread = thread
+        thread.start()
 
     def stop(self, wait: bool = False, timeout: float = 2.0) -> None:
-        """Request stop and panic notes off (via next open or current thread cleanup)."""
-        self._stop.set()
-        thread = self._thread
+        """Request stop; join optionally."""
+        with self._lock:
+            self._stop.set()
+            thread = self._thread
         if wait and thread is not None and thread.is_alive():
             thread.join(timeout=timeout)
-        if not (thread and thread.is_alive()):
-            self._playing = False
+        with self._lock:
+            if not (self._thread and self._thread.is_alive()):
+                self._playing = False
 
 
-# Process-wide player for the Streamlit UI (one audition stream).
 _SHARED_PLAYER: Optional[LiveMidiPlayer] = None
 _SHARED_LOCK = threading.Lock()
 
@@ -250,3 +241,8 @@ def get_shared_player() -> LiveMidiPlayer:
         if _SHARED_PLAYER is None:
             _SHARED_PLAYER = LiveMidiPlayer()
         return _SHARED_PLAYER
+
+
+# Back-compat for tests that imported the private helper
+def _midi_file_to_schedule(path: str):
+    return midi_file_schedule(path)

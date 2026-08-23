@@ -8,8 +8,11 @@ profiles, but every result is normalized against this schema.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 import re
+
+from .scale import FULL_SCALE_INTERVALS
+from .notes import note_str_to_midi
 
 
 @dataclass(frozen=True)
@@ -374,6 +377,10 @@ def profile_from_dict(data: Dict[str, Any], source: str = "cursor_sdk") -> Music
 
     # Clamp / coerce critical fields
     base["generation_type"] = "drone" if str(base.get("generation_type")).lower() == "drone" else "arpeggio"
+    mode = str(base.get("mode", "minor")).lower()
+    if mode not in FULL_SCALE_INTERVALS:
+        mode = "minor"
+    base["mode"] = mode
     base["bpm"] = int(max(40, min(240, int(base.get("bpm", 110)))))
     base["bars"] = int(max(1, min(64, int(base.get("bars", 8)))))
     base["arp_steps"] = int(base.get("arp_steps", 8))
@@ -383,6 +390,15 @@ def profile_from_dict(data: Dict[str, Any], source: str = "cursor_sdk") -> Music
     base["repetition_factor"] = int(max(1, min(10, int(base.get("repetition_factor", 7)))))
     if not isinstance(base.get("root_notes"), list) or not base["root_notes"]:
         base["root_notes"] = ["E3", "A3", "D3", "G3"]
+    else:
+        cleaned_roots = []
+        for note in base["root_notes"]:
+            try:
+                note_str_to_midi(str(note))
+                cleaned_roots.append(str(note))
+            except (ValueError, IndexError, TypeError):
+                continue
+        base["root_notes"] = cleaned_roots or ["E3", "A3", "D3", "G3"]
     return MusicianStyleProfile(**base)
 
 

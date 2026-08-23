@@ -11,15 +11,17 @@ def create_arp(options: Dict):
     """
     Main function to generate MIDI data based on given options.
     """
+    options = dict(options)  # avoid mutating caller
     debug = options.get('debug', False)
     root = options.get('root', 0)
     root_notes_str_param = options.get('root_notes', None)
     generation_type = options.get('generation_type', 'arpeggio')
+    if generation_type not in ('arpeggio', 'drone'):
+        raise ValueError(f"Unsupported generation_type: {generation_type!r}")
     
     if debug:
         print(f"[DEBUG] Generation Type: {generation_type}")
-        if debug:
-            print(f"[DEBUG] root_notes_str_param from options: {root_notes_str_param}")
+        print(f"[DEBUG] root_notes_str_param from options: {root_notes_str_param}")
 
     processed_root_notes_midi: List[int] = []
     if root_notes_str_param: 
@@ -29,8 +31,7 @@ def create_arp(options: Dict):
     
     if debug:
         print(f"[DEBUG] Processed root_notes (MIDI numbers): {processed_root_notes_midi}")
-        if debug:
-            print(f"[DEBUG] Length of processed root_notes: {len(processed_root_notes_midi) if processed_root_notes_midi else 0}")
+        print(f"[DEBUG] Length of processed root_notes: {len(processed_root_notes_midi) if processed_root_notes_midi else 0}")
 
     mode = options.get('mode', 'major')
     bars = options.get('bars', 16)
@@ -44,6 +45,9 @@ def create_arp(options: Dict):
     range_octaves = options.get('range_octaves', 1)
     evolution_rate = options.get('evolution_rate', 0.1)
     repetition_factor = options.get('repetition_factor', 5)
+    if generation_type == 'arpeggio':
+        if not isinstance(arp_steps, int) or arp_steps <= 0:
+            raise ValueError(f"arp_steps must be a positive int, got {arp_steps!r}")
 
     # Create effects using the registry
     active_effects: List[MidiEffect] = []
@@ -57,7 +61,6 @@ def create_arp(options: Dict):
         effect_name = effect_conf.get('name', '')
         if debug:
             print(f"[DEBUG] Processing effect: {effect_name}")
-        if debug:
             print(f"[DEBUG] Effect configuration: {effect_conf}")
         
         if effect := EffectRegistry.create_effect(effect_conf):
@@ -65,8 +68,8 @@ def create_arp(options: Dict):
                 print(f"[DEBUG] Successfully created effect: {effect_name}")
             active_effects.append(effect)
         else:
-            if debug:
-                print(f"[WARNING] Failed to create effect: {effect_name}")
+            # Unknown names are a configuration error — don't silently drop them.
+            raise ValueError(f"Unknown or invalid effect: {effect_name!r} ({effect_conf})")
 
     if generation_type == 'arpeggio':
         # Each bar has 16 16th notes

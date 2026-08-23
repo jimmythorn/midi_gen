@@ -15,6 +15,7 @@ from .midi_types import (
     MidiInstruction, NoteValue, Velocity, Tick, BendValue,
     MIDI_PITCH_BEND_CENTER, DEFAULT_TICKS_PER_BEAT
 )
+from .midi_ordering import sort_midi_instructions
 
 # Removed calculate_note_length function as it's overcomplicated for fixed 16th notes
 
@@ -75,7 +76,8 @@ class MidiProcessor:
             current_tick = 0
             
             for step_index, raw_note_value in enumerate(event_list):
-                if raw_note_value == 0 or raw_note_value is None:
+                # Only None (or legacy empty) is a rest — MIDI note 0 is a valid pitch (C-1).
+                if raw_note_value is None:
                     current_tick += sixteenth_note_duration_ticks
                     continue
                 
@@ -157,6 +159,8 @@ def create_midi_file(
     
     # Process all events through the effect chain
     processed_events = processor.process_events(event_list, options)
+    # Always sort before delta encoding — overlapping voices (drones) are unordered.
+    processed_events = sort_midi_instructions(processed_events)
     
     # Create MIDI file
     filename = options.get('filename', "output.mid")
@@ -176,7 +180,7 @@ def create_midi_file(
         if isinstance(event, tuple):
             if isinstance(event[0], str):  # New format
                 msg_type, tick, *params = event
-                delta_tick = tick - last_tick
+                delta_tick = max(0, tick - last_tick)
                 
                 if msg_type == 'note_on':
                     track.append(mido.Message('note_on',
@@ -202,7 +206,7 @@ def create_midi_file(
                                            channel=params[2],
                                            time=delta_tick))
                 
-                last_tick = tick
+                last_tick = max(last_tick, tick)
     
     mid.save(filename)
     return filename
