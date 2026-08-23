@@ -1,6 +1,6 @@
 import random # Added for future, more varied interest
 from typing import Dict, List, Tuple, Optional
-from .scale import get_scale # To get chord tones
+from .scale import get_scale, get_mode_color_pitch_classes # Chord tones + modal color
 from .notes import pitch_class_at_octave, midi_octave_bounds
 
 # Type alias for structured MIDI events, ensure it matches midi.py if ever moved to a common types file
@@ -17,6 +17,38 @@ DEFAULT_DRONE_WALKDOWN_NUM_STEPS = 2
 DEFAULT_DRONE_WALKDOWN_STEP_TICKS = 240 # Defaulted to Eighth note, updated from __main__.py change
 DEFAULT_MINIMUM_TARGET_SUSTAIN_TICKS_FOR_WALKDOWN = 60 # Min duration for the target note after walkdown
 
+
+def _drone_color_note(
+    root_midi_note: int,
+    mode: str,
+    min_octave: int,
+    max_octave: int,
+    avoid: List[int],
+) -> Optional[int]:
+    """Pick one characteristic color tone in range, not already in the voicing."""
+    color_pcs = get_mode_color_pitch_classes(root_midi_note, mode)
+    if not color_pcs:
+        return None
+    avoid_pcs = {n % 12 for n in avoid}
+    low, high = midi_octave_bounds(min_octave, max_octave)
+    candidates: List[int] = []
+    for octave in range(min_octave, max_octave + 1):
+        for pc in color_pcs:
+            if pc in avoid_pcs:
+                continue
+            note = pitch_class_at_octave(pc, octave)
+            if low <= note <= high:
+                candidates.append(note)
+    if not candidates:
+        # Fall back to any color pc even if pc already present an octave away
+        for octave in range(min_octave, max_octave + 1):
+            for pc in color_pcs:
+                note = pitch_class_at_octave(pc, octave)
+                if low <= note <= high and note not in avoid:
+                    candidates.append(note)
+    return random.choice(candidates) if candidates else None
+
+
 def generate_drone_events(options: Dict, processed_root_notes_midi: List[int]) -> List[MidiEvent]:
     """
     Generates drone events with dynamic voicing, octave doubling/shifts, and DIATONIC melodic walkdowns.
@@ -27,6 +59,7 @@ def generate_drone_events(options: Dict, processed_root_notes_midi: List[int]) -
     min_octave_param = options.get('min_octave', 3)
     max_octave_param = options.get('max_octave', 5)
     base_velocity = options.get('drone_base_velocity', 70)
+    mode_color = options.get('mode_color', True)
     
     variation_interval_bars = options.get('drone_variation_interval_bars', DEFAULT_DRONE_VARIATION_INTERVAL_BARS)
     min_notes_held = options.get('drone_min_notes_held', DEFAULT_DRONE_MIN_NOTES_HELD)
@@ -50,7 +83,7 @@ def generate_drone_events(options: Dict, processed_root_notes_midi: List[int]) -
         c3_midi = 48 
         drone_chord_notes_pc = get_scale(c3_midi, 'major', use_chord_tones=True) 
         drone_chord_notes_abs = [pitch_class_at_octave(pc, min_octave_param) for pc in drone_chord_notes_pc]
-        drone_chord_notes_abs = [max(0, min(127, note)) for note in drone_chord_notes_abs]
+        drone_chord_notes_abs = [max(1, min(127, note)) for note in drone_chord_notes_abs]
         total_duration_ticks = total_bars * ticks_per_bar
         for note in drone_chord_notes_abs:
             final_drone_events.append((note, 0, total_duration_ticks, base_velocity))
@@ -73,10 +106,10 @@ def generate_drone_events(options: Dict, processed_root_notes_midi: List[int]) -
         chord_tone_pitch_classes = get_scale(root_midi_note, mode, use_chord_tones=True)
         
         base_chord_notes = sorted(list(set([
-            max(0, min(127, pitch_class_at_octave(pc, min_octave_param))) for pc in chord_tone_pitch_classes
+            max(1, min(127, pitch_class_at_octave(pc, min_octave_param))) for pc in chord_tone_pitch_classes
         ])))
         if not base_chord_notes: # Fallback
-            base_chord_notes = [max(0,min(127, root_midi_note))] 
+            base_chord_notes = [max(1, min(127, root_midi_note))] 
         
         num_chord_notes = len(base_chord_notes)
         if num_chord_notes == 0: continue # Should not happen if fallback works
@@ -120,6 +153,21 @@ def generate_drone_events(options: Dict, processed_root_notes_midi: List[int]) -
                 potential_adds = [n for n in base_chord_notes if n not in current_interval_base_notes]
                 current_interval_base_notes.extend(potential_adds[:needed])
                 current_interval_base_notes = sorted(list(set(current_interval_base_notes)))
+
+            # Modal color accent at least every ~1–2 bars of music.
+            if mode_color:
+                every = 1 if variation_interval_bars >= 2 else 2
+                if variation_pattern_counter % every == 0:
+                    color_note = _drone_color_note(
+                        root_midi_note,
+                        mode,
+                        min_octave_param,
+                        max_octave_param,
+                        current_interval_base_notes,
+                    )
+                    if color_note is not None:
+                        current_interval_base_notes.append(color_note)
+                        current_interval_base_notes = sorted(list(set(current_interval_base_notes)))
 
             # 2. Apply octave shift to one note (if enabled) from the base voicing
             notes_for_direct_play_and_doubling_source = list(current_interval_base_notes)

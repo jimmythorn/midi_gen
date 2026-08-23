@@ -18,6 +18,19 @@ FULL_SCALE_INTERVALS = {
     'locrian': [0, 1, 3, 5, 6, 8, 10]
 }
 
+# Characteristic non-triad color tones. Strong beats keep chord tones;
+# weak / embellish slots can carry these so modes don't collapse to wallpaper.
+MODE_COLOR_INTERVALS = {
+    'major': [2, 9],          # 9 + 6
+    'minor': [2, 10],         # 9 + b7
+    'dorian': [2, 9],         # nat9 + nat6 (Dorian fingerprint)
+    'phrygian': [1],          # b2
+    'lydian': [6],            # #4
+    'mixolydian': [10],       # b7
+    'locrian': [1],           # b2 (b5 already lives in the triad)
+}
+
+
 def get_chord_tone_intervals(mode: str) -> list[int]:
     """
     Returns the characteristic triad intervals for a given mode.
@@ -31,6 +44,18 @@ def get_chord_tone_intervals(mode: str) -> list[int]:
         # For simplicity, we'll raise an error if a mode's triad isn't explicitly defined.
         raise ValueError(f"Chord tone intervals for mode '{mode}' not recognized.")
     return CHORD_TONE_INTERVALS[mode]
+
+
+def get_mode_color_intervals(mode: str) -> list[int]:
+    """Return characteristic color intervals for a mode (empty if unknown)."""
+    return list(MODE_COLOR_INTERVALS.get(mode, []))
+
+
+def get_mode_color_pitch_classes(root: int, mode: str) -> list[int]:
+    """Pitch classes (0-11) for the mode's characteristic color tones."""
+    root_pc = root % 12
+    return sorted({(root_pc + interval) % 12 for interval in get_mode_color_intervals(mode)})
+
 
 def get_scale(root: int, mode: str, use_chord_tones: bool = True) -> list[int]:
     """

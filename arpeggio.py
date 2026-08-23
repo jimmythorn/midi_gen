@@ -1,9 +1,77 @@
-from .scale import get_scale
+from .scale import get_scale, get_mode_color_pitch_classes
 from .notes import pitch_class_at_octave, midi_octave_bounds
 import random
 import math
 
-def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4, max_octave: int = 6, arp_mode: str = 'up', range_octaves: int = 1, evolution_rate: float = 0.1, repetition_factor: int = 5, rhythmic_variation: bool = False, chord_progression: list = None, embellish: bool = False, use_chord_tones: bool = True) -> list:
+
+def _color_midi_notes(
+    root: int,
+    mode: str,
+    min_octave: int,
+    max_octave: int,
+) -> list:
+    """Absolute MIDI notes for the mode's characteristic color tones in range."""
+    color_pcs = get_mode_color_pitch_classes(root, mode)
+    if not color_pcs:
+        return []
+    low, high = midi_octave_bounds(min_octave, max_octave)
+    notes = []
+    for octave in range(min_octave, max_octave + 1):
+        for pc in color_pcs:
+            midi_note = pitch_class_at_octave(pc, octave)
+            if low <= midi_note <= high:
+                notes.append(midi_note)
+    return notes
+
+
+def _nearest_color_note(anchor: int, color_notes: list) -> int:
+    return min(color_notes, key=lambda n: (abs(n - anchor), n))
+
+
+def paint_mode_color(
+    notes: list,
+    root: int,
+    mode: str,
+    min_octave: int,
+    max_octave: int,
+    *,
+    accent_every: int = 4,
+) -> list:
+    """
+    Keep chord tones on strong beats; place characteristic color on weak /
+    embellish slots. Guarantees at least one color tone in the phrase when
+    the mode defines any.
+    """
+    if not notes:
+        return notes
+    color_notes = _color_midi_notes(root, mode, min_octave, max_octave)
+    if not color_notes:
+        return list(notes)
+
+    color_pcs = {n % 12 for n in color_notes}
+    painted = list(notes)
+    # Strong: beat anchors (every accent_every). Weak: approach / off-beat slots.
+    period = max(2, int(accent_every))
+
+    for i, note in enumerate(painted):
+        is_strong = (i % period) == 0
+        if is_strong:
+            continue
+        # Prefer color on approach slots (one before a strong beat) and mid-weak.
+        is_approach = ((i + 1) % period) == 0
+        is_mid_weak = (i % period) == (period // 2)
+        if is_approach or is_mid_weak or (i % 2 == 1 and period <= 2):
+            painted[i] = _nearest_color_note(note, color_notes)
+
+    if not any((n % 12) in color_pcs for n in painted):
+        # Force a color accent on the first weak slot (or last if length==1).
+        slot = 1 if len(painted) > 1 else 0
+        painted[slot] = _nearest_color_note(painted[slot], color_notes)
+
+    return painted
+
+
+def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4, max_octave: int = 6, arp_mode: str = 'up', range_octaves: int = 1, evolution_rate: float = 0.1, repetition_factor: int = 5, rhythmic_variation: bool = False, chord_progression: list = None, embellish: bool = False, use_chord_tones: bool = True, mode_color: bool = True) -> list:
     """
     Creates an arpeggio with various musical enhancements.
 
@@ -21,6 +89,8 @@ def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4,
     :param embellish: If True, adds passing tones and neighbor notes.
     :param use_chord_tones: If True (default), arpeggiates using only chord tones (1,3,5 of the mode). 
                             If False, uses all notes of the scale.
+    :param mode_color: When True with chord tones, inject characteristic mode
+                       color on weak beats so Lydian/#4 etc. aren't lost.
     :return: List of MIDI note numbers forming the arpeggio with enhancements.
     """
     # Get the base pitch classes (either chord tones or full scale)
@@ -220,9 +290,10 @@ def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4,
                 evolved_arpeggio.append(note)
         current_arpeggio = evolved_arpeggio
 
-    # Remove None values, clamp to MIDI range, ensure exact length
+    # Remove None values, clamp to playable MIDI (note 0 is reserved as rest
+    # in the arpeggio event stream — never emit it as a sounding pitch).
     final_arpeggio = [
-        max(0, min(127, int(note)))
+        max(1, min(127, int(note)))
         for note in current_arpeggio
         if note is not None
     ]
@@ -232,4 +303,20 @@ def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4,
             final_arpeggio = (final_arpeggio + filler)[:length]
         else:
             final_arpeggio = final_arpeggio[:length]
+
+    # Chord-tone patterns alone collapse modes to triads — paint color accents.
+    # Full-scale mode already contains color tones, so skip when not chordal.
+    if mode_color and use_chord_tones and final_arpeggio:
+        # ~one accent window every 1–2 bars of an 8-step cell → period 4.
+        accent_every = 4 if length >= 4 else 2
+        final_arpeggio = paint_mode_color(
+            final_arpeggio,
+            root,
+            mode,
+            min_octave,
+            max_octave,
+            accent_every=accent_every,
+        )
+        final_arpeggio = [max(1, min(127, int(n))) for n in final_arpeggio]
+
     return final_arpeggio

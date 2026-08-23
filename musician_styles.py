@@ -31,6 +31,7 @@ class MusicianStyleProfile:
     min_octave: int = 3
     max_octave: int = 5
     use_chord_tones: bool = True
+    mode_color: bool = True  # characteristic tones on weak beats / drone accents
     arp_mode: str = "up_down"
     arp_steps: int = 8
     range_octaves: int = 2
@@ -62,6 +63,7 @@ class MusicianStyleProfile:
             "bars": self.bars,
             "filename": f"{self.id}.mid",
             "use_chord_tones": self.use_chord_tones,
+            "mode_color": self.mode_color,
             "effects_config": effects_config or [],
             "arp_steps": self.arp_steps,
             "arp_mode": self.arp_mode,
@@ -248,7 +250,7 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         effects_preset="clean",
     ),
     MusicianStyleProfile(
-        id="satt_neoclassical",
+        id="satie_neoclassical",
         name="Erik Satie",
         styles=["ambient", "spare", "piano", "gentle", "neoclassical"],
         description="Sparse, slow, gently repeating figures with soft humanization.",
@@ -302,10 +304,18 @@ def list_musicians() -> List[MusicianStyleProfile]:
 
 def get_profile_by_id(profile_id: str) -> Optional[MusicianStyleProfile]:
     needle = profile_id.strip().lower()
+    # Historical typo alias
+    if needle == "satt_neoclassical":
+        needle = "satie_neoclassical"
     for profile in MUSICIAN_STYLE_CATALOG:
         if profile.id == needle:
             return profile
     return None
+
+
+_PROFILE_ID_ALIASES = {
+    "satt_neoclassical": "satie_neoclassical",
+}
 
 
 def _tokenize(text: str) -> List[str]:
@@ -381,6 +391,12 @@ def profile_from_dict(data: Dict[str, Any], source: str = "cursor_sdk") -> Music
     if mode not in FULL_SCALE_INTERVALS:
         mode = "minor"
     base["mode"] = mode
+    # Optional schema fields stay backward compatible
+    if "mode_color" in base:
+        base["mode_color"] = bool(base.get("mode_color", True))
+    raw_id = str(base.get("id", "")).strip().lower()
+    if raw_id in _PROFILE_ID_ALIASES:
+        base["id"] = _PROFILE_ID_ALIASES[raw_id]
     base["bpm"] = int(max(40, min(240, int(base.get("bpm", 110)))))
     base["bars"] = int(max(1, min(64, int(base.get("bars", 8)))))
     base["arp_steps"] = int(base.get("arp_steps", 8))
