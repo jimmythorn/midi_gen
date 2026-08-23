@@ -45,6 +45,50 @@ from midi_gen.style_prompting import (
     resolve_happy_path_query,
     vibe_chips,
 )
+from midi_gen.ui_prefs import load_prefs, prefs_for_session, save_prefs
+
+
+def _persist_live_prefs() -> None:
+    """Write transport prefs (count-in / loop / soft-click / port) to disk."""
+    updates = {
+        "live_count_in": bool(st.session_state.get("live_count_in", False)),
+        "live_loop": bool(st.session_state.get("live_loop", False)),
+        "live_soft_click": bool(st.session_state.get("live_soft_click", False)),
+    }
+    # Only write port once session has one — avoid wiping a remembered bus
+    # before ports are enumerated on first paint.
+    if "live_port" in st.session_state:
+        updates["live_port"] = st.session_state.get("live_port")
+    save_prefs(updates)
+
+
+def _seed_transport_bool_prefs() -> None:
+    """Seed count-in / loop / soft-click from disk (first run → all Off)."""
+    if st.session_state.get("_live_bool_prefs_seeded"):
+        return
+    prefs = load_prefs()
+    if "live_count_in" not in st.session_state:
+        st.session_state["live_count_in"] = bool(prefs.get("live_count_in", False))
+    if "live_loop" not in st.session_state:
+        st.session_state["live_loop"] = bool(prefs.get("live_loop", False))
+    if "live_soft_click" not in st.session_state:
+        st.session_state["live_soft_click"] = bool(prefs.get("live_soft_click", False))
+    st.session_state["_live_bool_prefs_seeded"] = True
+
+
+def _seed_live_port(ports: list[str]) -> None:
+    """Apply remembered MIDI port once ports are known (drop stale names)."""
+    if "live_port" in st.session_state:
+        current = st.session_state.get("live_port")
+        if current and ports and current not in ports:
+            st.session_state.pop("live_port", None)
+        else:
+            return
+    prefs = prefs_for_session(ports)
+    remembered = prefs.get("live_port")
+    if remembered and remembered in ports:
+        st.session_state["live_port"] = remembered
+
 
 st.set_page_config(
     page_title="MIDI Style Lab",
@@ -138,23 +182,13 @@ st.markdown(
         color: #f0b4a4;
       }
 
-      /* Audition → Capture: one visual unit; live stream ≠ region */
+      /* Audition → Capture: light context unit; Play stays the hero below */
       .audition-capture {
         border: 1px solid var(--line);
-        border-bottom: none;
-        border-radius: 14px 14px 0 0;
+        border-radius: 14px;
         background: color-mix(in srgb, var(--panel) 90%, black);
-        padding: 0.85rem 1rem 0.35rem 1rem;
-        margin: 0.35rem 0 0 0;
-        max-width: 40rem;
-      }
-      .audition-capture-bottom {
-        border: 1px solid var(--line);
-        border-top: none;
-        border-radius: 0 0 14px 14px;
-        background: color-mix(in srgb, var(--panel) 90%, black);
-        padding: 0.15rem 1rem 0.95rem 1rem;
-        margin: 0 0 0.85rem 0;
+        padding: 0.85rem 1rem 0.95rem 1rem;
+        margin: 0.35rem 0 0.65rem 0;
         max-width: 40rem;
       }
       .audition-capture .strip-label {
@@ -168,7 +202,7 @@ st.markdown(
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 0.75rem;
-        margin: 0 0 0.35rem 0;
+        margin: 0 0 0.55rem 0;
       }
       .audition-capture .lane .title {
         font-family: "Space Grotesk", sans-serif;
@@ -183,32 +217,19 @@ st.markdown(
         margin: 0;
         line-height: 1.35;
       }
-      .audition-capture-bottom .order {
+      .audition-capture .order {
         color: var(--muted);
         font-size: 0.88rem;
         margin: 0;
-        padding-top: 0.45rem;
+        padding-top: 0.55rem;
         border-top: 1px solid var(--line);
       }
-      .audition-capture-bottom .order strong { color: var(--text); }
-      /* Count-in / Loop sit inside the strip unit (denser than a separate block) */
-      .audition-capture .strip-opts-label {
-        color: var(--muted);
-        font-size: 0.72rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        margin: 0.45rem 0 0 0;
-        padding-top: 0.45rem;
-        border-top: 1px solid var(--line);
-      }
-      /* Bridge Streamlit checkbox row into the strip chrome */
-      div[data-testid="stHorizontalBlock"]:has(div[data-testid="stCheckbox"]) {
+      .audition-capture .order strong { color: var(--text); }
+
+      /* Play is the hero CTA; Stop + compact Panic sit beside it */
+      .play-hero-row {
         max-width: 40rem;
-        margin: 0 !important;
-        padding: 0.15rem 1rem 0.25rem 1rem;
-        border-left: 1px solid var(--line);
-        border-right: 1px solid var(--line);
-        background: color-mix(in srgb, var(--panel) 90%, black);
+        margin: 0 0 0.25rem 0;
       }
 
       .silence-check {
@@ -342,8 +363,8 @@ MULTI_PORT_HELP = (
     "same IAC bus you pick here — mismatched ports mean silence."
 )
 
-# Split so Count-in / Loop widgets sit inside the same visual strip unit.
-AUDITION_CAPTURE_STRIP_TOP_HTML = """
+# Light Audition→Capture context — denser opts live collapsed under Advanced.
+AUDITION_CAPTURE_STRIP_HTML = """
 <div class="audition-capture">
   <div class="strip-label">Audition → Capture</div>
   <div class="pair">
@@ -356,12 +377,6 @@ AUDITION_CAPTURE_STRIP_TOP_HTML = """
       <p class="sub">Keep a region — live stream alone never writes the project.</p>
     </div>
   </div>
-  <div class="strip-opts-label">Before Record / Capture (optional)</div>
-</div>
-"""
-
-AUDITION_CAPTURE_STRIP_BOTTOM_HTML = """
-<div class="audition-capture-bottom">
   <p class="order"><strong>Capture order:</strong> Arm → Record in Logic → Play here.</p>
 </div>
 """
@@ -425,6 +440,9 @@ if "catalog_pick" not in st.session_state:
     )
 if "vibe_text" not in st.session_state:
     st.session_state["vibe_text"] = ""
+
+# Transport prefs (count-in / loop / soft-click) before Advanced widgets bind.
+_seed_transport_bool_prefs()
 
 # Pending related-style regenerate (Try instead)
 _pending_related = st.session_state.pop("pending_related_name", None)
@@ -535,6 +553,24 @@ with st.expander("Advanced"):
         max_value=240,
         value=0,
     )
+    # Soft click is opt-in and Off by default — tucked here so primary audition stays clean.
+    soft_click = st.checkbox(
+        "Soft click during count-in",
+        key="live_soft_click",
+        help="Sends metronome notes on the same MIDI port during count-in. "
+        "Off by default — count-in stays truly silent. "
+        "Count-in itself is under Before Record / Capture near Play.",
+    )
+    if soft_click:
+        st.caption(
+            "Warning: click MIDI will be captured if Logic is recording "
+            "(same IAC bus as the sketch)."
+        )
+    else:
+        st.caption("When Off, count-in stays truly silent (no click notes).")
+    # Persist soft-click even before a sketch exists.
+    _persist_live_prefs()
+
 
 st.markdown('<div class="generate-wrap">', unsafe_allow_html=True)
 generate = st.button("Generate", type="primary", use_container_width=True)
@@ -600,6 +636,8 @@ live = player.status(refresh=_force_refresh)
 ports = live.ports
 if _force_refresh:
     _apply_refreshed_ports(ports)
+# Seed remembered port once ports are known; else prefer IAC / first.
+_seed_live_port(ports)
 default_port = preferred_iac_port(ports) or (ports[0] if ports else None)
 if "live_port" not in st.session_state and default_port:
     st.session_state["live_port"] = default_port
@@ -700,37 +738,17 @@ else:
             if not port_looks_like_iac(ports[0]):
                 st.caption("Prefer enabling IAC Driver for Logic — then Refresh ports.")
 
-        # Audition→Capture strip: lanes + Count-in/Loop (opt-in) + capture order.
-        # Instant audition by default — count-in is OFF until the user opts in.
+        # Sample Musician bar: Play is the hero; instant audition by default.
+        # Count-in / Loop / soft-click stay collapsed (Advanced / expander) — not strip chrome.
         if "live_count_in" not in st.session_state:
             st.session_state["live_count_in"] = False
         if "live_loop" not in st.session_state:
             st.session_state["live_loop"] = False
-        st.markdown(AUDITION_CAPTURE_STRIP_TOP_HTML, unsafe_allow_html=True)
-        opt_a, opt_b = st.columns(2)
-        with opt_a:
-            count_in = st.checkbox(
-                "Count-in (1 silent bar)",
-                key="live_count_in",
-                disabled=_transport_busy,
-                help="Opt in before Record/Capture for time after Arm→Record. "
-                "Off by default for instant audition. App-side silent bar at sketch "
-                "BPM — not synced to Logic’s clock or metronome.",
-            )
-        with opt_b:
-            loop_play = st.checkbox(
-                "Loop sketch",
-                key="live_loop",
-                disabled=_transport_busy,
-                help="Repeat until Stop — useful if you miss the first pass.",
-            )
-        st.caption(
-            "Count-in is an app-side silent bar at sketch BPM — "
-            "not synced to Logic’s clock or metronome."
-        )
-        st.markdown(AUDITION_CAPTURE_STRIP_BOTTOM_HTML, unsafe_allow_html=True)
+        st.markdown(AUDITION_CAPTURE_STRIP_HTML, unsafe_allow_html=True)
 
-        play_col, stop_col = st.columns([2, 1])
+        # Hero CTA row: Play dominates; Stop + compact Panic beside it.
+        st.markdown('<div class="play-hero-row">', unsafe_allow_html=True)
+        play_col, stop_col, panic_col = st.columns([4, 1, 1])
         with play_col:
             if st.button(
                 "Play into Logic",
@@ -741,32 +759,36 @@ else:
             ):
                 try:
                     sketch_bpm = float(options.get("bpm") or 120)
+                    count_in = bool(st.session_state.get("live_count_in", False))
+                    loop_play = bool(st.session_state.get("live_loop", False))
+                    # Soft click only from Advanced (Off by default → silent count-in).
+                    use_click = bool(st.session_state.get("live_soft_click", False))
                     player.play_file(
                         path,
                         st.session_state.get("live_port"),
                         count_in_bars=1.0 if count_in else 0.0,
                         bpm=sketch_bpm,
-                        loop=bool(loop_play),
-                        click=False,  # silent count-in; UI never enables click
+                        loop=loop_play,
+                        click=use_click if count_in else False,
                     )
                     bits = [f"Streaming to {player.port_name}"]
                     if count_in:
-                        bits.append("1-bar count-in")
+                        bits.append(
+                            "1-bar count-in + soft click"
+                            if use_click
+                            else "1-bar count-in"
+                        )
                     if loop_play:
                         bits.append("looping")
                     st.session_state["live_message"] = " · ".join(bits) + "."
                     st.session_state["live_was_playing"] = True
-                    # Hide first-run tip after a successful Play
                     st.session_state["iac_tip_dismissed"] = True
+                    _persist_live_prefs()
                     st.rerun()
                 except Exception as exc:
-                    # Surface prior-join / open failures; keep Stop enabled if
-                    # a worker is still alive so the user can panic-stop.
                     st.session_state["live_message"] = f"Live MIDI failed: {exc}"
                     st.session_state["live_was_playing"] = bool(player.playing)
         with stop_col:
-            # Keep Stop enabled while Playing, or after a failed Play that left
-            # a worker alive (prior-join / RuntimeError surface path).
             stop_enabled = player.playing or bool(
                 st.session_state.get("live_was_playing")
             )
@@ -780,16 +802,31 @@ else:
                 st.session_state["live_was_playing"] = False
                 st.session_state["live_message"] = "Stopped."
                 st.rerun()
+        with panic_col:
+            # Compact Panic near Stop — all-notes-off, not fake transport.
+            panic_port = st.session_state.get("live_port") or player.port_name
+            if st.button(
+                "Panic",
+                use_container_width=True,
+                disabled=not bool(panic_port),
+                key="panic_logic",
+                help="All notes off (CC123) on the selected port. "
+                "Works while Playing or idle. Does not Stop.",
+            ):
+                player.panic(panic_port)
+                st.session_state["live_message"] = (
+                    f"All notes off (CC123) on {panic_port}."
+                )
+                st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
 
-        # Honest Playing caption: poll while active; clear when thread ends
-        # or when the MIDI port disappears / send fails mid-play.
+        # Caption-only countdown / Playing / Finished — no big chrome.
         if player.playing or st.session_state.get("live_was_playing"):
 
             @st.fragment(run_every=timedelta(milliseconds=400))
             def _playback_status_poll() -> None:
                 err = player.last_error
                 if player.playing:
-                    # Port vanished from enumeration while still "playing".
                     active = player.port_name
                     ports_now = refresh_output_ports()
                     if active and ports_now is not None and active not in ports_now:
@@ -801,13 +838,10 @@ else:
                         st.rerun()
                         return
                     st.session_state["live_was_playing"] = True
-                    phase = player.phase
-                    label = "Count-in" if phase == "count_in" else "Playing"
+                    label = player.transport_caption()
                     loop_tag = " · looping" if player.looping else ""
                     st.caption(f"{label} → **{player.port_name}**{loop_tag}")
                     return
-                # Worker finished (natural end, Stop, or port/send failure).
-                # Clear Playing / was_playing regardless of live_message prefix.
                 if st.session_state.pop("live_was_playing", False):
                     if err:
                         st.session_state["live_message"] = err
@@ -818,8 +852,42 @@ else:
             _playback_status_poll()
         elif st.session_state.get("live_message") == "Stopped.":
             st.caption("Stopped.")
+        elif str(st.session_state.get("live_message") or "").startswith("All notes off"):
+            st.caption("All notes off.")
 
         st.markdown(SILENCE_CHECKLIST_HTML, unsafe_allow_html=True)
+
+        # Denser extras collapsed — count-in / loop off primary strip; soft click in Advanced.
+        with st.expander("Before Record / Capture", expanded=False):
+            st.caption(
+                "Optional — Off by default for instant audition. "
+                "App-side only; not synced to Logic’s clock."
+            )
+            opt_a, opt_b = st.columns(2)
+            with opt_a:
+                st.checkbox(
+                    "Count-in (1 silent bar)",
+                    key="live_count_in",
+                    disabled=_transport_busy,
+                    help="One silent bar at sketch BPM before notes. "
+                    "Soft click (Advanced) is Off by default.",
+                )
+            with opt_b:
+                st.checkbox(
+                    "Loop sketch",
+                    key="live_loop",
+                    disabled=_transport_busy,
+                    help="Repeat until Stop — useful if you miss the first pass.",
+                )
+            if st.session_state.get("live_soft_click"):
+                st.caption(
+                    "Soft click is On (Advanced) — click MIDI will be captured "
+                    "if Logic is recording."
+                )
+
+        # Invisible prefs persistence (no settings UI).
+        if not _transport_busy:
+            _persist_live_prefs()
 
         # If the worker exited with last_error outside the poll, still surface it.
         if player.last_error and not player.playing:

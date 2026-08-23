@@ -436,7 +436,10 @@ def test_play_and_stop_with_virtual_port(tmp_path):
 def test_ui_count_in_default_is_false():
     """Instant audition: live_count_in session default must be False (opt-in)."""
     src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
-    assert 'st.session_state["live_count_in"] = False' in src
+    assert 'st.session_state["live_count_in"] = False' in src or (
+        'bool(prefs.get("live_count_in", False))' in src
+    )
+    # Must not hard-default count-in On.
     assert 'st.session_state["live_count_in"] = True' not in src
 
 
@@ -452,14 +455,152 @@ def test_ui_crisp_audit_extras_a_through_e():
     # C — Stop before Generate writes new MIDI
     assert "player.stop(wait=True)" in src
     assert src.index("player.stop(wait=True)") < src.index("generate_midi_for_style(")
-    # D — count-in honesty microcopy + truly silent (UI never enables click)
+    # D — count-in honesty; silent when soft-click Off; denser opts collapsed
     assert "not synced to Logic" in src
     assert "sketch BPM" in src
-    assert "click=False" in src
     assert "Count-in (1 silent bar)" in src
+    assert 'st.session_state.get("live_soft_click", False)' in src
+    assert "Soft click during count-in" in src
+    assert "click MIDI will be captured if Logic is recording" in src
+    assert 'st.expander("Before Record / Capture"' in src
+    # Soft click defaults Off — never force click=True as the literal play default.
+    assert 'st.session_state["live_soft_click"] = True' not in src
     # E — last_error → live_message; keep Stop when was_playing / failed Play
     assert 'st.session_state["live_message"] = err' in src
     assert 'st.session_state["live_was_playing"] = bool(player.playing)' in src
     # Natural end always sets Finished (no Streaming-prefix requirement).
     assert 'st.session_state["live_message"] = "Finished."' in src
     assert 'msg.startswith("Streaming")' not in src
+    # Sample Musician bar — Play hero; compact Panic; caption-only countdown; prefs
+    assert 'key="panic_logic"' in src
+    assert '"Panic"' in src
+    assert "All notes off (CC123)" in src
+    assert "player.panic(" in src
+    assert "transport_caption()" in src
+    assert "_persist_live_prefs" in src
+    assert "st.columns([4, 1, 1])" in src  # Play dominates Stop/Panic
+
+
+def test_player_panic_flushes_cc123_without_stopping(tmp_path):
+    """Panic() must CC123-flush via named port and leave playback running."""
+    fake = FakeMidiPort()
+    player = LiveMidiPlayer()
+    path = tmp_path / "tiny.mid"
+    _write_tiny_midi(path)
+    hang = threading.Event()
+
+    class SlowPort(FakeMidiPort):
+        def send(self, msg: mido.Message) -> None:
+            # Stall first note so Panic can fire mid-play.
+            if msg.type == "note_on" and not hang.is_set():
+                hang.wait(timeout=2.0)
+            super().send(msg)
+
+    slow = SlowPort()
+    opened: list[str] = []
+
+    def _open(name: str):
+        opened.append(name)
+        # First open = play worker; later opens = panic_flush_named.
+        if opened.count(name) == 1:
+            return slow
+        return fake
+
+    with patch("midi_gen.live_midi.list_output_ports", return_value=["Fake Bus"]), patch(
+        "midi_gen.live_midi.rtmidi_available", return_value=True
+    ), patch("midi_gen.live_midi.mido.open_output", side_effect=_open):
+        player.play_file(str(path), "Fake Bus", count_in_bars=0, loop=False)
+        deadline = time.time() + 1.0
+        while not player.playing and time.time() < deadline:
+            time.sleep(0.01)
+        assert player.playing
+        player.panic("Fake Bus")
+        # Panic must not clear Playing (Stop does that).
+        assert player.playing
+        hang.set()
+        player.stop(wait=True)
+
+    cc123 = [m for m in fake.sent if m.type == "control_change" and m.control == 123]
+    # Panic alone sends 16; Stop afterward may add another set via the same open path.
+    assert len(cc123) >= 16
+    assert set(range(16)).issubset({m.channel for m in cc123})
+
+
+def test_transport_caption_count_in(tmp_path):
+    """Count-in shows remaining bar:beat + seconds; clears to Playing/Idle."""
+    fake = FakeMidiPort()
+    player = LiveMidiPlayer()
+    path = tmp_path / "tiny.mid"
+    _write_tiny_midi(path)
+
+    with patch("midi_gen.live_midi.list_output_ports", return_value=["Fake Bus"]), patch(
+        "midi_gen.live_midi.rtmidi_available", return_value=True
+    ), patch("midi_gen.live_midi.mido.open_output", return_value=fake), patch(
+        "midi_gen.live_midi.panic_flush_named"
+    ):
+        # 2 bars @ 60 BPM 4/4 = 8s; remaining should show bars:beats from sketch BPM.
+        player.play_file(
+            str(path),
+            "Fake Bus",
+            count_in_bars=2,
+            bpm=60,
+            beats_per_bar=4,
+            loop=False,
+            click=False,
+        )
+        deadline = time.time() + 1.0
+        while player.phase != "count_in" and time.time() < deadline:
+            time.sleep(0.01)
+        assert player.phase == "count_in"
+        caption = player.transport_caption()
+        assert caption.startswith("Count-in…")
+        assert "left" in caption
+        assert "s" in caption
+        rem_bb = player.count_in_remaining_bars_beats()
+        assert rem_bb is not None
+        bars_left, beats_left = rem_bb
+        assert bars_left >= 1  # early in a 2-bar count-in
+        assert 0 <= beats_left < 4
+        # Playing caption must clear count-in wording.
+        with player._lock:
+            player._phase = "playing"
+            player._count_in_end = None
+        assert player.transport_caption() == "Playing"
+        player.stop(wait=True)
+
+    assert player.transport_caption() == "Idle"
+    assert player.count_in_remaining_bars_beats() is None
+
+
+def test_soft_click_count_in_emits_notes(tmp_path):
+    """click=True count-in emits note_on/off; click=False stays silent (locked)."""
+    fake = FakeMidiPort()
+    player = LiveMidiPlayer()
+    path = tmp_path / "tiny.mid"
+    _write_tiny_midi(path)
+
+    with patch("midi_gen.live_midi.list_output_ports", return_value=["Fake Bus"]), patch(
+        "midi_gen.live_midi.rtmidi_available", return_value=True
+    ), patch("midi_gen.live_midi.mido.open_output", return_value=fake), patch(
+        "midi_gen.live_midi.panic_flush_named"
+    ):
+        player.play_file(
+            str(path),
+            "Fake Bus",
+            count_in_bars=1,
+            bpm=240,  # fast so clicks arrive quickly
+            loop=False,
+            click=True,
+        )
+        deadline = time.time() + 2.0
+        while player.playing and time.time() < deadline:
+            notes = [m for m in fake.sent if m.type in ("note_on", "note_off")]
+            if notes:
+                break
+            time.sleep(0.02)
+        player.stop(wait=True)
+
+    click_notes = [
+        m for m in fake.sent if m.type in ("note_on", "note_off") and m.channel == 9
+    ]
+    assert click_notes, "soft click count-in should emit ch9 metronome notes"
