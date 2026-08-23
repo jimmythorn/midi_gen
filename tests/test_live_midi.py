@@ -23,6 +23,7 @@ from midi_gen.live_midi import (
     PORT_LOST_MESSAGE,
     LiveMidiPlayer,
     _all_notes_off,
+    _is_port_loss_error,
     _midi_file_to_schedule,
     bar_duration_sec,
     has_iac_port,
@@ -38,14 +39,20 @@ from midi_gen.live_midi import (
 class FakeMidiPort:
     """Minimal MIDI output stand-in for panic / CC123 assertions."""
 
-    def __init__(self, *, fail_send: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail_send: bool = False,
+        fail_exc: BaseException | None = None,
+    ) -> None:
         self.sent: list[mido.Message] = []
         self.closed = False
         self.fail_send = fail_send
+        self.fail_exc = fail_exc or OSError("device disconnected")
 
     def send(self, msg: mido.Message) -> None:
         if self.fail_send:
-            raise OSError("device disconnected")
+            raise self.fail_exc
         self.sent.append(msg)
 
     def close(self) -> None:
@@ -206,6 +213,24 @@ def test_panic_flush_named_sends_cc123_on_fake_port():
     assert fake.closed is True
 
 
+def test_is_port_loss_error_prefers_specific_signals():
+    """Bare 'midi' / 'failed to' must not remap; real port/device loss still matches."""
+    # Real port / device / I/O failure signals → True
+    assert _is_port_loss_error(OSError("device disconnected"))
+    assert _is_port_loss_error(RuntimeError("MIDI port closed"))
+    assert _is_port_loss_error(OSError("rtmidi: failed to open port"))
+    assert _is_port_loss_error(OSError("no such device"))
+    assert _is_port_loss_error(BrokenPipeError("broken pipe"))
+    # Unrelated / too-generic wording → False (keep real message)
+    assert not _is_port_loss_error(ValueError("bad velocity"))
+    assert not _is_port_loss_error(RuntimeError("failed to parse sketch"))
+    assert not _is_port_loss_error(RuntimeError("unexpected midi encoding"))
+    assert not _is_port_loss_error(Exception("midi"))
+    assert not _is_port_loss_error(Exception("failed to"))
+    assert not _is_port_loss_error(Exception("invalid argument"))
+    assert not _is_port_loss_error(Exception("port"))  # bare "port" alone
+
+
 def test_send_fail_clears_playing_and_sets_port_lost(tmp_path):
     """Mid-play send failure must clear Playing and surface port-lost message."""
     fail_port = FakeMidiPort(fail_send=True)
@@ -227,6 +252,65 @@ def test_send_fail_clears_playing_and_sets_port_lost(tmp_path):
         assert not player.playing
         assert player.last_error == PORT_LOST_MESSAGE
         assert player.status().playing is False
+
+
+def test_non_port_send_error_keeps_real_message(tmp_path):
+    """Send failures that are not port-loss keep their real message (not remapped)."""
+    fail_port = FakeMidiPort(
+        fail_send=True, fail_exc=ValueError("unexpected midi encoding")
+    )
+    player = LiveMidiPlayer()
+    path = tmp_path / "tiny.mid"
+    _write_tiny_midi(path)
+
+    with patch("midi_gen.live_midi.list_output_ports", return_value=["Fake Bus"]), patch(
+        "midi_gen.live_midi.rtmidi_available", return_value=True
+    ), patch("midi_gen.live_midi.mido.open_output", return_value=fail_port), patch(
+        "midi_gen.live_midi.panic_flush_named"
+    ):
+        player.play_file(str(path), "Fake Bus", count_in_bars=0, loop=False)
+        deadline = time.time() + 2.0
+        while player.playing and time.time() < deadline:
+            time.sleep(0.02)
+
+    assert not player.playing
+    assert player.last_error == "unexpected midi encoding"
+    assert player.last_error != PORT_LOST_MESSAGE
+
+
+def test_silent_count_in_sends_no_notes(tmp_path):
+    """click=False count-in must emit no note_on/note_off (truly silent bar)."""
+    fake = FakeMidiPort()
+    player = LiveMidiPlayer()
+    path = tmp_path / "tiny.mid"
+    _write_tiny_midi(path)
+
+    with patch("midi_gen.live_midi.list_output_ports", return_value=["Fake Bus"]), patch(
+        "midi_gen.live_midi.rtmidi_available", return_value=True
+    ), patch("midi_gen.live_midi.mido.open_output", return_value=fake), patch(
+        "midi_gen.live_midi.panic_flush_named"
+    ):
+        # Long count-in so we can sample the silent window before notes start.
+        player.play_file(
+            str(path),
+            "Fake Bus",
+            count_in_bars=8,
+            bpm=60,
+            loop=False,
+            click=False,
+        )
+        deadline = time.time() + 1.0
+        while player.phase != "count_in" and time.time() < deadline:
+            time.sleep(0.01)
+        assert player.phase == "count_in"
+        time.sleep(0.2)
+        assert player.phase == "count_in"
+        notes = [m for m in fake.sent if m.type in ("note_on", "note_off")]
+        assert notes == [], f"silent count-in leaked notes: {notes}"
+        player.stop(wait=True)
+
+    assert not player.playing
+    assert player.phase == "idle"
 
 
 def test_replay_after_hung_prior_thread(tmp_path):
@@ -368,9 +452,11 @@ def test_ui_crisp_audit_extras_a_through_e():
     # C — Stop before Generate writes new MIDI
     assert "player.stop(wait=True)" in src
     assert src.index("player.stop(wait=True)") < src.index("generate_midi_for_style(")
-    # D — count-in honesty microcopy
+    # D — count-in honesty microcopy + truly silent (UI never enables click)
     assert "not synced to Logic" in src
     assert "sketch BPM" in src
+    assert "click=False" in src
+    assert "Count-in (1 silent bar)" in src
     # E — last_error → live_message; keep Stop when was_playing / failed Play
     assert 'st.session_state["live_message"] = err' in src
     assert 'st.session_state["live_was_playing"] = bool(player.playing)' in src

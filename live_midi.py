@@ -141,19 +141,31 @@ def panic_flush_named(port_name: Optional[str]) -> None:
 
 
 def _is_port_loss_error(exc: BaseException) -> bool:
+    """
+    True when ``exc`` looks like a MIDI port/device/I/O failure.
+
+    Keep needles specific — bare substrings like ``\"midi\"`` or ``\"failed to\"``
+    would remap unrelated errors to :data:`PORT_LOST_MESSAGE`.
+    """
     text = str(exc).lower()
     needles = (
-        "port",
-        "device",
-        "rtmidi",
-        "midi",
+        "midi port",
+        "port closed",
+        "port not found",
+        "port unavailable",
+        "no such port",
+        "invalid port",
+        "open port",
+        "failed to open",
+        "device disconnected",
+        "device not connected",
+        "device unavailable",
+        "no such device",
         "not connected",
         "disconnected",
-        "invalid",
-        "closed",
-        "unavailable",
-        "no such",
-        "failed to",
+        "rtmidi",
+        "i/o error",
+        "broken pipe",
     )
     return any(n in text for n in needles)
 
@@ -350,7 +362,9 @@ class LiveMidiPlayer:
             try:
                 port.send(msg)
             except Exception as exc:
-                raise RuntimeError(PORT_LOST_MESSAGE) from exc
+                if _is_port_loss_error(exc):
+                    raise RuntimeError(PORT_LOST_MESSAGE) from exc
+                raise
 
         def _run_count_in(port) -> bool:
             """Return True if stop requested during count-in."""
@@ -387,6 +401,7 @@ class LiveMidiPlayer:
                     except Exception:
                         pass
                 return _wait_until(start + count_in_sec)
+            # click=False: truly silent — wait only, no notes.
             return _wait_until(start + count_in_sec)
 
         def _run_schedule(port) -> bool:
@@ -412,6 +427,7 @@ class LiveMidiPlayer:
                 try:
                     port = mido.open_output(target)
                 except Exception as exc:
+                    # Open failure is always a port problem for the user.
                     raise RuntimeError(PORT_LOST_MESSAGE) from exc
                 if _run_count_in(port):
                     return
