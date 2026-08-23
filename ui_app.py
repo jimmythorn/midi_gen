@@ -802,7 +802,7 @@ else:
             if not soft_click_on
             else "Count-in is an app-side bar at sketch BPM — "
             "not synced to Logic’s clock. Soft click is On (Advanced) — "
-            "click notes can land in the record region."
+            "click MIDI will be captured if Logic is recording."
         )
         st.markdown(AUDITION_CAPTURE_STRIP_BOTTOM_HTML, unsafe_allow_html=True)
 
