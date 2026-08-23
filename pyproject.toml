@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "midi-gen"
+version = "0.2.0"
+description = "MIDI style lab: musician/style lookup, effects, and test UI"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "mido>=1.3.0",
+  "questionary>=2.0.0",
+  "streamlit>=1.32.0",
+  "numpy>=1.24.0",
+  "cursor-sdk>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0"]
+
+[project.scripts]
+midi-gen-ui = "midi_gen_ui:main"
+
+[tool.setuptools]
+packages = ["midi_gen"]
+package-dir = {"midi_gen" = "."}
+py-modules = ["midi_gen_ui"]
+
+[tool.setuptools.package-data]
+midi_gen = ["*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

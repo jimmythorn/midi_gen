@@ -1,66 +1,58 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
 
-# Virtual environment
-.venv/
-venv/
-ENV/
+*$py.class
 bin/
+build/
+.cache
+# C extensions
+.coverage
+.coverage.*
+dist/
+# Distribution / packaging
+downloads/
+.DS_Store
+*.egg
+*.egg-info/
+.eggs/
+eggs/
+ENV/
+generated/
+htmlcov/
+.hypothesis/
+.idea/
+# IDE / Editor specific
 include/
+.installed.cfg
+# Installer logs
 lib/
 lib64/
 local/
-Scripts/
-*.sage.py
-pyvenv.cfg
-.python-version
-
-# Distribution / packaging
-.Python
-build/
-dist/
-downloads/
-eggs/
-.eggs/
-parts/
-sdist/
-var/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# PyInstaller
-#  Usually these files are written by a script, but they do not need to be committed.
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-.pytest_cache/
-.hypothesis/
-
-# C extensions
-*.so
-
 # macOS
-.DS_Store
-
-# IDE / Editor specific
-.vscode/
-.idea/
-*.swp
+*.manifest
+MANIFEST
+.nox/
+parts/
+pip-delete-this-directory.txt
+pip-log.txt
+__pycache__/
+*.py[cod]
+# PyInstaller
+.pytest_cache/
+# Python
+.Python
+.python-version
+pyvenv.cfg
+*.sage.py
+Scripts/
+sdist/
+*.so
+*.spec
 *.swo 
-
-generated/
+*.swp
+.tox/
+# Unit test / coverage reports
+#  Usually these files are written by a script, but they do not need to be committed.
+var/
+.venv/
+venv/
+# Virtual environment
+.vscode/

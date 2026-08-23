@@ -26,6 +26,7 @@ from midi_gen.cursor_style_lookup import cursor_sdk_available, generate_midi_for
 from midi_gen.effects_presets import EFFECT_PARAM_HELP, explain_effects_config, list_presets
 from midi_gen.musician_styles import list_musicians, list_styles
 from midi_gen.preview import events_to_roll_rows, format_summary_text, summarize_midi_file
+from midi_gen.audio_preview import describe_preview, render_midi_to_wav_bytes
 
 
 st.set_page_config(
@@ -222,12 +223,15 @@ if generate:
             overrides=overrides,
         )
         summary = summarize_midi_file(path)
+        wav_bytes = render_midi_to_wav_bytes(path)
         st.session_state["last_run"] = {
             "path": path,
             "result": result,
             "options": options,
             "summary": summary,
             "query": query,
+            "wav_bytes": wav_bytes,
+            "preview_caption": describe_preview(path),
         }
 
 # --- Test output (persists across reruns) ---
@@ -274,12 +278,24 @@ else:
             st.caption("Also considered: " + ", ".join(c.name for c in result.candidates))
 
         midi_bytes = Path(path).read_bytes()
+        st.markdown("#### Listen")
+        st.caption(run.get("preview_caption") or "Simple synth preview (not a DAW instrument).")
+        if run.get("wav_bytes"):
+            st.audio(run["wav_bytes"], format="audio/wav")
         st.download_button(
             "Download MIDI",
             data=midi_bytes,
             file_name=Path(path).name,
             mime="audio/midi",
             use_container_width=True,
+        )
+        st.download_button(
+            "Download WAV preview",
+            data=run.get("wav_bytes") or b"",
+            file_name=Path(path).with_suffix(".wav").name,
+            mime="audio/wav",
+            use_container_width=True,
+            disabled=not bool(run.get("wav_bytes")),
         )
         st.code(format_summary_text(summary))
 
