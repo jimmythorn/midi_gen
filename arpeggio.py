@@ -1,7 +1,27 @@
 from .scale import get_scale, get_mode_color_pitch_classes
 from .notes import pitch_class_at_octave, midi_octave_bounds
 import random
-import math
+from typing import Any, List, Optional, Sequence, Tuple
+
+
+def normalize_mode_color(
+    mode_color: Any,
+    mode: str,
+) -> Tuple[bool, Optional[List[int]], int]:
+    """
+    Normalize mode_color (bool or dict) → (enabled, interval_override, accent_every).
+
+    Dict form (backward compatible with bool):
+      {"enabled": true, "intervals": [2, 9, 5], "accent_every": 4}
+    """
+    if isinstance(mode_color, dict):
+        enabled = bool(mode_color.get("enabled", True))
+        intervals = mode_color.get("intervals")
+        if intervals is not None:
+            intervals = [int(x) for x in intervals]
+        accent_every = int(mode_color.get("accent_every", 4))
+        return enabled, intervals, max(2, accent_every)
+    return bool(mode_color), None, 4
 
 
 def _color_midi_notes(
@@ -9,9 +29,15 @@ def _color_midi_notes(
     mode: str,
     min_octave: int,
     max_octave: int,
+    *,
+    interval_override: Optional[Sequence[int]] = None,
 ) -> list:
     """Absolute MIDI notes for the mode's characteristic color tones in range."""
-    color_pcs = get_mode_color_pitch_classes(root, mode)
+    if interval_override is not None:
+        root_pc = root % 12
+        color_pcs = sorted({(root_pc + int(iv)) % 12 for iv in interval_override})
+    else:
+        color_pcs = get_mode_color_pitch_classes(root, mode)
     if not color_pcs:
         return []
     low, high = midi_octave_bounds(min_octave, max_octave)
@@ -36,16 +62,20 @@ def paint_mode_color(
     max_octave: int,
     *,
     accent_every: int = 4,
+    interval_override: Optional[Sequence[int]] = None,
 ) -> list:
     """
     Keep chord tones on strong beats; place characteristic color on approach
     slots only (one step before each strong beat). Sparse accents — not
     scale-fill. If no color landed, force one on the first weak slot so
     modal phrases still get ~one color hit every 1–2 bars.
+    Rests (None) are preserved untouched.
     """
     if not notes:
         return notes
-    color_notes = _color_midi_notes(root, mode, min_octave, max_octave)
+    color_notes = _color_midi_notes(
+        root, mode, min_octave, max_octave, interval_override=interval_override
+    )
     if not color_notes:
         return list(notes)
 
@@ -54,20 +84,148 @@ def paint_mode_color(
     period = max(2, int(accent_every))
 
     for i, note in enumerate(painted):
+        if note is None:
+            continue
         # Approach only: index immediately before a strong beat.
         is_approach = ((i + 1) % period) == 0
         if is_approach:
             painted[i] = _nearest_color_note(note, color_notes)
 
-    if not any((n % 12) in color_pcs for n in painted):
-        # Force a color accent on the first weak slot (or last if length==1).
-        slot = 1 if len(painted) > 1 else 0
-        painted[slot] = _nearest_color_note(painted[slot], color_notes)
+    sounding = [n for n in painted if n is not None]
+    if sounding and not any((n % 12) in color_pcs for n in sounding):
+        # Force a color accent on the first weak sounding slot.
+        for slot, note in enumerate(painted):
+            if note is not None and slot != 0:
+                painted[slot] = _nearest_color_note(note, color_notes)
+                break
+        else:
+            painted[0] = _nearest_color_note(painted[0], color_notes)
 
     return painted
 
 
-def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4, max_octave: int = 6, arp_mode: str = 'up', range_octaves: int = 1, evolution_rate: float = 0.1, repetition_factor: int = 5, rhythmic_variation: bool = False, chord_progression: list = None, embellish: bool = False, use_chord_tones: bool = True, mode_color: bool = True) -> list:
+def _apply_rhythmic_variation(
+    base_pattern: list,
+    *,
+    bar_index: int = 0,
+    rng: Optional[random.Random] = None,
+) -> list:
+    """
+    Real rhythmic variation that preserves rests (does not self-nullify).
+
+    - Odd bars: flip accents by swapping pairs (weak↔strong feel)
+    - Occasional dotted feel: elongate one attack by resting the next slot
+    - Occasional dropped 16th: rest a weak slot
+    """
+    rng = rng or random
+    pattern = list(base_pattern)
+    length = len(pattern)
+    if length == 0:
+        return pattern
+
+    # Odd-bar accent flip: rotate by one step so attacks land off the prior grid.
+    if bar_index % 2 == 1 and length > 1:
+        pattern = pattern[1:] + pattern[:1]
+
+    # Dropped / dotted 16th on a weak slot (~30% chance when enough material).
+    sounding = [i for i, n in enumerate(pattern) if n is not None]
+    if len(sounding) > 2 and rng.random() < 0.35:
+        weak = [i for i in sounding if i % 2 == 1] or sounding[1:]
+        drop_at = rng.choice(weak)
+        if rng.random() < 0.5:
+            # Dropped 16th
+            pattern[drop_at] = None
+        else:
+            # Dotted: rest the slot after an attack so the prior attack reads longer
+            # in the event grid (downstream duration coalesce / steps_per_note).
+            if drop_at + 1 < length:
+                pattern[drop_at + 1] = None
+            else:
+                pattern[drop_at] = None
+
+    return pattern
+
+
+def _apply_embellish(
+    current_arpeggio: list,
+    arpeggio_source_notes: list,
+    *,
+    bar_index: int = 0,
+    steps_hint: int = 8,
+    rng: Optional[random.Random] = None,
+) -> list:
+    """
+    Neighbor / passing tone on beat 4 every other bar.
+
+    Beat 4 ≈ last quarter of the cell (index near 3/4 of length for 4/4 grid).
+    """
+    rng = rng or random
+    if not current_arpeggio or not arpeggio_source_notes:
+        return list(current_arpeggio)
+
+    out = list(current_arpeggio)
+    # Every other bar only
+    if bar_index % 2 != 0:
+        return out
+
+    length = len(out)
+    # Beat 4 of a 4-beat bar mapped onto the cell: last quarter.
+    beat4 = max(0, (length * 3) // 4)
+    # Prefer an occupied slot at/near beat 4
+    candidates = [
+        i for i in range(max(0, beat4 - 1), min(length, beat4 + 2))
+        if out[i] is not None
+    ]
+    if not candidates:
+        return out
+
+    idx = candidates[len(candidates) // 2]
+    note = out[idx]
+    assert note is not None
+    try:
+        # Nearest source instance by pitch
+        anchor = min(arpeggio_source_notes, key=lambda n: abs(n - note))
+        index = arpeggio_source_notes.index(anchor)
+        if rng.random() < 0.5:
+            # Passing tone (next in source)
+            out[idx] = arpeggio_source_notes[(index + 1) % len(arpeggio_source_notes)]
+        else:
+            # Neighbor
+            out[idx] = arpeggio_source_notes[
+                (index + rng.choice([-1, 1])) % len(arpeggio_source_notes)
+            ]
+    except (ValueError, IndexError):
+        pass
+    return out
+
+
+def _clamp_note(note: Any) -> Any:
+    """Clamp sounding pitches; preserve None rests."""
+    if note is None:
+        return None
+    return max(1, min(127, int(note)))
+
+
+def create_arpeggio(
+    root: int,
+    mode: str,
+    length: int = 16,
+    min_octave: int = 4,
+    max_octave: int = 6,
+    arp_mode: str = 'up',
+    range_octaves: int = 1,
+    evolution_rate: float = 0.1,
+    repetition_factor: int = 5,
+    rhythmic_variation: bool = False,
+    chord_progression: list = None,
+    embellish: bool = False,
+    use_chord_tones: bool = True,
+    mode_color: Any = True,
+    *,
+    bar_index: int = 0,
+    preserve_rests: bool = True,
+    rng: Optional[random.Random] = None,
+) -> list:
     """
     Creates an arpeggio with various musical enhancements.
 
@@ -80,15 +238,20 @@ def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4,
     :param range_octaves: Number of octaves to span with the arpeggio.
     :param evolution_rate: Rate at which the arpeggio evolves (0.0 to 1.0, where 0 is no evolution).
     :param repetition_factor: Controls the level of repetition in the arpeggio (1 to 10, 10 being most repetitive).
-    :param rhythmic_variation: If True, introduces syncopation or tuplets.
-    :param chord_progression: List of chord roots for harmonic variation.
-    :param embellish: If True, adds passing tones and neighbor notes.
-    :param use_chord_tones: If True (default), arpeggiates using only chord tones (1,3,5 of the mode). 
+    :param rhythmic_variation: If True, odd-bar accent flip + occasional dotted/dropped 16th.
+    :param chord_progression: List of chord roots (MIDI) for harmonic variation / voice-leading.
+    :param embellish: If True, neighbor/passing on beat 4 every other bar.
+    :param use_chord_tones: If True (default), arpeggiates using only chord tones (1,3,5 of the mode).
                             If False, uses all notes of the scale.
-    :param mode_color: When True with chord tones, inject characteristic mode
-                       color on weak beats so Lydian/#4 etc. aren't lost.
-    :return: List of MIDI note numbers forming the arpeggio with enhancements.
+    :param mode_color: bool or dict. When enabled with chord tones (or custom intervals),
+                       inject characteristic mode color on approach slots.
+    :param bar_index: Bar counter for odd-bar rhythm / every-other-bar embellish.
+    :param preserve_rests: When True (default), rhythmic rests stay in the returned cell.
+    :return: List of MIDI note numbers (None = rest) forming the arpeggio.
     """
+    rng = rng or random
+    color_enabled, color_intervals, color_accent = normalize_mode_color(mode_color, mode)
+
     # Get the base pitch classes (either chord tones or full scale)
     pitch_classes = get_scale(root, mode, use_chord_tones=use_chord_tones)
     
@@ -151,12 +314,12 @@ def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4,
             intermediate_pattern = list(reversed(arpeggio_source_notes))
         elif arp_mode == 'random':
             if arpeggio_source_notes: # Check for empty list
-                 intermediate_pattern = [random.choice(arpeggio_source_notes) for _ in range(len(arpeggio_source_notes))] # Create a pattern of same length as source for now
+                 intermediate_pattern = [rng.choice(arpeggio_source_notes) for _ in range(len(arpeggio_source_notes))] # Create a pattern of same length as source for now
             else:
                  intermediate_pattern = [pitch_class_at_octave(root, min_octave)]
-        elif arp_mode == 'order': 
-            intermediate_pattern = list(arpeggio_source_notes) 
-            random.shuffle(intermediate_pattern)
+        elif arp_mode == 'order':
+            intermediate_pattern = list(arpeggio_source_notes)
+            rng.shuffle(intermediate_pattern)
         else: # Default or unrecognized arp_mode (should not happen if CLI is validated)
             intermediate_pattern = list(arpeggio_source_notes) # Default to 'up' behavior for pattern source
 
@@ -170,9 +333,9 @@ def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4,
             expanded_pattern = intermediate_pattern * (length // len(intermediate_pattern) + 1)
             if repetition_factor < 10:
                 for i in range(len(expanded_pattern)):
-                    if random.random() > (repetition_factor / 10):
-                        if arpeggio_source_notes: 
-                            expanded_pattern[i] = random.choice(arpeggio_source_notes)
+                    if rng.random() > (repetition_factor / 10):
+                        if arpeggio_source_notes:
+                            expanded_pattern[i] = rng.choice(arpeggio_source_notes)
             base_pattern = expanded_pattern[:length]
         else:
             base_pattern = [] # Should be caught by earlier check, but as safeguard
@@ -195,41 +358,38 @@ def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4,
              for i in range(length):
                  base_pattern.append(source_fill[i % len(source_fill)])
 
-    # Rhythmic Variation (ensure base_pattern is not empty)
+    # Rhythmic variation — preserves rests (no strip-and-refill self-nullify).
     if rhythmic_variation and base_pattern:
-        syncopated = [note if i % 4 != 3 else None for i, note in enumerate(base_pattern)]
-        tuplets = []
-        for i in range(0, length, 3):
-            if i + 2 < length:
-                tuplets.extend(base_pattern[i:i+3])
-            else:
-                tuplets.extend(base_pattern[i:])
-                if len(base_pattern[i:]) < 3 and length > len(base_pattern[i:]):
-                     tuplets.extend([None] * (3 - len(base_pattern[i:]))) 
-        base_pattern = syncopated if random.choice([True, False]) else tuplets
+        base_pattern = _apply_rhythmic_variation(
+            base_pattern, bar_index=bar_index, rng=rng
+        )
+        # Ensure exact length after variation
+        if len(base_pattern) < length:
+            base_pattern = base_pattern + [None] * (length - len(base_pattern))
+        base_pattern = base_pattern[:length]
 
     current_arpeggio = []
-    # Harmonic Variation with Chord Progression
+    # Harmonic Variation with Chord Progression (short modal vamps / voice-leading)
     if chord_progression and base_pattern:
         prog_arpeggio = []
         current_chord_index = 0
         # Determine notes per chord segment
         notes_per_segment = length // len(chord_progression) if len(chord_progression) > 0 else length
-        
+
         for i, note_in_pattern in enumerate(base_pattern):
             if notes_per_segment > 0 and i % notes_per_segment == 0 and i // notes_per_segment < len(chord_progression):
                 current_chord_index = i // notes_per_segment
-            
+
             new_root = chord_progression[current_chord_index]
             # Get pitch classes for the new chord root and current mode (and use_chord_tones setting)
             current_chord_pitch_classes = get_scale(new_root, mode, use_chord_tones=use_chord_tones)
-            
+
             # Build full range of notes for this chord (respect max_octave)
             current_chord_full_range = []
             top = min(max_octave, min_octave + max(0, range_octaves))
             for octave in range(min_octave, top + 1):
                 current_chord_full_range.extend([pitch_class_at_octave(pc, octave) for pc in current_chord_pitch_classes])
-            
+
             if not current_chord_full_range: # Fallback if no notes generated
                 prog_arpeggio.append(note_in_pattern) # Keep original pattern note
                 continue
@@ -243,68 +403,70 @@ def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4,
     else:
         current_arpeggio = list(base_pattern) # Ensure it's a mutable list
 
-    # Melodic Embellishments (ensure current_arpeggio and arpeggio_source_notes are not empty)
+    # Melodic Embellishments: neighbor/passing on beat 4 every other bar
     if embellish and current_arpeggio and arpeggio_source_notes:
-        embellished_arpeggio = []
-        for note in current_arpeggio:
-            if note is not None:
-                if random.random() < 0.3:  # 30% chance for embellishment
-                    # Ensure arpeggio_source_notes has notes to pick from for embellishment
-                    # And that the current note is actually in arpeggio_source_notes to find its index
-                    try:
-                        index = arpeggio_source_notes.index(note % 12 + (note // 12) * 12) # Normalize note to find in source
-                        if random.random() < 0.5:  # Passing tone
-                            embellished_arpeggio.append(arpeggio_source_notes[(index + 1) % len(arpeggio_source_notes)])
-                        else:  # Neighbor note
-                            embellished_arpeggio.append(arpeggio_source_notes[(index + random.choice([-1, 1])) % len(arpeggio_source_notes)])
-                    except ValueError: # Note not in arpeggio_source_notes, skip embellishment for this note
-                        pass      
-                embellished_arpeggio.append(note)
-            else:
-                embellished_arpeggio.append(None)
-        current_arpeggio = embellished_arpeggio
+        current_arpeggio = _apply_embellish(
+            current_arpeggio,
+            arpeggio_source_notes,
+            bar_index=bar_index,
+            steps_hint=length,
+            rng=rng,
+        )
 
     # Evolution: prefer neighbor steps over full random jumps so motifs stay coherent.
     if evolution_rate > 0 and current_arpeggio and arpeggio_source_notes:
         evolved_arpeggio = []
         for note in current_arpeggio:
-            if note is not None and random.random() < evolution_rate:
+            if note is not None and rng.random() < evolution_rate:
                 # 80% neighbor motion, 20% free pick within the source set
-                if random.random() < 0.8:
+                if rng.random() < 0.8:
                     try:
                         # Match by pitch class + nearest octave instance in source
                         candidates = [n for n in arpeggio_source_notes if n % 12 == note % 12]
                         anchor = min(candidates, key=lambda n: abs(n - note)) if candidates else note
                         index = arpeggio_source_notes.index(anchor)
-                        new_index = (index + random.choice([-1, 1])) % len(arpeggio_source_notes)
+                        new_index = (index + rng.choice([-1, 1])) % len(arpeggio_source_notes)
                         evolved_arpeggio.append(arpeggio_source_notes[new_index])
                     except ValueError:
-                        evolved_arpeggio.append(random.choice(arpeggio_source_notes))
+                        evolved_arpeggio.append(rng.choice(arpeggio_source_notes))
                 else:
-                    evolved_arpeggio.append(random.choice(arpeggio_source_notes))
+                    evolved_arpeggio.append(rng.choice(arpeggio_source_notes))
             else:
                 evolved_arpeggio.append(note)
         current_arpeggio = evolved_arpeggio
 
-    # Remove None values, clamp to playable MIDI (note 0 is reserved as rest
-    # in the arpeggio event stream — never emit it as a sounding pitch).
-    final_arpeggio = [
-        max(1, min(127, int(note)))
-        for note in current_arpeggio
-        if note is not None
-    ]
-    if length > 0:
-        if len(final_arpeggio) < length and arpeggio_source_notes:
-            filler = [arpeggio_source_notes[i % len(arpeggio_source_notes)] for i in range(length)]
-            final_arpeggio = (final_arpeggio + filler)[:length]
-        else:
+    # Clamp pitches; preserve None rests when requested (rhythmic_variation / development).
+    # Never emit MIDI note 0 as a sounding pitch (reserved / edge-case unsafe).
+    if preserve_rests:
+        final_arpeggio = [_clamp_note(note) for note in current_arpeggio]
+        if length > 0:
+            if len(final_arpeggio) < length and arpeggio_source_notes:
+                pad = [
+                    arpeggio_source_notes[i % len(arpeggio_source_notes)]
+                    for i in range(length - len(final_arpeggio))
+                ]
+                final_arpeggio = final_arpeggio + pad
             final_arpeggio = final_arpeggio[:length]
+    else:
+        final_arpeggio = [
+            max(1, min(127, int(note)))
+            for note in current_arpeggio
+            if note is not None
+        ]
+        if length > 0:
+            if len(final_arpeggio) < length and arpeggio_source_notes:
+                filler = [arpeggio_source_notes[i % len(arpeggio_source_notes)] for i in range(length)]
+                final_arpeggio = (final_arpeggio + filler)[:length]
+            else:
+                final_arpeggio = final_arpeggio[:length]
 
     # Chord-tone patterns alone collapse modes to triads — paint color accents.
-    # Full-scale mode already contains color tones, so skip when not chordal.
-    if mode_color and use_chord_tones and final_arpeggio:
-        # ~one accent window every 1–2 bars of an 8-step cell → period 4.
-        accent_every = 4 if length >= 4 else 2
+    # Custom interval overrides also paint when full-scale (e.g. Coltrane 6/9/11).
+    should_paint = color_enabled and final_arpeggio and (
+        use_chord_tones or color_intervals is not None
+    )
+    if should_paint:
+        accent_every = color_accent if length >= color_accent else max(2, length // 2)
         final_arpeggio = paint_mode_color(
             final_arpeggio,
             root,
@@ -312,7 +474,8 @@ def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4,
             min_octave,
             max_octave,
             accent_every=accent_every,
+            interval_override=color_intervals,
         )
-        final_arpeggio = [max(1, min(127, int(n))) for n in final_arpeggio]
+        final_arpeggio = [_clamp_note(n) for n in final_arpeggio]
 
     return final_arpeggio

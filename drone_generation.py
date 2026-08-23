@@ -2,6 +2,7 @@ import random # Added for future, more varied interest
 from typing import Dict, List, Tuple, Optional
 from .scale import get_scale, get_mode_color_pitch_classes # Chord tones + modal color
 from .notes import pitch_class_at_octave, midi_octave_bounds
+from .arpeggio import normalize_mode_color
 
 # Type alias for structured MIDI events, ensure it matches midi.py if ever moved to a common types file
 MidiEvent = Tuple[int, int, int, int] # (note, start_tick, duration_tick, velocity)
@@ -59,7 +60,9 @@ def generate_drone_events(options: Dict, processed_root_notes_midi: List[int]) -
     min_octave_param = options.get('min_octave', 3)
     max_octave_param = options.get('max_octave', 5)
     base_velocity = options.get('drone_base_velocity', 70)
-    mode_color = options.get('mode_color', True)
+    color_enabled, _color_intervals, _color_accent = normalize_mode_color(
+        options.get('mode_color', True), mode
+    )
     
     variation_interval_bars = options.get('drone_variation_interval_bars', DEFAULT_DRONE_VARIATION_INTERVAL_BARS)
     min_notes_held = options.get('drone_min_notes_held', DEFAULT_DRONE_MIN_NOTES_HELD)
@@ -155,7 +158,7 @@ def generate_drone_events(options: Dict, processed_root_notes_midi: List[int]) -
                 current_interval_base_notes = sorted(list(set(current_interval_base_notes)))
 
             # Modal color accent at least every ~1–2 bars of music.
-            if mode_color:
+            if color_enabled:
                 every = 1 if variation_interval_bars >= 2 else 2
                 if variation_pattern_counter % every == 0:
                     color_note = _drone_color_note(

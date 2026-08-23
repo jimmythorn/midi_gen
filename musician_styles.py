@@ -8,7 +8,7 @@ profiles, but every result is normalized against this schema.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import re
 
 from .scale import FULL_SCALE_INTERVALS
@@ -31,13 +31,20 @@ class MusicianStyleProfile:
     min_octave: int = 3
     max_octave: int = 5
     use_chord_tones: bool = True
-    mode_color: bool = True  # characteristic tones on weak beats / drone accents
+    # bool or dict {"enabled", "intervals", "accent_every"} — bool stays compatible
+    mode_color: Any = True
     arp_mode: str = "up_down"
     arp_steps: int = 8
     range_octaves: int = 2
     evolution_rate: float = 0.15
     repetition_factor: int = 7
     repeat_pattern: bool = False
+    # Wired arp features (optional; default off = backward compatible)
+    embellish: bool = False
+    rhythmic_variation: bool = False
+    chord_progression: Optional[List[str]] = None  # note names or omitted
+    # Pattern development arc (None = tile seed cell statically)
+    development: Optional[Dict[str, Any]] = None
     effects_preset: str = "human_feel"
     # Drone knobs (ignored for arpeggio)
     drone_base_velocity: int = 72
@@ -52,7 +59,7 @@ class MusicianStyleProfile:
 
     def to_options(self, effects_config: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """Convert profile into options dict consumed by create_arp()."""
-        return {
+        opts: Dict[str, Any] = {
             "generation_type": self.generation_type,
             "root": 0,
             "root_notes": list(self.root_notes),
@@ -71,6 +78,8 @@ class MusicianStyleProfile:
             "evolution_rate": self.evolution_rate,
             "repetition_factor": self.repetition_factor,
             "repeat_pattern": self.repeat_pattern,
+            "embellish": self.embellish,
+            "rhythmic_variation": self.rhythmic_variation,
             "drone_base_velocity": self.drone_base_velocity,
             "drone_variation_interval_bars": self.drone_variation_interval_bars,
             "drone_min_notes_held": self.drone_min_notes_held,
@@ -85,6 +94,11 @@ class MusicianStyleProfile:
             "effects_preset": self.effects_preset,
             "style_source": self.source,
         }
+        if self.chord_progression:
+            opts["chord_progression"] = list(self.chord_progression)
+        if self.development:
+            opts["development"] = dict(self.development)
+        return opts
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -105,22 +119,33 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         min_octave=2,
         max_octave=4,
         use_chord_tones=True,
+        mode_color={"enabled": True, "accent_every": 2},
         effects_preset="subtle_tape",
         drone_variation_interval_bars=2,
         drone_min_notes_held=3,
         drone_octave_doubling_chance=0.35,
         drone_enable_walkdowns=False,
+        # Slow sparse voicing drift (no phase). Drone path maps mutate_every_n
+        # onto variation interval; not an arp cell tile.
+        development={
+            "enabled": True,
+            "seed_bars": 2,
+            "mutate_every_n": 4,
+            "mutate_ops": ["add_attack", "add_rest"],
+            "phase_creep": False,
+            "additive_only": False,
+        },
     ),
     MusicianStyleProfile(
         id="glass_minimal",
         name="Philip Glass",
         styles=["minimalism", "pattern", "arpeggio", "repetitive", "classical"],
-        description="Tight repeating arpeggio cells with high repetition and small evolution.",
+        description="Tight repeating arpeggio cells; additive development over sticky Am–Am–Em–Am.",
         generation_type="arpeggio",
         mode="minor",
         bpm=108,
-        bars=8,
-        root_notes=["A3", "E3", "F3", "C4"],
+        bars=16,  # 4 bars per chord × Am/Am/Em/Am
+        root_notes=["A3", "A3", "E3", "A3"],  # Am / Am / Em / Am
         min_octave=3,
         max_octave=5,
         arp_mode="up_down",
@@ -128,13 +153,24 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         range_octaves=1,
         evolution_rate=0.05,
         repetition_factor=9,
+        embellish=False,
+        rhythmic_variation=False,
         effects_preset="human_feel",
+        # Additive-only: grow attacks only — cell is the event; no phase.
+        development={
+            "enabled": True,
+            "seed_bars": 2,
+            "mutate_every_n": 2,
+            "mutate_ops": ["add_attack"],
+            "additive_only": True,
+            "phase_creep": False,
+        },
     ),
     MusicianStyleProfile(
         id="reich_phase",
         name="Steve Reich",
         styles=["minimalism", "phase", "pulse", "pattern", "percussion"],
-        description="Pulse-forward 16th-note cells; high repetition, modest range.",
+        description="Pulse-forward 16th-note cells; phase creep and odd-bar accent flips.",
         generation_type="arpeggio",
         mode="dorian",
         bpm=120,
@@ -147,7 +183,20 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         range_octaves=1,
         evolution_rate=0.08,
         repetition_factor=8,
+        embellish=False,
+        rhythmic_variation=True,
+        mode_color={"enabled": True, "accent_every": 4},
+        chord_progression=["D3", "A3", "G3", "D3"],  # short modal vamp, voice-led
         effects_preset="clean",
+        development={
+            "enabled": True,
+            "seed_bars": 1,
+            "mutate_every_n": 1,
+            "mutate_ops": ["phase_creep", "add_rest", "add_attack", "thin"],
+            "phase_creep": True,
+            "max_phase": 2,
+            "additive_only": False,
+        },
     ),
     MusicianStyleProfile(
         id="debussy_color",
@@ -173,7 +222,7 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         id="coltrane_sheets",
         name="John Coltrane",
         styles=["jazz", "sheets of sound", "modal jazz", "intense", "saxophone"],
-        description="Dense rapid arpeggiation across a wider range with more evolution.",
+        description="Dense modal density sketch — rapid cells colored with 6/9/11.",
         generation_type="arpeggio",
         mode="dorian",
         bpm=168,
@@ -182,12 +231,25 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         min_octave=3,
         max_octave=6,
         use_chord_tones=False,
+        # Drop #4; emphasize 6 / 9 / 11 (intervals 9, 2, 5).
+        mode_color={"enabled": True, "intervals": [9, 2, 5], "accent_every": 4},
         arp_mode="random",
         arp_steps=16,
         range_octaves=2,
         evolution_rate=0.35,
         repetition_factor=4,
+        embellish=True,
+        rhythmic_variation=True,
+        chord_progression=["D3", "G3", "C4", "F3"],
         effects_preset="human_feel",
+        development={
+            "enabled": True,
+            "seed_bars": 1,
+            "mutate_every_n": 1,
+            "mutate_ops": ["add_attack", "add_rest", "invert", "thin"],
+            "phase_creep": False,
+            "additive_only": False,
+        },
     ),
     MusicianStyleProfile(
         id="monk_angles",
@@ -392,8 +454,79 @@ def profile_from_dict(data: Dict[str, Any], source: str = "cursor_sdk") -> Music
         mode = "minor"
     base["mode"] = mode
     # Optional schema fields stay backward compatible
-    if "mode_color" in base:
-        base["mode_color"] = bool(base.get("mode_color", True))
+    raw_mode_color = base.get("mode_color", True)
+    if isinstance(raw_mode_color, dict):
+        normalized_mc: Dict[str, Any] = {
+            "enabled": bool(raw_mode_color.get("enabled", True)),
+        }
+        if raw_mode_color.get("intervals") is not None:
+            try:
+                normalized_mc["intervals"] = [int(x) for x in raw_mode_color["intervals"]]
+            except (TypeError, ValueError):
+                pass
+        if raw_mode_color.get("accent_every") is not None:
+            try:
+                normalized_mc["accent_every"] = max(2, int(raw_mode_color["accent_every"]))
+            except (TypeError, ValueError):
+                normalized_mc["accent_every"] = 4
+        base["mode_color"] = normalized_mc
+    else:
+        base["mode_color"] = bool(raw_mode_color)
+
+    base["embellish"] = bool(base.get("embellish", False))
+    base["rhythmic_variation"] = bool(base.get("rhythmic_variation", False))
+
+    raw_prog = base.get("chord_progression")
+    if raw_prog is None:
+        base["chord_progression"] = None
+    elif isinstance(raw_prog, (list, tuple)):
+        cleaned_prog = []
+        for note in raw_prog:
+            try:
+                if isinstance(note, int):
+                    from .notes import note_to_name
+                    cleaned_prog.append(note_to_name(int(note)))
+                else:
+                    note_str_to_midi(str(note))
+                    cleaned_prog.append(str(note))
+            except (ValueError, IndexError, TypeError):
+                continue
+        base["chord_progression"] = cleaned_prog or None
+    else:
+        base["chord_progression"] = None
+
+    raw_dev = base.get("development")
+    if raw_dev is None or raw_dev is False:
+        base["development"] = None
+    elif raw_dev is True:
+        base["development"] = {
+            "enabled": True,
+            "seed_bars": 1,
+            "mutate_every_n": 1,
+            "mutate_ops": ["add_attack", "add_rest", "invert", "thin", "phase_creep"],
+            "phase_creep": True,
+        }
+    elif isinstance(raw_dev, dict):
+        if raw_dev.get("enabled") is False:
+            base["development"] = None
+        else:
+            ops = raw_dev.get("mutate_ops") or [
+                "add_attack", "add_rest", "invert", "thin", "phase_creep"
+            ]
+            if isinstance(ops, str):
+                ops = [ops]
+            base["development"] = {
+                "enabled": True,
+                "seed_bars": max(1, min(2, int(raw_dev.get("seed_bars", 1)))),
+                "mutate_every_n": max(1, int(raw_dev.get("mutate_every_n", 1))),
+                "mutate_ops": [str(o).lower() for o in ops],
+                "phase_creep": bool(raw_dev.get("phase_creep", False)),
+                "additive_only": bool(raw_dev.get("additive_only", False)),
+                "max_phase": int(raw_dev.get("max_phase", 2)),
+            }
+    else:
+        base["development"] = None
+
     raw_id = str(base.get("id", "")).strip().lower()
     if raw_id in _PROFILE_ID_ALIASES:
         base["id"] = _PROFILE_ID_ALIASES[raw_id]
