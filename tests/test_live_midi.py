@@ -455,13 +455,14 @@ def test_ui_crisp_audit_extras_a_through_e():
     # C — Stop before Generate writes new MIDI
     assert "player.stop(wait=True)" in src
     assert src.index("player.stop(wait=True)") < src.index("generate_midi_for_style(")
-    # D — count-in honesty microcopy; silent when soft-click Off (default)
+    # D — count-in honesty; silent when soft-click Off; denser opts collapsed
     assert "not synced to Logic" in src
     assert "sketch BPM" in src
     assert "Count-in (1 silent bar)" in src
     assert 'st.session_state.get("live_soft_click", False)' in src
     assert "Soft click during count-in" in src
     assert "click MIDI will be captured if Logic is recording" in src
+    assert 'st.expander("Before Record / Capture"' in src
     # Soft click defaults Off — never force click=True as the literal play default.
     assert 'st.session_state["live_soft_click"] = True' not in src
     # E — last_error → live_message; keep Stop when was_playing / failed Play
@@ -470,12 +471,14 @@ def test_ui_crisp_audit_extras_a_through_e():
     # Natural end always sets Finished (no Streaming-prefix requirement).
     assert 'st.session_state["live_message"] = "Finished."' in src
     assert 'msg.startswith("Streaming")' not in src
-    # Later PASS ACs — All notes off (not fake transport); countdown; prefs
+    # Sample Musician bar — Play hero; compact Panic; caption-only countdown; prefs
     assert 'key="panic_logic"' in src
-    assert '"All notes off"' in src
+    assert '"Panic"' in src
+    assert "All notes off (CC123)" in src
     assert "player.panic(" in src
     assert "transport_caption()" in src
     assert "_persist_live_prefs" in src
+    assert "st.columns([4, 1, 1])" in src  # Play dominates Stop/Panic
 
 
 def test_player_panic_flushes_cc123_without_stopping(tmp_path):

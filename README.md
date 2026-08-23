@@ -44,7 +44,7 @@ Optional Cursor SDK enrichment: `export CURSOR_API_KEY=crsr_...` before `./run_u
 1. **Audio MIDI Setup** → MIDI Studio → **IAC Driver** → enable **Device is online**.
 2. In Logic, set a Software Instrument track’s **MIDI In** to that IAC bus (must match the port Style Lab plays to when you have more than one).
 3. Generate a sketch → **Arm → Record in Logic → Play here** (live stream alone does not write a region).
-4. Optional **Count-in (1 silent bar)** (off by default for instant audition) and/or **Loop sketch** — app-side only, inside the Audition→Capture strip; Stop panic-flushes hanging notes. **All notes off** sends CC123 without stopping (works idle when a port is known). Soft click during count-in is an Advanced opt-in (off by default — click MIDI is captured if Logic is recording).
+4. Optional **Before Record / Capture** (collapsed): **Count-in (1 silent bar)** and/or **Loop sketch** — Off by default for instant audition. Soft click is under **Advanced** (off by default — click MIDI is captured if Logic is recording). Compact **Panic** beside Stop sends CC123 without stopping.
 5. If you enabled IAC mid-session, hit **Refresh ports** — no relaunch needed.
 
 Requires `python-rtmidi` (installed with the package). Silence checklist under Play covers MIDI In match / track hears input / instrument loaded.
