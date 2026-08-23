@@ -18,12 +18,14 @@ FULL_SCALE_INTERVALS = {
     'locrian': [0, 1, 3, 5, 6, 8, 10]
 }
 
-# Characteristic non-triad color tones. Strong beats keep chord tones;
-# approach slots can carry these so modes don't collapse to wallpaper.
-# major/minor are empty: triad IS the identity — color is a modal problem.
+# Characteristic non-triad color tones (modal fingerprints only).
+# Approach slots may carry these; strong beats keep chord tones.
+# REQUIRED: major/minor stay empty — triad IS the identity. Color is a
+# modal problem (Lydian #4, Dorian nat6/9, …). Glass/Satie must not sprout
+# 6ths/9ths/b7s when mode_color defaults True.
 MODE_COLOR_INTERVALS = {
-    'major': [],              # triad = identity
-    'minor': [],              # triad = identity
+    'major': [],              # triad = identity (no default color paint)
+    'minor': [],              # triad = identity (no default color paint)
     'dorian': [2, 9],         # nat9 + nat6 (Dorian fingerprint)
     'phrygian': [1],          # b2
     'lydian': [6],            # #4

@@ -84,32 +84,51 @@ def test_dorian_arpeggio_includes_nat6_or_9():
 
 
 def test_major_minor_have_no_mode_color_intervals():
+    """REQUIRED: triad styles stay triad — color is a modal problem only."""
+    from midi_gen.scale import MODE_COLOR_INTERVALS
+
+    assert MODE_COLOR_INTERVALS["major"] == []
+    assert MODE_COLOR_INTERVALS["minor"] == []
+
     root = note_str_to_midi("C4")
     assert get_mode_color_pitch_classes(root, "major") == []
     assert get_mode_color_pitch_classes(root, "minor") == []
+
     triad_maj = set(get_scale(root, "major", use_chord_tones=True))
-    notes = create_arpeggio(
-        root=root,
-        mode="major",
-        length=8,
-        min_octave=4,
-        max_octave=5,
-        arp_mode="up",
-        range_octaves=1,
-        evolution_rate=0.0,
-        repetition_factor=10,
-        use_chord_tones=True,
-        mode_color=True,
-    )
-    assert {n % 12 for n in notes} <= triad_maj
+    triad_min = set(get_scale(root, "minor", use_chord_tones=True))
+    for mode, triad in (("major", triad_maj), ("minor", triad_min)):
+        notes = create_arpeggio(
+            root=root,
+            mode=mode,
+            length=8,
+            min_octave=4,
+            max_octave=5,
+            arp_mode="up",
+            range_octaves=1,
+            evolution_rate=0.0,
+            repetition_factor=10,
+            use_chord_tones=True,
+            mode_color=True,  # default path — must still stay triad-clean
+        )
+        assert {n % 12 for n in notes} <= triad, f"{mode} sprouted color: {notes}"
+
+    # paint_mode_color is a no-op when intervals are empty
+    pattern = [note_str_to_midi(n) for n in ("C4", "E4", "G4", "C5", "E5", "G5", "C4", "E4")]
+    assert paint_mode_color(pattern, root, "major", 4, 5) == pattern
+    assert paint_mode_color(pattern, root, "minor", 4, 5) == pattern
 
 
-def test_glass_profile_stays_triad_clean():
-    from midi_gen.musician_styles import find_best_profile
+def test_glass_and_satie_profiles_stay_triad_clean():
+    from midi_gen.musician_styles import find_best_profile, get_profile_by_id
+    from midi_gen.scale import MODE_COLOR_INTERVALS
+
+    assert MODE_COLOR_INTERVALS["major"] == []
+    assert MODE_COLOR_INTERVALS["minor"] == []
 
     glass = find_best_profile("Philip Glass")
     assert glass is not None
     assert glass.mode == "minor"
+    assert glass.mode_color is True
     assert get_mode_color_pitch_classes(note_str_to_midi(glass.root_notes[0]), glass.mode) == []
     root = note_str_to_midi(glass.root_notes[0])
     triad = set(get_scale(root, glass.mode, use_chord_tones=True))
@@ -127,6 +146,28 @@ def test_glass_profile_stays_triad_clean():
         mode_color=glass.mode_color,
     )
     assert {n % 12 for n in notes} <= triad
+
+    satie = get_profile_by_id("satie_neoclassical")
+    assert satie is not None
+    assert satie.mode == "major"
+    assert satie.mode_color is True
+    sroot = note_str_to_midi(satie.root_notes[0])
+    assert get_mode_color_pitch_classes(sroot, satie.mode) == []
+    striad = set(get_scale(sroot, satie.mode, use_chord_tones=True))
+    snotes = create_arpeggio(
+        root=sroot,
+        mode=satie.mode,
+        length=satie.arp_steps,
+        min_octave=satie.min_octave,
+        max_octave=satie.max_octave,
+        arp_mode=satie.arp_mode,
+        range_octaves=satie.range_octaves,
+        evolution_rate=0.0,
+        repetition_factor=10,
+        use_chord_tones=satie.use_chord_tones,
+        mode_color=satie.mode_color,
+    )
+    assert {n % 12 for n in snotes} <= striad
 
 
 def test_mode_color_can_be_disabled():
