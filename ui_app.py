@@ -43,7 +43,7 @@ from midi_gen.style_prompting import (
     double_bars,
     featured_style_cards,
     format_match_line,
-    format_plain_feel_line,
+    format_plain_feel_match,
     half_bars,
     mood_chip_packs,
     preview_recipe,
@@ -553,7 +553,7 @@ if not has_sketch:
         cols = st.columns(max(2, len(pack.chips)))
         for j, chip in enumerate(pack.chips):
             with cols[j]:
-                if st.button(chip, key=f"mood_{pack.label}_{j}", use_container_width=True):
+                if st.button(chip, key=f"mood_{pack.id}_{j}", use_container_width=True):
                     st.session_state["vibe_text"] = chip
                     st.rerun()
     # Who path still available, collapsed (not geek chrome on cold start)
@@ -597,7 +597,7 @@ else:
                 with cols[j]:
                     if st.button(
                         chip,
-                        key=f"mood_post_{pack.label}_{j}",
+                        key=f"mood_post_{pack.id}_{j}",
                         use_container_width=True,
                     ):
                         st.session_state["vibe_text"] = chip
@@ -714,22 +714,32 @@ gen_col, surprise_col = st.columns([3, 1])
 with gen_col:
     generate = st.button("Generate", type="primary", use_container_width=True)
 with surprise_col:
+    last_run_for_surprise = st.session_state.get("last_run")
+    last_result = (
+        last_run_for_surprise.get("result") if last_run_for_surprise else None
+    )
+    previous_id = (
+        getattr(getattr(last_result, "profile", None), "id", None)
+        if last_result is not None
+        else None
+    )
+    surprise_pick = surprise_related_profile(
+        recipe.profile,
+        vibe_hint=query,
+        last_result=last_result,
+        previous_id=previous_id,
+    )
     if st.button(
         "Surprise me",
         use_container_width=True,
         key="surprise_me",
+        disabled=surprise_pick is None,
         help="Dice into a related named style from the full catalog, then generate.",
     ):
-        surprise = surprise_related_profile(
-            recipe.profile,
-            vibe_hint=query,
-        )
-        if surprise is not None:
-            st.session_state["pending_related_name"] = surprise.name
+        if surprise_pick is not None:
+            # Named catalog identity jump — do not soft-steer knobs on current.
+            st.session_state["pending_related_name"] = surprise_pick.name
             st.rerun()
-        else:
-            st.session_state["auto_generate"] = True
-            generate = True
 st.markdown("</div>", unsafe_allow_html=True)
 if st.session_state.pop("auto_generate", False):
     generate = True
@@ -760,7 +770,7 @@ if generate:
             )
             summary = summarize_midi_file(path)
             wav_bytes = render_midi_to_wav_bytes(path)
-            plain = format_plain_feel_line(result.profile)
+            plain = format_plain_feel_match(result.profile)
             st.session_state["last_run"] = {
                 "path": path,
                 "result": result,
@@ -819,7 +829,7 @@ else:
 
     st.success(result.message)
     # Plain-feel clarity on happy path; geek match type stays in Advanced only
-    plain = run.get("plain_feel_line") or format_plain_feel_line(profile)
+    plain = run.get("plain_feel_line") or format_plain_feel_match(profile)
     st.markdown(f'<p class="post-feel">{plain}</p>', unsafe_allow_html=True)
     st.caption(
         f"{options.get('mode')} · {options.get('bpm')} BPM · "

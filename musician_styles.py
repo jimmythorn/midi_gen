@@ -425,6 +425,11 @@ STYLE_QUERY_ALIASES: Dict[str, tuple[str, ...]] = {
     "spare neoclassical": ("satie_neoclassical",),
     "baroque": ("bach_sequence",),
     "counterpoint": ("bach_sequence",),
+    "additive cells": ("glass_minimal",),
+    "additive": ("glass_minimal",),
+    "phase pulse": ("reich_phase",),
+    "clear sequence": ("bach_sequence",),
+    "modal fire": ("coltrane_sheets",),
 }
 
 

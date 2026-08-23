@@ -27,7 +27,7 @@ from midi_gen.style_prompting import (
     double_bars,
     featured_style_cards,
     format_match_line,
-    format_plain_feel_line,
+    format_plain_feel_match,
     format_recipe_one_liner,
     half_bars,
     mood_chip_packs,
@@ -121,14 +121,19 @@ def test_vibe_chips_are_examples_not_closed_set():
 def test_mood_chip_packs_span_catalog_examples():
     packs = mood_chip_packs()
     assert 2 <= len(packs) <= 3
-    labels = {p.label for p in packs}
-    assert "Soft & sparse" in labels
-    assert "Pulse & phase" in labels
-    assert "Jazz & grit" in labels
+    by_id = {p.id: p for p in packs}
+    assert set(by_id) >= {"soft_sparse", "pulse_phase", "jazz_grit"}
+    assert by_id["soft_sparse"].label == "Soft & sparse"
+    assert "ambient drone" in by_id["soft_sparse"].chips
+    assert "additive cells" in by_id["pulse_phase"].chips
+    assert "modal fire" in by_id["jazz_grit"].chips
     all_chips = [c for p in packs for c in p.chips]
-    assert len(all_chips) >= 6
+    assert len(all_chips) >= 8
     # Packs are entry points — chips still resolve across the full catalog
-    assert find_best_profile(all_chips[0]) is not None
+    assert find_best_profile("additive cells").id == "glass_minimal"
+    assert find_best_profile("phase pulse").id == "reich_phase"
+    assert find_best_profile("clear sequence").id == "bach_sequence"
+    assert find_best_profile("modal fire").id == "coltrane_sheets"
     assert find_best_profile("counterpoint").id == "bach_sequence"
 
 
@@ -141,17 +146,19 @@ def test_half_double_bars_clamp():
     assert double_bars(32) == 32
 
 
-def test_plain_feel_line_and_surprise_related():
+def test_plain_feel_match_and_surprise_related():
     eno = get_profile_by_id("eno_ambient")
-    line = format_plain_feel_line(eno)
-    assert line.startswith("Sounds like Brian Eno")
-    assert "drone" in line
-    assert "slow" in line  # 72 BPM
+    line = format_plain_feel_match(eno)
+    assert line == "Sounds like Brian Eno (ambient · drone)"
 
     glass = get_profile_by_id("glass_minimal")
-    glass_line = format_plain_feel_line(glass)
-    assert "Philip Glass" in glass_line
-    assert "arp" in glass_line
+    assert format_plain_feel_match(glass) == "Sounds like Philip Glass (minimal · additive)"
+
+    reich = get_profile_by_id("reich_phase")
+    assert format_plain_feel_match(reich) == "Sounds like Steve Reich (phase · pulse)"
+
+    coltrane = get_profile_by_id("coltrane_sheets")
+    assert format_plain_feel_match(coltrane) == "Sounds like John Coltrane (modal · sheets)"
 
     surprise = surprise_related_profile(eno, vibe_hint="ambient")
     assert surprise is not None
@@ -159,6 +166,15 @@ def test_plain_feel_line_and_surprise_related():
     # Same as related[0] — named identity, not pure random
     related0 = related_profiles(eno, limit=1, vibe_hint="ambient")[0]
     assert surprise.id == related0.id
+
+    # If previous was related[0], take related[1] when available
+    related2 = related_profiles(eno, limit=2, vibe_hint="ambient")
+    if len(related2) >= 2:
+        skipped = surprise_related_profile(
+            eno, vibe_hint="ambient", previous_id=related2[0].id
+        )
+        assert skipped is not None
+        assert skipped.id == related2[1].id
 
 
 def test_recipe_preview_and_match_line():
@@ -169,6 +185,7 @@ def test_recipe_preview_and_match_line():
     assert "Matched:" in who.match_line
     assert "catalog" in who.match_line
     assert who.plain_feel_line.startswith("Sounds like Erik Satie")
+    assert " · " in who.plain_feel_line
 
     feel = preview_recipe(
         catalog_name="Philip Glass",
@@ -178,7 +195,7 @@ def test_recipe_preview_and_match_line():
     assert feel.path == "vibe"
     assert feel.profile.id == "eno_ambient"
     assert "Matched:" in feel.match_line
-    assert "Sounds like" in feel.plain_feel_line
+    assert feel.plain_feel_line == "Sounds like Brian Eno (ambient · drone)"
 
     generic = preview_recipe(
         catalog_name="Philip Glass",
