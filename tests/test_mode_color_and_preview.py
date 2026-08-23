@@ -264,6 +264,66 @@ def _wav_rms_diff(a: bytes, b: bytes) -> float:
     return float(np.sqrt(np.mean((x[:n] - y[:n]) ** 2)))
 
 
+def _midi_bend_rms(path: str) -> float:
+    """RMS of pitchwheel values — strength metric that ignores WAV peak-normalize."""
+    bends: list[float] = []
+    mid = mido.MidiFile(path)
+    for track in mid.tracks:
+        for msg in track:
+            if msg.type == "pitchwheel":
+                bends.append(float(msg.pitch))
+    if not bends:
+        return 0.0
+    arr = np.asarray(bends, dtype=np.float64)
+    return float(np.sqrt(np.mean(arr * arr)))
+
+
+def _wobble_only_from_preset(preset_id: str, *, randomness: float = 0.0) -> list:
+    """Tape wobble knobs only — strip humanize so velocity can't confound."""
+    from midi_gen.effects_presets import get_preset
+
+    out = []
+    for conf in get_preset(preset_id)["effects"]:
+        if conf.get("name") != "tape_wobble":
+            continue
+        wobble = dict(conf)
+        wobble["randomness"] = randomness
+        out.append(wobble)
+    return out
+
+
+def _write_drone_with_effects(tmp_path: Path, name: str, effect_confs: list) -> Path:
+    """Same fixed drone MIDI notes, with optional wobble-only effects. Returns path."""
+    import random
+
+    from midi_gen.effects import EffectRegistry
+    from midi_gen.midi import create_midi_file
+
+    # 2 bars of a sustained C major triad (shared across clean/subtle/worn)
+    ticks = 480 * 4 * 2
+    events = [
+        (60, 0, ticks, 90),
+        (64, 0, ticks, 90),
+        (67, 0, ticks, 90),
+    ]
+    path = tmp_path / f"{name}.mid"
+    options = {
+        "generation_type": "drone",
+        "bpm": 120,
+        "filename": str(path),
+        "debug": False,
+    }
+    effects = []
+    for conf in effect_confs:
+        effect = EffectRegistry.create_effect(conf)
+        assert effect is not None, conf
+        effects.append(effect)
+    # Seed so note-sync contour direction matches across variants
+    random.seed(42)
+    create_midi_file(events, options, effects)
+    return path
+
+
 def test_audio_preview_honors_pitch_bend(tmp_path):
     bent = tmp_path / "bent.mid"
     flat = tmp_path / "flat.mid"
@@ -285,29 +345,28 @@ def test_audio_preview_honors_pitch_bend(tmp_path):
     assert _wav_rms_diff(wav_bent, wav_flat) > 500.0
 
 
-def test_tape_preset_preview_differs_from_clean(tmp_path):
-    import shutil
+def test_tape_wobble_preview_differs_from_clean_same_midi(tmp_path):
+    """Wobble-only on identical notes — velocity humanize cannot confound."""
+    subtle_conf = _wobble_only_from_preset("subtle_tape")
+    worn_conf = _wobble_only_from_preset("worn_tape")
+    assert len(subtle_conf) == 1 and subtle_conf[0]["name"] == "tape_wobble"
+    assert len(worn_conf) == 1 and worn_conf[0]["name"] == "tape_wobble"
+    assert not any(c.get("name") == "humanize_velocity" for c in subtle_conf + worn_conf)
 
-    from midi_gen.cursor_style_lookup import generate_midi_for_style
+    path_clean = _write_drone_with_effects(tmp_path, "clean", [])
+    path_subtle = _write_drone_with_effects(tmp_path, "subtle", subtle_conf)
+    path_worn = _write_drone_with_effects(tmp_path, "worn", worn_conf)
 
-    path_clean, _, _ = generate_midi_for_style(
-        "Brian Eno",
-        use_cursor_sdk=False,
-        overrides={"bars": 2, "effects_preset": "clean", "debug": False},
+    wav_clean = render_midi_to_wav_bytes(str(path_clean))
+    wav_subtle = render_midi_to_wav_bytes(str(path_subtle))
+    wav_worn = render_midi_to_wav_bytes(str(path_worn))
+
+    assert _wav_rms_diff(wav_clean, wav_subtle) > 100.0
+    assert _wav_rms_diff(wav_clean, wav_worn) > 100.0
+    # Strength via bend magnitude (WAV peak-normalize can invert RMS ordering)
+    subtle_bend = _midi_bend_rms(str(path_subtle))
+    worn_bend = _midi_bend_rms(str(path_worn))
+    assert subtle_bend > 0.0
+    assert worn_bend > subtle_bend, (
+        f"worn wobble should exceed subtle ({worn_bend:.1f} vs {subtle_bend:.1f})"
     )
-    clean = tmp_path / "clean.mid"
-    shutil.copy(path_clean, clean)
-
-    path_tape, _, options = generate_midi_for_style(
-        "Brian Eno",
-        use_cursor_sdk=False,
-        overrides={"bars": 2, "effects_preset": "worn_tape", "debug": False},
-    )
-    tape = tmp_path / "tape.mid"
-    shutil.copy(path_tape, tape)
-
-    assert any(c.get("name") == "tape_wobble" for c in options.get("effects_config") or [])
-    wav_clean = render_midi_to_wav_bytes(str(clean))
-    wav_tape = render_midi_to_wav_bytes(str(tape))
-    # Tape wow/flutter should change the rendered preview
-    assert _wav_rms_diff(wav_clean, wav_tape) > 100.0
