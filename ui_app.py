@@ -236,6 +236,19 @@ IAC_FIRST_RUN_TIP = """
 </div>
 """
 
+MULTI_PORT_HELP = (
+    "Prefer an IAC Driver bus. In Logic, set the track’s MIDI In to the "
+    "same IAC bus you pick here — mismatched ports mean silence."
+)
+
+
+def _show_iac_tip() -> None:
+    """First-run IAC tip; hidden after a successful Play (session)."""
+    if st.session_state.get("iac_tip_dismissed"):
+        return
+    st.markdown(IAC_FIRST_RUN_TIP, unsafe_allow_html=True)
+
+
 # --- Hero: brand + one job ---
 st.markdown(
     """
@@ -421,9 +434,9 @@ default_port = preferred_iac_port(ports) or (ports[0] if ports else None)
 if "live_port" not in st.session_state and default_port:
     st.session_state["live_port"] = default_port
 
-# First-run / empty-state IAC tip (not buried)
+# First-run / empty-state IAC tip (not buried; dismiss after successful Play)
 if not run:
-    st.markdown(IAC_FIRST_RUN_TIP, unsafe_allow_html=True)
+    _show_iac_tip()
     st.info("Pick a style or type a vibe, then Generate.")
 else:
     result = run["result"]
@@ -461,18 +474,22 @@ else:
     # --- Primary CTA: Play into Logic ---
     st.markdown("### Play into Logic")
     if not live.available:
-        st.markdown(IAC_FIRST_RUN_TIP, unsafe_allow_html=True)
+        _show_iac_tip()
         st.warning(
             live.error
             or "No MIDI ports available. Enable IAC Driver, then relaunch this app."
         )
     else:
+        _show_iac_tip()
         if len(ports) > 1:
             st.selectbox(
                 "MIDI output port",
                 options=ports,
                 key="live_port",
-                help="Prefer an IAC Driver bus.",
+                help=MULTI_PORT_HELP,
+            )
+            st.caption(
+                "Logic MIDI In must match the IAC bus chosen above."
             )
         else:
             st.caption(f"Port: **{ports[0]}**")
@@ -490,6 +507,9 @@ else:
                 try:
                     player.play_file(path, st.session_state.get("live_port"))
                     st.session_state["live_message"] = f"Streaming to {player.port_name}."
+                    # Optional: hide first-run tip after a successful Play
+                    st.session_state["iac_tip_dismissed"] = True
+                    st.rerun()
                 except Exception as exc:
                     st.session_state["live_message"] = f"Live MIDI failed: {exc}"
         with stop_col:

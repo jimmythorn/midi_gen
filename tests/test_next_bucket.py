@@ -234,6 +234,11 @@ def test_phase_creep_helpers():
     assert d is not None
     assert "thin" not in d["mutate_ops"]
     assert "add_attack" in d["mutate_ops"]
+    # Ambient/Eno may seed longer than arp cells (Composer allows up to 4)
+    long_seed = normalize_development({"seed_bars": 4, "mutate_every_n": 4})
+    assert long_seed is not None
+    assert long_seed["seed_bars"] == 4
+    assert normalize_development({"seed_bars": 9})["seed_bars"] == 4
 
 
 def test_arp_steps_duration_matches_eighths(tmp_path):
@@ -396,6 +401,7 @@ def test_enriched_catalog_profiles():
     assert eno.development is not None
     assert eno.development.get("phase_creep") is False
     assert eno.development.get("mutate_every_n") >= 4
+    assert eno.development.get("seed_bars") == 4
 
     coltrane = get_profile_by_id("coltrane_sheets")
     assert coltrane is not None
@@ -430,14 +436,14 @@ def test_profile_from_dict_accepts_nested_blocks():
         "name": "Custom",
         "mode": "dorian",
         "mode_color": {"enabled": True, "intervals": [2, 9], "accent_every": 4},
-        "development": {"seed_bars": 2, "mutate_every_n": 2, "additive_only": True},
+        "development": {"seed_bars": 4, "mutate_every_n": 2, "additive_only": True},
         "embellish": True,
         "rhythmic_variation": True,
         "chord_progression": ["D3", "A3"],
     })
     assert isinstance(profile.mode_color, dict)
     assert profile.mode_color["intervals"] == [2, 9]
-    assert profile.development["seed_bars"] == 2
+    assert profile.development["seed_bars"] == 4
     assert profile.development["additive_only"] is True
     assert profile.embellish is True
     assert profile.chord_progression == ["D3", "A3"]

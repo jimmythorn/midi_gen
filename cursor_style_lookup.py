@@ -50,7 +50,7 @@ Return ONLY a single JSON object (no markdown) with these keys:
   "chord_progression": ["D3", "A3", "G3", "D3"] or null,
   "development": null OR {
     "enabled": true,
-    "seed_bars": 1|2,
+    "seed_bars": 1|2|3|4,
     "mutate_every_n": 1-4,
     "mutate_ops": ["add_attack", "add_rest", "invert", "thin", "phase_creep"],
     "phase_creep": true/false,

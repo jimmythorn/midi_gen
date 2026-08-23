@@ -41,7 +41,7 @@ Optional Cursor SDK enrichment: `export CURSOR_API_KEY=crsr_...` before `./run_u
 ## Play into Logic Pro (IAC)
 
 1. **Audio MIDI Setup** → MIDI Studio → **IAC Driver** → enable **Device is online**.
-2. In Logic, set a Software Instrument track’s **MIDI In** to that IAC bus.
+2. In Logic, set a Software Instrument track’s **MIDI In** to that IAC bus (must match the port Style Lab plays to when you have more than one).
 3. Generate a sketch → **Play into Logic**.
 4. Hit **Record** in Logic to capture a region (live stream alone does not write the project).
 

@@ -130,10 +130,11 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         drone_octave_doubling_chance=0.35,
         drone_enable_walkdowns=False,
         # Slow sparse voicing drift (no phase). Drone path maps mutate_every_n
-        # onto variation interval; not an arp cell tile.
+        # onto variation interval; not an arp cell tile. seed_bars=4 holds the
+        # opening pad longer before sparse mutate (Composer lock).
         development={
             "enabled": True,
-            "seed_bars": 2,
+            "seed_bars": 4,
             "mutate_every_n": 4,
             "mutate_ops": ["add_attack", "add_rest"],
             "phase_creep": False,
@@ -648,7 +649,7 @@ def profile_from_dict(data: Dict[str, Any], source: str = "cursor_sdk") -> Music
                 ops = [ops]
             base["development"] = {
                 "enabled": True,
-                "seed_bars": max(1, min(2, int(raw_dev.get("seed_bars", 1)))),
+                "seed_bars": max(1, min(4, int(raw_dev.get("seed_bars", 1)))),
                 "mutate_every_n": max(1, int(raw_dev.get("mutate_every_n", 1))),
                 "mutate_ops": [str(o).lower() for o in ops],
                 "phase_creep": bool(raw_dev.get("phase_creep", False)),

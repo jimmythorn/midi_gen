@@ -1,8 +1,9 @@
 """
 Bar-by-bar pattern development for arpeggio sketches.
 
-Seeds a short cell, then mutates every N bars so sketches evolve instead of
-tiling one cycle forever. Defaults keep backward-compatible static tiling.
+Seeds a short cell (1–4 bars), then mutates every N bars so sketches evolve
+instead of tiling one cycle forever. Defaults keep backward-compatible static
+tiling.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ def normalize_development(raw: Any) -> Optional[Dict[str, Any]]:
         ops = list(DEFAULT_MUTATE_OPS)
 
     seed_bars = int(raw.get("seed_bars", 1))
-    seed_bars = max(1, min(2, seed_bars))
+    seed_bars = max(1, min(4, seed_bars))
     mutate_every_n = int(raw.get("mutate_every_n", 1))
     mutate_every_n = max(1, mutate_every_n)
     additive_only = bool(raw.get("additive_only", False))
