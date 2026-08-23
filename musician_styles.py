@@ -125,8 +125,16 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         drone_min_notes_held=3,
         drone_octave_doubling_chance=0.35,
         drone_enable_walkdowns=False,
-        # Soft voicing drift — not arp development, but keeps the arc field honest.
-        development=None,
+        # Slow sparse voicing drift (no phase). Drone path maps mutate_every_n
+        # onto variation interval; not an arp cell tile.
+        development={
+            "enabled": True,
+            "seed_bars": 2,
+            "mutate_every_n": 4,
+            "mutate_ops": ["add_attack", "add_rest"],
+            "phase_creep": False,
+            "additive_only": False,
+        },
     ),
     MusicianStyleProfile(
         id="glass_minimal",
@@ -145,15 +153,15 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         range_octaves=1,
         evolution_rate=0.05,
         repetition_factor=9,
-        embellish=True,
+        embellish=False,
         rhythmic_variation=False,
         effects_preset="human_feel",
-        # Additive-only: grow attacks, never thin/rest away the cell.
+        # Additive-only: grow attacks only — cell is the event; no phase.
         development={
             "enabled": True,
             "seed_bars": 2,
             "mutate_every_n": 2,
-            "mutate_ops": ["add_attack", "invert"],
+            "mutate_ops": ["add_attack"],
             "additive_only": True,
             "phase_creep": False,
         },

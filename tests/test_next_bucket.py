@@ -276,6 +276,69 @@ def test_create_arp_wires_embellish_and_progression(tmp_path):
     assert any(msg.type == "note_on" for track in mid.tracks for msg in track)
 
 
+def test_create_arp_passes_knobs_into_create_arpeggio(monkeypatch, tmp_path):
+    """embellish / chord_progression / rhythmic_variation must reach create_arpeggio."""
+    seen = {}
+
+    import midi_gen.arpeggio_generation as ag
+
+    real = ag.create_arpeggio
+
+    def spy(*args, **kwargs):
+        seen["kwargs"] = dict(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ag, "create_arpeggio", spy)
+    create_arp({
+        "generation_type": "arpeggio",
+        "root_notes": ["D3"],
+        "mode": "dorian",
+        "bars": 1,
+        "arp_steps": 8,
+        "embellish": True,
+        "rhythmic_variation": True,
+        "chord_progression": ["D3", "G3"],
+        "evolution_rate": 0.0,
+        "repetition_factor": 10,
+        "effects_config": [],
+        "filename": str(tmp_path / "spy.mid"),
+        "debug": False,
+    })
+    assert seen["kwargs"].get("embellish") is True
+    assert seen["kwargs"].get("rhythmic_variation") is True
+    assert seen["kwargs"].get("chord_progression") == [
+        note_str_to_midi("D3"),
+        note_str_to_midi("G3"),
+    ]
+
+
+def test_glass_additive_development_evolves(tmp_path):
+    """Glass claims development — must not tile one cell forever."""
+    glass = get_profile_by_id("glass_minimal")
+    assert glass is not None
+    opts = glass.to_options(effects_config=[])
+    opts.update({
+        "bars": 8,
+        "root_notes": ["A3"],  # single chord; isolate cell development
+        "seed": 11,
+        "filename": str(tmp_path / "glass_dev.mid"),
+        "debug": False,
+        "evolution_rate": 0.0,
+    })
+    path = create_arp(opts)
+    mid = mido.MidiFile(path)
+    pitches = [
+        msg.note
+        for track in mid.tracks
+        for msg in track
+        if msg.type == "note_on" and msg.velocity > 0
+    ]
+    assert pitches
+    half = len(pitches) // 2
+    # Additive development should change attack density/contour over time
+    assert pitches[:half] != pitches[half:] or len(set(pitches)) >= 3
+
+
 def test_enriched_catalog_profiles():
     glass = get_profile_by_id("glass_minimal")
     assert glass is not None
@@ -283,24 +346,32 @@ def test_enriched_catalog_profiles():
     assert glass.bars == 16
     assert glass.development is not None
     assert glass.development.get("additive_only") is True
-    assert glass.embellish is True
+    assert glass.development.get("mutate_ops") == ["add_attack"]
+    assert glass.development.get("phase_creep") is False
+    assert glass.embellish is False
+    assert glass.rhythmic_variation is False
 
     reich = get_profile_by_id("reich_phase")
     assert reich is not None
     assert reich.rhythmic_variation is True
     assert reich.development is not None
     assert reich.development.get("phase_creep") is True
+    assert reich.development.get("seed_bars") == 1
     assert reich.chord_progression is not None
 
     eno = get_profile_by_id("eno_ambient")
     assert eno is not None
     assert eno.generation_type == "drone"
     assert isinstance(eno.mode_color, dict)
+    assert eno.development is not None
+    assert eno.development.get("phase_creep") is False
+    assert eno.development.get("mutate_every_n") >= 4
 
     coltrane = get_profile_by_id("coltrane_sheets")
     assert coltrane is not None
     assert "Giant Steps" not in coltrane.description
     assert "density" in coltrane.description.lower() or "6/9/11" in coltrane.description
+    assert coltrane.embellish is True  # neighbor/passing density
     assert isinstance(coltrane.mode_color, dict)
     assert coltrane.mode_color.get("intervals") == [9, 2, 5]
     # No #4 in custom intervals
@@ -311,7 +382,8 @@ def test_enriched_catalog_profiles():
 
     opts = glass.to_options()
     assert opts["development"]["additive_only"] is True
-    assert opts["embellish"] is True
+    assert opts["embellish"] is False
+    assert opts["development"]["mutate_ops"] == ["add_attack"]
 
 
 def test_schema_mentions_development_and_mode_color_dict():

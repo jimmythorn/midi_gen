@@ -279,6 +279,12 @@ def create_arp(options: Dict):
         # This function must return List[Tuple[note, start_tick, duration_tick, velocity]]
         # Pass relevant options and the processed MIDI root notes
         drone_options = options.copy()
+        # Slow sparse mutate: map development.mutate_every_n → variation interval
+        if development and development.get("mutate_every_n"):
+            drone_options["drone_variation_interval_bars"] = max(
+                int(drone_options.get("drone_variation_interval_bars", 2)),
+                int(development["mutate_every_n"]),
+            )
         final_event_list = generate_drone_events(drone_options, processed_root_notes_midi)
         if debug:
             print(f"[INFO] Drone generation selected. {len(final_event_list)} drone events generated.")
