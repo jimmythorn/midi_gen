@@ -76,6 +76,7 @@ def test_arpeggio_respects_written_octave():
         repetition_factor=9,
         use_chord_tones=True,
     )
+    assert len(notes) == 8
     assert min(notes) >= note_str_to_midi("C3")
     assert max(notes) <= note_str_to_midi("B4")
     assert "A3" in [note_to_name(n) for n in notes] or "A4" in [note_to_name(n) for n in notes]
