@@ -11,12 +11,15 @@ def create_arp(options: Dict):
     """
     Main function to generate MIDI data based on given options.
     """
+    debug = options.get('debug', False)
     root = options.get('root', 0)
     root_notes_str_param = options.get('root_notes', None)
     generation_type = options.get('generation_type', 'arpeggio')
     
-    print(f"[DEBUG] Generation Type: {generation_type}")
-    print(f"[DEBUG] root_notes_str_param from options: {root_notes_str_param}")
+    if debug:
+        print(f"[DEBUG] Generation Type: {generation_type}")
+        if debug:
+            print(f"[DEBUG] root_notes_str_param from options: {root_notes_str_param}")
 
     processed_root_notes_midi: List[int] = []
     if root_notes_str_param: 
@@ -24,8 +27,10 @@ def create_arp(options: Dict):
     else:
         processed_root_notes_midi = [root] * options.get('bars', 16)
     
-    print(f"[DEBUG] Processed root_notes (MIDI numbers): {processed_root_notes_midi}")
-    print(f"[DEBUG] Length of processed root_notes: {len(processed_root_notes_midi) if processed_root_notes_midi else 0}")
+    if debug:
+        print(f"[DEBUG] Processed root_notes (MIDI numbers): {processed_root_notes_midi}")
+        if debug:
+            print(f"[DEBUG] Length of processed root_notes: {len(processed_root_notes_midi) if processed_root_notes_midi else 0}")
 
     mode = options.get('mode', 'major')
     bars = options.get('bars', 16)
@@ -44,19 +49,24 @@ def create_arp(options: Dict):
     active_effects: List[MidiEffect] = []
     effects_config = options.get('effects_config', [])
     
-    print("\n[DEBUG] Creating effects:")
+    if debug:
+        print("\n[DEBUG] Creating effects:")
     
     # Add other effects
     for effect_conf in effects_config:
         effect_name = effect_conf.get('name', '')
-        print(f"[DEBUG] Processing effect: {effect_name}")
-        print(f"[DEBUG] Effect configuration: {effect_conf}")
+        if debug:
+            print(f"[DEBUG] Processing effect: {effect_name}")
+        if debug:
+            print(f"[DEBUG] Effect configuration: {effect_conf}")
         
         if effect := EffectRegistry.create_effect(effect_conf):
-            print(f"[DEBUG] Successfully created effect: {effect_name}")
+            if debug:
+                print(f"[DEBUG] Successfully created effect: {effect_name}")
             active_effects.append(effect)
         else:
-            print(f"[WARNING] Failed to create effect: {effect_name}")
+            if debug:
+                print(f"[WARNING] Failed to create effect: {effect_name}")
 
     if generation_type == 'arpeggio':
         # Each bar has 16 16th notes
@@ -77,11 +87,16 @@ def create_arp(options: Dict):
             steps_per_note = steps_per_bar // arp_steps  # 2 for 8 steps, 4 for 4 steps
             repeats_per_bar = 1
         
-        print(f"[DEBUG] Steps per bar: {steps_per_bar}")
-        print(f"[DEBUG] Arp steps: {arp_steps}")
-        print(f"[DEBUG] Steps per note: {steps_per_note}")
-        print(f"[DEBUG] Pattern repeats per bar: {repeats_per_bar}")
-        print(f"[DEBUG] Using {'16th' if steps_per_note == 1 else '8th' if steps_per_note == 2 else 'quarter'} notes")
+        if debug:
+            print(f"[DEBUG] Steps per bar: {steps_per_bar}")
+        if debug:
+            print(f"[DEBUG] Arp steps: {arp_steps}")
+        if debug:
+            print(f"[DEBUG] Steps per note: {steps_per_note}")
+        if debug:
+            print(f"[DEBUG] Pattern repeats per bar: {repeats_per_bar}")
+        if debug:
+            print(f"[DEBUG] Using {'16th' if steps_per_note == 1 else '8th' if steps_per_note == 2 else 'quarter'} notes")
         
         # This will hold our flat list of notes
         final_event_list: List[Optional[int]] = []
@@ -133,7 +148,8 @@ def create_arp(options: Dict):
         # Pass relevant options and the processed MIDI root notes
         drone_options = options.copy()
         final_event_list = generate_drone_events(drone_options, processed_root_notes_midi)
-        print(f"[INFO] Drone generation selected. {len(final_event_list)} drone events generated.")
+        if debug:
+            print(f"[INFO] Drone generation selected. {len(final_event_list)} drone events generated.")
 
     # --- Filename and MIDI file creation --- 
     root_notes_names_for_file = '-'.join([note_to_name(note) for note in processed_root_notes_midi]) if processed_root_notes_midi else str(root)

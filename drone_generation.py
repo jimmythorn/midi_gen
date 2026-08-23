@@ -1,6 +1,7 @@
 import random # Added for future, more varied interest
 from typing import Dict, List, Tuple, Optional
 from .scale import get_scale # To get chord tones
+from .notes import pitch_class_at_octave, midi_octave_bounds
 
 # Type alias for structured MIDI events, ensure it matches midi.py if ever moved to a common types file
 MidiEvent = Tuple[int, int, int, int] # (note, start_tick, duration_tick, velocity)
@@ -48,7 +49,7 @@ def generate_drone_events(options: Dict, processed_root_notes_midi: List[int]) -
         # Fallback for no root notes (unchanged)
         c3_midi = 48 
         drone_chord_notes_pc = get_scale(c3_midi, 'major', use_chord_tones=True) 
-        drone_chord_notes_abs = [pc + (min_octave_param * 12) for pc in drone_chord_notes_pc]
+        drone_chord_notes_abs = [pitch_class_at_octave(pc, min_octave_param) for pc in drone_chord_notes_pc]
         drone_chord_notes_abs = [max(0, min(127, note)) for note in drone_chord_notes_abs]
         total_duration_ticks = total_bars * ticks_per_bar
         for note in drone_chord_notes_abs:
@@ -72,7 +73,7 @@ def generate_drone_events(options: Dict, processed_root_notes_midi: List[int]) -
         chord_tone_pitch_classes = get_scale(root_midi_note, mode, use_chord_tones=True)
         
         base_chord_notes = sorted(list(set([
-            max(0, min(127, pc + (min_octave_param * 12))) for pc in chord_tone_pitch_classes
+            max(0, min(127, pitch_class_at_octave(pc, min_octave_param))) for pc in chord_tone_pitch_classes
         ])))
         if not base_chord_notes: # Fallback
             base_chord_notes = [max(0,min(127, root_midi_note))] 
@@ -89,7 +90,7 @@ def generate_drone_events(options: Dict, processed_root_notes_midi: List[int]) -
         octave_span_for_scale = range(min_octave_param -1, max_octave_param + 2) # e.g. if min=3,max=5 -> octaves 2,3,4,5,6
         for pc in full_scale_pitch_classes:
             for oct_num in octave_span_for_scale:
-                note_val = pc + (oct_num * 12)
+                note_val = pitch_class_at_octave(pc, oct_num)
                 if 0 <= note_val <= 127:
                     diatonic_notes_in_range.append(note_val)
         diatonic_notes_in_range = sorted(list(set(diatonic_notes_in_range)))
@@ -131,7 +132,8 @@ def generate_drone_events(options: Dict, processed_root_notes_midi: List[int]) -
                     if random.random() < octave_shift_one_note_chance: # Apply overall chance here too
                         direction = random.choice([-12, 12])
                         shifted_note = note_to_potentially_shift + direction
-                        if min_octave_param * 12 <= shifted_note < (max_octave_param + 1) * 12 and 0 <= shifted_note <= 127:
+                        low, high = midi_octave_bounds(min_octave_param, max_octave_param)
+                        if low <= shifted_note <= high and 0 <= shifted_note <= 127:
                             notes_for_direct_play_and_doubling_source[i] = shifted_note
                             shifted_one_note_this_interval = True
                             break # Only shift one note per interval
@@ -151,7 +153,8 @@ def generate_drone_events(options: Dict, processed_root_notes_midi: List[int]) -
                     direction = random.choice([-12, 12])
                     doubled_note_target = note_being_doubled_source + direction
                     doubled_note_target = max(0, min(127, doubled_note_target))
-                    if not (min_octave_param * 12 <= doubled_note_target < (max_octave_param + 2) * 12):
+                    low, high = midi_octave_bounds(min_octave_param, max_octave_param + 1)
+                    if not (low <= doubled_note_target <= high):
                         continue 
                     actual_walk_notes_to_play: List[int] = [] # Initialize to empty list
                     actual_total_walkdown_duration = 0
