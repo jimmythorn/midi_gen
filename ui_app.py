@@ -1,10 +1,10 @@
 """
-Streamlit UI for testing musician-style MIDI generation.
+MIDI Style Lab — Streamlit UI with musician/style lookup and test output.
 
-Run:
-  PYTHONPATH=.. streamlit run midi_gen/ui_app.py
-or from this repo (workspace = package root):
-  python -m streamlit run ui_app.py
+Launch:
+  ./run_ui.sh
+  # or
+  PYTHONPATH=/tmp/py streamlit run ui_app.py
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ import sys
 import types
 from pathlib import Path
 
-# Bootstrap: allow `midi_gen.*` imports when this folder is the repo root.
 _ROOT = Path(__file__).resolve().parent
 if "midi_gen" not in sys.modules:
     _pkg = types.ModuleType("midi_gen")
@@ -23,134 +22,257 @@ if "midi_gen" not in sys.modules:
 
 import streamlit as st
 
-from midi_gen.cursor_style_lookup import (
-    cursor_sdk_available,
-    generate_midi_for_style,
-)
-from midi_gen.effects_presets import (
-    EFFECT_PARAM_HELP,
-    explain_effects_config,
-    list_presets,
-)
+from midi_gen.cursor_style_lookup import cursor_sdk_available, generate_midi_for_style
+from midi_gen.effects_presets import EFFECT_PARAM_HELP, explain_effects_config, list_presets
 from midi_gen.musician_styles import list_musicians, list_styles
 from midi_gen.preview import events_to_roll_rows, format_summary_text, summarize_midi_file
 
 
-st.set_page_config(page_title="MIDI Gen · Style Lab", page_icon="🎹", layout="wide")
-
-st.title("MIDI Style Lab")
-st.caption(
-    "Look up a musician or style, map it to generation settings "
-    "(local catalog and optional Cursor SDK), then inspect test MIDI output."
+st.set_page_config(
+    page_title="MIDI Style Lab",
+    page_icon="🎛",
+    layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
-with st.sidebar:
-    st.header("Lookup")
+# Studio-tool look: graphite + acid lime (avoid purple / cream-terracotta defaults)
+st.markdown(
+    """
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+      :root {
+        --ink: #12151a;
+        --panel: #1c2129;
+        --line: #2c3440;
+        --text: #e8edf2;
+        --muted: #9aa6b2;
+        --accent: #c8f560;
+        --accent-ink: #12151a;
+      }
+
+      .stApp {
+        background:
+          radial-gradient(1200px 600px at 10% -10%, #243047 0%, transparent 55%),
+          radial-gradient(900px 500px at 100% 0%, #1a2a22 0%, transparent 50%),
+          var(--ink);
+        color: var(--text);
+        font-family: "IBM Plex Sans", sans-serif;
+      }
+
+      h1, h2, h3, .brand-mark {
+        font-family: "Space Grotesk", sans-serif !important;
+        letter-spacing: -0.02em;
+      }
+
+      .hero {
+        padding: 1.25rem 0 0.5rem 0;
+        max-width: 920px;
+      }
+      .brand-mark {
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        margin-bottom: 0.65rem;
+      }
+      .hero h1 {
+        font-size: clamp(2.2rem, 5vw, 3.4rem) !important;
+        line-height: 1.05 !important;
+        margin: 0 0 0.6rem 0 !important;
+        color: var(--text) !important;
+      }
+      .hero p {
+        color: var(--muted);
+        font-size: 1.05rem;
+        max-width: 38rem;
+        margin: 0 0 1.25rem 0;
+      }
+
+      .panel {
+        background: color-mix(in srgb, var(--panel) 92%, black);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 1rem 1.1rem;
+      }
+      .metric-row {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.75rem;
+        margin: 0.75rem 0 1rem 0;
+      }
+      .metric {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 0.85rem 0.9rem;
+      }
+      .metric .label {
+        color: var(--muted);
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .metric .value {
+        font-family: "Space Grotesk", sans-serif;
+        font-size: 1.35rem;
+        font-weight: 700;
+        margin-top: 0.2rem;
+      }
+
+      .effect-chip {
+        border-left: 3px solid var(--accent);
+        padding-left: 0.75rem;
+        margin-bottom: 0.85rem;
+      }
+      .effect-chip strong { color: var(--text); }
+      .effect-chip span { color: var(--muted); display: block; font-size: 0.92rem; }
+
+      div[data-testid="stSidebar"] {
+        background: #0e1116;
+        border-right: 1px solid var(--line);
+      }
+
+      .stButton > button[kind="primary"] {
+        background: var(--accent) !important;
+        color: var(--accent-ink) !important;
+        border: none !important;
+        font-weight: 700 !important;
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+musicians = list_musicians()
+presets = list_presets()
+preset_ids = [p["id"] for p in presets]
+preset_labels = {p["id"]: f"{p['label']} — {p['summary']}" for p in presets}
+
+# --- Hero: brand + one job ---
+st.markdown(
+    """
+    <div class="hero">
+      <div class="brand-mark">MIDI Style Lab</div>
+      <h1>MIDI in the shape of a musician’s style.</h1>
+      <p>Look up a player or vibe, generate a sketch, and inspect the test output before you export.</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+query_col, action_col = st.columns([3, 1], vertical_alignment="bottom")
+with query_col:
     query = st.text_input(
         "Musician or style",
-        value="Philip Glass minimalism",
-        help="Examples: Brian Eno, jazz angular, ambient drone, Aphex Twin",
+        value=st.session_state.get("query", "Philip Glass minimalism"),
+        placeholder="e.g. Brian Eno, angular jazz, ambient drone, Aphex Twin",
+        label_visibility="collapsed",
+        key="query_input",
     )
-    use_sdk = st.toggle(
-        "Use Cursor SDK when available",
-        value=True,
-        help="Requires CURSOR_API_KEY. Falls back to the local catalog otherwise.",
-    )
-    sdk_ready = cursor_sdk_available()
-    st.write("Cursor SDK:", "ready" if sdk_ready else "offline (catalog only)")
-
-    st.header("Catalog")
-    musicians = list_musicians()
-    pick = st.selectbox(
-        "Or pick a catalog musician",
-        options=["(use query)"] + [m.name for m in musicians],
-    )
-    if pick != "(use query)":
-        query = pick
-
-    st.header("Overrides")
-    presets = list_presets()
-    preset_ids = [p["id"] for p in presets]
-    preset_labels = {p["id"]: p["label"] for p in presets}
-    effects_preset = st.selectbox(
-        "Effects preset",
-        options=preset_ids,
-        format_func=lambda i: preset_labels[i],
-        index=preset_ids.index("tape_and_human") if "tape_and_human" in preset_ids else 0,
-    )
-    bars = st.slider("Bars", 2, 32, 8)
-    bpm_override = st.number_input("BPM override (0 = use profile)", min_value=0, max_value=240, value=0)
-
+with action_col:
     generate = st.button("Generate MIDI", type="primary", use_container_width=True)
 
-# Effects explainer — always visible so the feature is understandable
-st.subheader("Effects (plain language)")
-cols = st.columns(len(presets))
-for col, preset in zip(cols, presets):
-    with col:
-        st.markdown(f"**{preset['label']}**")
-        st.write(preset["summary"])
-        with st.expander("What you hear"):
-            st.write(preset["what_you_hear"])
-            for effect in preset["effects"]:
-                st.code(effect, language="json")
+# Compact controls under the hero (one secondary strip — not a dashboard)
+c1, c2, c3, c4 = st.columns([1.2, 1.4, 1, 1])
+with c1:
+    pick = st.selectbox(
+        "Catalog musician",
+        options=["(from query)"] + [m.name for m in musicians],
+        help="Optional shortcut into the curated catalog.",
+    )
+with c2:
+    effects_preset = st.selectbox(
+        "Effects",
+        options=preset_ids,
+        format_func=lambda i: preset_labels[i],
+        index=preset_ids.index("tape_and_human"),
+        help="Plain-language processing applied after notes are written.",
+    )
+with c3:
+    bars = st.slider("Bars", 2, 32, int(st.session_state.get("bars", 8)))
+with c4:
+    use_sdk = st.toggle("Cursor SDK", value=True, help="Uses CURSOR_API_KEY when set; otherwise catalog only.")
+    st.caption("SDK: " + ("ready" if cursor_sdk_available() else "offline"))
 
-with st.expander("Parameter glossary"):
-    for key, help_text in EFFECT_PARAM_HELP.items():
-        st.markdown(f"**{key}** — {help_text}")
+if pick != "(from query)":
+    query = pick
 
-st.subheader("Known style tags")
-st.write(", ".join(list_styles()))
+bpm_override = st.number_input(
+    "BPM override (0 keeps the profile tempo)",
+    min_value=0,
+    max_value=240,
+    value=0,
+)
 
+# --- Generate ---
 if generate:
-    with st.spinner("Looking up style and generating MIDI…"):
+    with st.spinner("Resolving style and writing MIDI…"):
         overrides = {
             "effects_preset": effects_preset,
-            "bars": bars,
+            "bars": int(bars),
             "debug": False,
         }
         if bpm_override:
             overrides["bpm"] = int(bpm_override)
-
         path, result, options = generate_midi_for_style(
             query,
             use_cursor_sdk=use_sdk,
             overrides=overrides,
         )
         summary = summarize_midi_file(path)
+        st.session_state["last_run"] = {
+            "path": path,
+            "result": result,
+            "options": options,
+            "summary": summary,
+            "query": query,
+        }
 
+# --- Test output (persists across reruns) ---
+run = st.session_state.get("last_run")
+if not run:
+    st.info("Enter a musician or style, then generate to see test output here.")
+else:
+    result = run["result"]
+    options = run["options"]
+    summary = run["summary"]
+    path = run["path"]
+    profile = result.profile
+
+    st.markdown("### Test output")
     st.success(result.message)
-    left, right = st.columns([1, 1])
+
+    st.markdown(
+        f"""
+        <div class="metric-row">
+          <div class="metric"><div class="label">Notes</div><div class="value">{summary['note_on_count']}</div></div>
+          <div class="metric"><div class="label">Pitches</div><div class="value">{summary['unique_pitches']}</div></div>
+          <div class="metric"><div class="label">Range</div><div class="value">{summary['pitch_range']['min']}–{summary['pitch_range']['max']}</div></div>
+          <div class="metric"><div class="label">Bends</div><div class="value">{summary['pitch_bend_events']}</div></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    left, right = st.columns([1.05, 1.2], gap="large")
     with left:
-        st.markdown("### Profile")
-        profile = result.profile
-        st.write(
-            {
-                "name": profile.name,
-                "id": profile.id,
-                "styles": profile.styles,
-                "source": profile.source,
-                "generation_type": profile.generation_type,
-                "mode": profile.mode,
-                "bpm": options.get("bpm"),
-                "bars": options.get("bars"),
-                "arp_mode": profile.arp_mode,
-                "arp_steps": profile.arp_steps,
-                "effects_preset": options.get("effects_preset"),
-                "used_cursor_sdk": result.used_cursor_sdk,
-            }
-        )
+        st.markdown("#### Profile")
+        st.markdown(f"**{profile.name}** · `{profile.source}` · {profile.generation_type}")
         st.write(profile.description)
-        st.markdown("### Effects applied")
+        st.write(
+            f"Mode **{options.get('mode')}** · "
+            f"{options.get('bpm')} BPM · "
+            f"{options.get('bars')} bars · "
+            f"arp `{profile.arp_mode}` / {profile.arp_steps} steps"
+        )
+        st.markdown("#### Effects applied")
         for line in explain_effects_config(options.get("effects_config") or []):
             st.write(f"- {line}")
         if result.candidates:
-            st.markdown("### Other catalog candidates")
-            st.write([c.name for c in result.candidates])
+            st.caption("Also considered: " + ", ".join(c.name for c in result.candidates))
 
-    with right:
-        st.markdown("### Test output")
-        st.code(format_summary_text(summary))
         midi_bytes = Path(path).read_bytes()
         st.download_button(
             "Download MIDI",
@@ -159,10 +281,12 @@ if generate:
             mime="audio/midi",
             use_container_width=True,
         )
+        st.code(format_summary_text(summary))
+
+    with right:
+        st.markdown("#### Note preview")
         roll = events_to_roll_rows(summary)
         if roll:
-            st.markdown("### Note preview")
-            st.dataframe(roll, use_container_width=True, hide_index=True)
             st.scatter_chart(
                 {
                     "beat": [r["beat"] for r in roll],
@@ -170,10 +294,34 @@ if generate:
                 },
                 x="beat",
                 y="midi",
-                size=None,
+                height=320,
             )
+            st.dataframe(roll, use_container_width=True, hide_index=True, height=280)
 
-    with st.expander("Raw options sent to generator"):
+    with st.expander("Raw generator options"):
         st.json(options)
-else:
-    st.info("Set a musician/style query and click **Generate MIDI** to see test output.")
+
+# --- Effects explainer (below the fold; one purpose) ---
+st.markdown("---")
+st.markdown("### Effects, in plain language")
+st.caption("These reshape the finished note stream. Pick a preset above — details live here.")
+effect_cols = st.columns(len(presets))
+for col, preset in zip(effect_cols, presets):
+    with col:
+        st.markdown(
+            f"""
+            <div class="effect-chip">
+              <strong>{preset['label']}</strong>
+              <span>{preset['summary']}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        with st.expander("What you hear"):
+            st.write(preset["what_you_hear"])
+
+with st.expander("Parameter glossary (wow, flutter, cents…)"):
+    for key, help_text in EFFECT_PARAM_HELP.items():
+        st.markdown(f"**{key}** — {help_text}")
+
+st.caption("Style tags: " + ", ".join(list_styles()))

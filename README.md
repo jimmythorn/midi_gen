@@ -14,28 +14,20 @@ Honest baseline: output is musically usable as a starting sketch, not a finished
 ## Quick start
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
 pip install -r requirements.txt
-
-# CLI (style lookup is the default entry)
-PYTHONPATH=.. python -m midi_gen
-# If this repo root *is* the package (cloud/workspace layout):
-python -c "import runpy; runpy.run_path('__main__.py')"  # or see UI below
-
-# Better: add parent alias so `midi_gen` imports resolve
-mkdir -p /tmp/py && ln -sfn "$(pwd)" /tmp/py/midi_gen
-PYTHONPATH=/tmp/py python -m midi_gen
-
-# UI with test output
-PYTHONPATH=/tmp/py streamlit run /tmp/py/midi_gen/ui_app.py
+./run_ui.sh
 ```
 
-Optional Cursor SDK enrichment:
+Open **http://127.0.0.1:8501** — generate MIDI from a musician/style query, inspect test output, download the file.
+
+CLI (optional):
 
 ```bash
-export CURSOR_API_KEY=crsr_...
+mkdir -p /tmp/py && ln -sfn "$(pwd)" /tmp/py/midi_gen
+PYTHONPATH=/tmp/py python3 -m midi_gen
 ```
+
+Optional Cursor SDK enrichment: `export CURSOR_API_KEY=crsr_...` before `./run_ui.sh`.
 
 ## Style lookup
 
