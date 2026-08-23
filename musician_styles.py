@@ -109,7 +109,11 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
     MusicianStyleProfile(
         id="eno_ambient",
         name="Brian Eno",
-        styles=["ambient", "drone", "atmospheric", "minimal", "pad"],
+        styles=[
+            "ambient", "drone", "atmospheric", "minimal", "pad",
+            "ambient pad", "ambient drone", "slow", "sparse", "space",
+            "hypnotic", "wash", "texture",
+        ],
         description="Slow-moving drones and soft chord beds. Sparse motion, long tones.",
         generation_type="drone",
         mode="lydian",
@@ -139,7 +143,11 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
     MusicianStyleProfile(
         id="glass_minimal",
         name="Philip Glass",
-        styles=["minimalism", "pattern", "arpeggio", "repetitive", "classical"],
+        styles=[
+            "minimalism", "minimal", "pattern", "arpeggio", "repetitive",
+            "classical", "hypnotic", "additive", "ostinato", "cell",
+            "repeating", "pulse",
+        ],
         description="Tight repeating arpeggio cells; additive development over sticky Am–Am–Em–Am.",
         generation_type="arpeggio",
         mode="minor",
@@ -169,7 +177,11 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
     MusicianStyleProfile(
         id="reich_phase",
         name="Steve Reich",
-        styles=["minimalism", "phase", "pulse", "pattern", "percussion"],
+        styles=[
+            "minimalism", "minimal", "phase", "phasing", "phase music",
+            "pulse", "pattern", "percussion", "hypnotic", "modal vamp",
+            "16th", "process",
+        ],
         description="Pulse-forward 16th-note cells; phase creep and odd-bar accent flips.",
         generation_type="arpeggio",
         mode="dorian",
@@ -201,7 +213,11 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
     MusicianStyleProfile(
         id="debussy_color",
         name="Claude Debussy",
-        styles=["impressionist", "color", "modal", "piano", "wash"],
+        styles=[
+            "impressionist", "impressionism", "color", "modal", "piano",
+            "wash", "impressionist wash", "soft", "watery", "whole tone",
+            "lush", "pastel",
+        ],
         description="Modal color and wider voicings; softer motion, full scale tones.",
         generation_type="arpeggio",
         mode="mixolydian",
@@ -221,7 +237,11 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
     MusicianStyleProfile(
         id="coltrane_sheets",
         name="John Coltrane",
-        styles=["jazz", "sheets of sound", "modal jazz", "intense", "saxophone"],
+        styles=[
+            "jazz", "sheets of sound", "sheets", "modal jazz", "intense",
+            "saxophone", "dense", "dense modal sheets", "modal vamp",
+            "fiery", "rapid", "dorian",
+        ],
         description="Dense modal density sketch — rapid cells colored with 6/9/11.",
         generation_type="arpeggio",
         mode="dorian",
@@ -255,7 +275,10 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
     MusicianStyleProfile(
         id="monk_angles",
         name="Thelonious Monk",
-        styles=["jazz", "angular", "piano", "spaced", "bebop"],
+        styles=[
+            "jazz", "angular", "angular jazz", "piano", "spaced", "bebop",
+            "quirky", "leaps", "crooked", "dissonant", "stride",
+        ],
         description="Angular leaps, quirky order, and humanized touch.",
         generation_type="arpeggio",
         mode="major",
@@ -275,7 +298,11 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
     MusicianStyleProfile(
         id="aphex_glitch",
         name="Aphex Twin",
-        styles=["electronic", "idm", "glitch", "unstable", "ambient techno"],
+        styles=[
+            "electronic", "idm", "glitch", "glitchy idm", "unstable",
+            "ambient techno", "worn tape", "wow", "flutter", "broken",
+            "jitter", "acid",
+        ],
         description="Faster cells with worn-tape pitch instability and velocity jitter.",
         generation_type="arpeggio",
         mode="phrygian",
@@ -295,7 +322,11 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
     MusicianStyleProfile(
         id="bach_sequence",
         name="J.S. Bach",
-        styles=["baroque", "sequence", "counterpoint", "classical", "arpeggio"],
+        styles=[
+            "baroque", "sequence", "counterpoint", "classical", "arpeggio",
+            "steady pulse", "directional", "voice leading", "fugue",
+            "tonal", "motoric",
+        ],
         description="Clear directional sequences, chord tones, steady pulse.",
         generation_type="arpeggio",
         mode="minor",
@@ -315,7 +346,11 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
     MusicianStyleProfile(
         id="satie_neoclassical",
         name="Erik Satie",
-        styles=["ambient", "spare", "piano", "gentle", "neoclassical"],
+        styles=[
+            "ambient", "spare", "piano", "gentle", "neoclassical",
+            "spare neoclassical", "gymnopedie", "gymnopédie", "sparse",
+            "quiet", "slow piano", "soft",
+        ],
         description="Sparse, slow, gently repeating figures with soft humanization.",
         generation_type="arpeggio",
         mode="major",
@@ -335,7 +370,11 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
     MusicianStyleProfile(
         id="frahm_felt",
         name="Nils Frahm",
-        styles=["modern classical", "piano", "intimate", "ambient", "felt"],
+        styles=[
+            "modern classical", "piano", "intimate", "ambient", "felt",
+            "felt piano", "worn tape piano", "tape", "soft dynamics",
+            "mid-tempo", "warm", "neo classical",
+        ],
         description="Intimate mid-tempo arpeggios with tape warmth and soft dynamics.",
         generation_type="arpeggio",
         mode="dorian",
@@ -353,6 +392,39 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         effects_preset="tape_and_human",
     ),
 ]
+
+# Phrase / token aliases → one or more catalog profile ids.
+# Multi-target aliases (e.g. minimalism → reich|glass) boost both; ranking
+# still picks the best score, and siblings surface as related candidates.
+STYLE_QUERY_ALIASES: Dict[str, tuple[str, ...]] = {
+    "gymnopedie": ("satie_neoclassical",),
+    "gymnopédie": ("satie_neoclassical",),
+    "gymnopedies": ("satie_neoclassical",),
+    "sheets of sound": ("coltrane_sheets",),
+    "sheets": ("coltrane_sheets",),
+    "phase music": ("reich_phase",),
+    "phasing": ("reich_phase",),
+    "phase": ("reich_phase",),
+    "ambient pad": ("eno_ambient",),
+    "ambient drone": ("eno_ambient",),
+    "ambient": ("eno_ambient", "satie_neoclassical", "frahm_felt"),
+    "minimalism": ("reich_phase", "glass_minimal"),
+    "minimal pulse": ("reich_phase", "glass_minimal"),
+    "minimal": ("glass_minimal", "reich_phase", "eno_ambient"),
+    "angular jazz": ("monk_angles",),
+    "angular": ("monk_angles",),
+    "impressionist wash": ("debussy_color",),
+    "impressionist": ("debussy_color",),
+    "dense modal sheets": ("coltrane_sheets",),
+    "glitchy idm": ("aphex_glitch",),
+    "glitch": ("aphex_glitch",),
+    "idm": ("aphex_glitch",),
+    "worn tape piano": ("frahm_felt", "aphex_glitch"),
+    "felt piano": ("frahm_felt",),
+    "spare neoclassical": ("satie_neoclassical",),
+    "baroque": ("bach_sequence",),
+    "counterpoint": ("bach_sequence",),
+}
 
 
 def list_styles() -> List[str]:
@@ -385,10 +457,45 @@ def _tokenize(text: str) -> List[str]:
     return [t for t in re.split(r"[^a-z0-9]+", text.lower()) if t]
 
 
+def _normalize_query(query: str) -> str:
+    """Lowercase, fold common diacritics used in vibe aliases."""
+    q = (query or "").strip().lower()
+    # Fold é → e so gymnopédie matches gymnopedie alias keys
+    for src, dst in (("é", "e"), ("è", "e"), ("ê", "e"), ("ü", "u"), ("ö", "o")):
+        q = q.replace(src, dst)
+    return q
+
+
+def alias_target_ids(query: str) -> List[str]:
+    """
+    Resolve STYLE_QUERY_ALIASES hits for a free-text query.
+
+    Longer phrase keys win first; returns unique profile ids in alias order.
+    """
+    q = _normalize_query(query)
+    if not q:
+        return []
+    # Also index folded alias keys (gymnopédie → gymnopedie)
+    folded_aliases = {
+        _normalize_query(k): v for k, v in STYLE_QUERY_ALIASES.items()
+    }
+    hits: List[str] = []
+    seen: set[str] = set()
+    # Longest phrase first so "sheets of sound" beats "sheets"
+    for phrase in sorted(folded_aliases.keys(), key=len, reverse=True):
+        if phrase == q or f" {phrase} " in f" {q} ":
+            for pid in folded_aliases[phrase]:
+                if pid not in seen:
+                    hits.append(pid)
+                    seen.add(pid)
+    return hits
+
+
 def score_profile(query: str, profile: MusicianStyleProfile) -> float:
-    """Simple keyword score for offline matching."""
-    tokens = set(_tokenize(query))
-    if not tokens:
+    """Keyword + alias score for offline matching across the full catalog."""
+    q = _normalize_query(query)
+    tokens = set(_tokenize(q))
+    if not tokens and not q:
         return 0.0
 
     haystack = set(_tokenize(profile.name)) | set(_tokenize(profile.id))
@@ -397,23 +504,46 @@ def score_profile(query: str, profile: MusicianStyleProfile) -> float:
     haystack |= set(_tokenize(profile.description))
 
     overlap = tokens & haystack
-    if not overlap:
-        return 0.0
+    score = 0.0
+    if overlap:
+        score += float(len(overlap))
 
     # Exact name / id boosts
-    score = float(len(overlap))
     name_tokens = set(_tokenize(profile.name))
     if name_tokens and name_tokens.issubset(tokens):
         score += 5.0
-    if profile.id in query.lower().replace(" ", "_"):
+    if profile.id in q.replace(" ", "_"):
         score += 4.0
-    style_hits = sum(1 for style in profile.styles if set(_tokenize(style)) & tokens)
-    score += style_hits * 1.5
+
+    # Multi-word style tag phrase hits (e.g. "felt piano", "modal vamp")
+    style_hits = 0
+    for style in profile.styles:
+        style_norm = _normalize_query(style)
+        style_toks = set(_tokenize(style_norm))
+        if style_norm and (style_norm == q or f" {style_norm} " in f" {q} "):
+            score += 3.0
+            style_hits += 1
+        elif style_toks and style_toks.issubset(tokens):
+            score += 1.5
+            style_hits += 1
+        elif style_toks & tokens:
+            score += 0.75
+            style_hits += 1
+
+    # Alias / synonym boost — free-text maps to the right catalog id(s)
+    alias_ids = alias_target_ids(q)
+    if profile.id in alias_ids:
+        # Primary alias target gets a stronger bump; later siblings still boost
+        rank = alias_ids.index(profile.id)
+        score += 6.0 if rank == 0 else 3.5
+
+    if score <= 0 and not overlap and profile.id not in alias_ids:
+        return 0.0
     return score
 
 
 def find_profiles(query: str, limit: int = 5) -> List[MusicianStyleProfile]:
-    """Rank catalog profiles for a musician/style query."""
+    """Rank catalog profiles for a musician/style query (aliases + tags)."""
     ranked = sorted(
         ((score_profile(query, profile), profile) for profile in MUSICIAN_STYLE_CATALOG),
         key=lambda item: item[0],
