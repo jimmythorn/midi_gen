@@ -141,10 +141,20 @@ st.markdown(
       /* Audition → Capture: one visual unit; live stream ≠ region */
       .audition-capture {
         border: 1px solid var(--line);
-        border-radius: 14px;
+        border-bottom: none;
+        border-radius: 14px 14px 0 0;
         background: color-mix(in srgb, var(--panel) 90%, black);
-        padding: 0.85rem 1rem 0.95rem 1rem;
-        margin: 0.35rem 0 0.85rem 0;
+        padding: 0.85rem 1rem 0.35rem 1rem;
+        margin: 0.35rem 0 0 0;
+        max-width: 40rem;
+      }
+      .audition-capture-bottom {
+        border: 1px solid var(--line);
+        border-top: none;
+        border-radius: 0 0 14px 14px;
+        background: color-mix(in srgb, var(--panel) 90%, black);
+        padding: 0.15rem 1rem 0.95rem 1rem;
+        margin: 0 0 0.85rem 0;
         max-width: 40rem;
       }
       .audition-capture .strip-label {
@@ -158,7 +168,7 @@ st.markdown(
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 0.75rem;
-        margin: 0 0 0.65rem 0;
+        margin: 0 0 0.35rem 0;
       }
       .audition-capture .lane .title {
         font-family: "Space Grotesk", sans-serif;
@@ -173,14 +183,33 @@ st.markdown(
         margin: 0;
         line-height: 1.35;
       }
-      .audition-capture .order {
+      .audition-capture-bottom .order {
         color: var(--muted);
         font-size: 0.88rem;
         margin: 0;
-        padding-top: 0.55rem;
+        padding-top: 0.45rem;
         border-top: 1px solid var(--line);
       }
-      .audition-capture .order strong { color: var(--text); }
+      .audition-capture-bottom .order strong { color: var(--text); }
+      /* Count-in / Loop sit inside the strip unit (denser than a separate block) */
+      .audition-capture .strip-opts-label {
+        color: var(--muted);
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin: 0.45rem 0 0 0;
+        padding-top: 0.45rem;
+        border-top: 1px solid var(--line);
+      }
+      /* Bridge Streamlit checkbox row into the strip chrome */
+      div[data-testid="stHorizontalBlock"]:has(div[data-testid="stCheckbox"]) {
+        max-width: 40rem;
+        margin: 0 !important;
+        padding: 0.15rem 1rem 0.25rem 1rem;
+        border-left: 1px solid var(--line);
+        border-right: 1px solid var(--line);
+        background: color-mix(in srgb, var(--panel) 90%, black);
+      }
 
       .silence-check {
         color: var(--muted);
@@ -313,7 +342,8 @@ MULTI_PORT_HELP = (
     "same IAC bus you pick here — mismatched ports mean silence."
 )
 
-AUDITION_CAPTURE_STRIP_HTML = """
+# Split so Count-in / Loop widgets sit inside the same visual strip unit.
+AUDITION_CAPTURE_STRIP_TOP_HTML = """
 <div class="audition-capture">
   <div class="strip-label">Audition → Capture</div>
   <div class="pair">
@@ -326,6 +356,12 @@ AUDITION_CAPTURE_STRIP_HTML = """
       <p class="sub">Keep a region — live stream alone never writes the project.</p>
     </div>
   </div>
+  <div class="strip-opts-label">Before Record / Capture (optional)</div>
+</div>
+"""
+
+AUDITION_CAPTURE_STRIP_BOTTOM_HTML = """
+<div class="audition-capture-bottom">
   <p class="order"><strong>Capture order:</strong> Arm → Record in Logic → Play here.</p>
 </div>
 """
@@ -624,8 +660,6 @@ else:
         # Tip until first successful Play; chip is the always-on status signal.
         _show_iac_tip()
 
-        st.markdown(AUDITION_CAPTURE_STRIP_HTML, unsafe_allow_html=True)
-
         if len(ports) > 1:
             st.selectbox(
                 "MIDI output port",
@@ -646,18 +680,20 @@ else:
             if not port_looks_like_iac(ports[0]):
                 st.caption("Prefer enabling IAC Driver for Logic — then Refresh ports.")
 
-        # App-side only: silent count-in + loop so Record can catch a full pass.
+        # Audition→Capture strip: lanes + Count-in/Loop (opt-in) + capture order.
+        # Instant audition by default — count-in is OFF until the user opts in.
         if "live_count_in" not in st.session_state:
-            st.session_state["live_count_in"] = True
+            st.session_state["live_count_in"] = False
         if "live_loop" not in st.session_state:
             st.session_state["live_loop"] = False
+        st.markdown(AUDITION_CAPTURE_STRIP_TOP_HTML, unsafe_allow_html=True)
         opt_a, opt_b = st.columns(2)
         with opt_a:
             count_in = st.checkbox(
                 "Count-in (1 silent bar)",
                 key="live_count_in",
-                help="Gives you time after Arm→Record before notes start. "
-                "Silent so the region stays clean (no metronome MIDI).",
+                help="Opt in before Record/Capture for time after Arm→Record. "
+                "Off by default for instant audition. Silent (no metronome MIDI).",
             )
         with opt_b:
             loop_play = st.checkbox(
@@ -665,6 +701,7 @@ else:
                 key="live_loop",
                 help="Repeat until Stop — useful if you miss the first pass.",
             )
+        st.markdown(AUDITION_CAPTURE_STRIP_BOTTOM_HTML, unsafe_allow_html=True)
 
         play_col, stop_col = st.columns([2, 1])
         with play_col:
@@ -709,23 +746,39 @@ else:
                 st.session_state["live_message"] = "Stopped."
                 st.rerun()
 
-        # Honest Playing caption: poll while active; clear when thread ends.
+        # Honest Playing caption: poll while active; clear when thread ends
+        # or when the MIDI port disappears / send fails mid-play.
         if player.playing or st.session_state.get("live_was_playing"):
 
             @st.fragment(run_every=timedelta(milliseconds=400))
             def _playback_status_poll() -> None:
+                err = player.last_error
                 if player.playing:
+                    # Port vanished from enumeration while still "playing".
+                    active = player.port_name
+                    ports_now = refresh_output_ports()
+                    if active and ports_now is not None and active not in ports_now:
+                        player.stop(wait=False)
+                        st.session_state["live_was_playing"] = False
+                        st.session_state["live_message"] = (
+                            "MIDI port lost — Refresh ports."
+                        )
+                        st.rerun()
+                        return
                     st.session_state["live_was_playing"] = True
                     phase = player.phase
                     label = "Count-in" if phase == "count_in" else "Playing"
                     loop_tag = " · looping" if player.looping else ""
                     st.caption(f"{label} → **{player.port_name}**{loop_tag}")
                     return
-                # Worker finished (natural end or Stop already joined).
+                # Worker finished (natural end, Stop, or port/send failure).
                 if st.session_state.pop("live_was_playing", False):
-                    msg = st.session_state.get("live_message") or ""
-                    if msg.startswith("Streaming"):
-                        st.session_state["live_message"] = "Finished."
+                    if err:
+                        st.session_state["live_message"] = err
+                    else:
+                        msg = st.session_state.get("live_message") or ""
+                        if msg.startswith("Streaming"):
+                            st.session_state["live_message"] = "Finished."
                     st.rerun()
 
             _playback_status_poll()
@@ -734,9 +787,15 @@ else:
 
         st.markdown(SILENCE_CHECKLIST_HTML, unsafe_allow_html=True)
 
-        if st.session_state.get("live_message"):
-            st.info(st.session_state["live_message"])
-        if player.last_error:
+        live_msg = st.session_state.get("live_message")
+        if live_msg:
+            if "port lost" in live_msg.lower() or (
+                player.last_error and "port lost" in (player.last_error or "").lower()
+            ):
+                st.error(live_msg)
+            else:
+                st.info(live_msg)
+        elif player.last_error:
             st.error(player.last_error)
 
     # --- Secondary: Download first, then Listen preview ---

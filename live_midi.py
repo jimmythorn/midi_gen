@@ -99,13 +99,63 @@ def refresh_output_ports() -> List[str]:
         return []
 
 
-def _all_notes_off(port: mido.ports.BaseOutput, channels: range = range(16)) -> None:
+PORT_LOST_MESSAGE = "MIDI port lost — Refresh ports."
+
+
+def _all_notes_off(port, channels: range = range(16)) -> None:
+    """Panic flush: CC123 (All Notes Off) + pitch-bend reset on every channel."""
     for ch in channels:
         try:
             port.send(mido.Message("control_change", channel=ch, control=123, value=0))
             port.send(mido.Message("pitchwheel", channel=ch, pitch=0))
         except Exception:
             pass
+
+
+def panic_flush(port) -> None:
+    """Hard Stop helper — same as all-notes-off; kept for call-site clarity / tests."""
+    _all_notes_off(port)
+
+
+def panic_flush_named(port_name: Optional[str]) -> None:
+    """
+    Open ``port_name`` briefly and send all-notes-off (CC123).
+
+    Used when Stop must flush hanging notes even if the play worker is stuck,
+    and when Re-Play abandons a prior thread that did not join in time.
+    """
+    if not port_name:
+        return
+    port = None
+    try:
+        port = mido.open_output(port_name)
+        panic_flush(port)
+    except Exception:
+        pass
+    finally:
+        if port is not None:
+            try:
+                port.close()
+            except Exception:
+                pass
+
+
+def _is_port_loss_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    needles = (
+        "port",
+        "device",
+        "rtmidi",
+        "midi",
+        "not connected",
+        "disconnected",
+        "invalid",
+        "closed",
+        "unavailable",
+        "no such",
+        "failed to",
+    )
+    return any(n in text for n in needles)
 
 
 def bar_duration_sec(bpm: float, beats_per_bar: int = 4) -> float:
@@ -263,11 +313,21 @@ class LiveMidiPlayer:
         with self._lock:
             self._stop.set()
             prior = self._thread
+            prior_port = self._port_name
 
         if prior is not None and prior.is_alive():
-            prior.join(timeout=2.0)
+            prior.join(timeout=1.5)
             if prior.is_alive():
-                raise RuntimeError("Previous live MIDI playback did not stop in time.")
+                # Prior hang / still winding down: panic-flush then abandon so
+                # a second Play always restarts cleanly (never stuck Re-Play).
+                panic_flush_named(prior_port or target)
+                with self._lock:
+                    self._playing = False
+                    self._phase = "idle"
+                    self._looping = False
+                    # Drop identity so the abandoned finally does not clobber us.
+                    if self._thread is prior:
+                        self._thread = None
 
         with self._lock:
             self._stop = threading.Event()
@@ -286,7 +346,13 @@ class LiveMidiPlayer:
                 time.sleep(min(0.01, max(0.0, deadline - time.perf_counter())))
             return stop_flag.is_set()
 
-        def _run_count_in(port: mido.ports.BaseOutput) -> bool:
+        def _send(port, msg: mido.Message) -> None:
+            try:
+                port.send(msg)
+            except Exception as exc:
+                raise RuntimeError(PORT_LOST_MESSAGE) from exc
+
+        def _run_count_in(port) -> bool:
             """Return True if stop requested during count-in."""
             if count_in_sec <= 0:
                 return False
@@ -304,22 +370,26 @@ class LiveMidiPlayer:
                         return True
                     try:
                         note = 37 if i % max(1, int(beats_per_bar)) == 0 else 42
-                        port.send(
+                        _send(
+                            port,
                             mido.Message(
                                 "note_on", channel=9, note=note, velocity=70
-                            )
+                            ),
                         )
-                        port.send(
+                        _send(
+                            port,
                             mido.Message(
                                 "note_off", channel=9, note=note, velocity=0
-                            )
+                            ),
                         )
+                    except RuntimeError:
+                        raise
                     except Exception:
                         pass
                 return _wait_until(start + count_in_sec)
             return _wait_until(start + count_in_sec)
 
-        def _run_schedule(port: mido.ports.BaseOutput) -> bool:
+        def _run_schedule(port) -> bool:
             """Play one pass; return True if stop requested."""
             with self._lock:
                 self._phase = "playing"
@@ -333,13 +403,16 @@ class LiveMidiPlayer:
                         return True
                 if stop_flag.is_set():
                     return True
-                port.send(msg)
+                _send(port, msg)
             return stop_flag.is_set()
 
         def _run() -> None:
             port = None
             try:
-                port = mido.open_output(target)
+                try:
+                    port = mido.open_output(target)
+                except Exception as exc:
+                    raise RuntimeError(PORT_LOST_MESSAGE) from exc
                 if _run_count_in(port):
                     return
                 while True:
@@ -351,7 +424,7 @@ class LiveMidiPlayer:
                         return
                     # Flush hanging notes between passes; keep Playing honest.
                     try:
-                        _all_notes_off(port)
+                        panic_flush(port)
                     except Exception:
                         pass
                     # Tiny gap so Logic sees a clean boundary between loops.
@@ -359,18 +432,26 @@ class LiveMidiPlayer:
                         return
             except Exception as exc:
                 with self._lock:
-                    self._error = str(exc)
+                    if isinstance(exc, RuntimeError) and str(exc) == PORT_LOST_MESSAGE:
+                        self._error = PORT_LOST_MESSAGE
+                    elif _is_port_loss_error(exc):
+                        self._error = PORT_LOST_MESSAGE
+                    else:
+                        self._error = str(exc)
             finally:
                 if port is not None:
                     try:
-                        _all_notes_off(port)
+                        panic_flush(port)
                         port.close()
                     except Exception:
                         pass
                 with self._lock:
-                    self._playing = False
-                    self._phase = "idle"
-                    self._looping = False
+                    # Only clear if we are still the active worker (Re-Play may
+                    # have abandoned this thread and started a new one).
+                    if self._thread is thread:
+                        self._playing = False
+                        self._phase = "idle"
+                        self._looping = False
                 if on_finished:
                     try:
                         on_finished()
@@ -384,25 +465,26 @@ class LiveMidiPlayer:
 
     def stop(self, wait: bool = True, timeout: float = 2.0) -> None:
         """
-        Request stop and clear Playing once the worker exits.
+        Hard Stop: request worker exit, panic-flush (CC123), clear Playing.
 
-        Default wait=True so the UI does not linger on Playing and hanging
-        notes are flushed (all-notes-off in the worker finally block).
+        Default wait=True so the UI does not linger on Playing. Always flushes
+        all-notes-off on the active port name so hanging notes die even when
+        the worker is slow or stuck.
         """
         with self._lock:
             self._stop.set()
             self._looping = False
             thread = self._thread
+            port_name = self._port_name
         if wait and thread is not None and thread.is_alive():
             thread.join(timeout=timeout)
+        # Panic flush regardless — worker finally also flushes when it can;
+        # this covers hang / race so Stop never leaves notes stuck.
+        panic_flush_named(port_name)
         with self._lock:
-            if not (self._thread and self._thread.is_alive()):
-                self._playing = False
-                self._phase = "idle"
-            elif wait:
-                # Timed out — still clear Playing so the UI is honest.
-                self._playing = False
-                self._phase = "idle"
+            self._playing = False
+            self._phase = "idle"
+            self._looping = False
 
 
 _SHARED_PLAYER: Optional[LiveMidiPlayer] = None
