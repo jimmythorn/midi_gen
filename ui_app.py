@@ -747,6 +747,7 @@ else:
                         count_in_bars=1.0 if count_in else 0.0,
                         bpm=sketch_bpm,
                         loop=bool(loop_play),
+                        click=False,  # silent count-in; UI never enables click
                     )
                     bits = [f"Streaming to {player.port_name}"]
                     if count_in:
