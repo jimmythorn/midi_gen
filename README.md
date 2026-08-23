@@ -12,12 +12,14 @@ The Streamlit Style Lab is the primary surface. The CLI (`python -m midi_gen`) r
 
 ## What's new
 
-- **Musician / style lab** — catalog pick or free-text vibe (“ambient drone”, “angular jazz”, …).
+- **Musician / style lab** — catalog pick (**who**) or free-text vibe (**feel**); featured cards + vibe chips are entry points, not a closed set.
+- **Flexible matching** — aliases (gymnopédie → Satie, sheets of sound → Coltrane, …) + richer vibe tags across the full catalog.
+- **Recipe preview + match line** before Generate; **Try instead** related styles after.
 - **Play into Logic (IAC)** — primary post-generate action; record in Logic to capture a region.
 - **Bend-aware Listen preview** — sine WAV honors pitch-bend so tape wow/flutter is audible.
 - **Mode color** — characteristic tones (#4 Lydian, nat6/9 Dorian, b7 Mixolydian, …) on weak beats so modes aren’t triad wallpaper.
 - **Effects presets** — Clean / Human feel / Subtle tape / Worn tape / Tape + human.
-- **Cursor SDK hook** — optional; Advanced toggle in the UI.
+- **Cursor SDK hook** — optional; Advanced toggle in the UI (enrich-this-vibe).
 
 ## Quick start
 
