@@ -665,8 +665,7 @@ bpm_override = 0
 
 # Geek chrome (match type, SDK, soft-click, bars slider) — Advanced only
 with st.expander("Advanced", expanded=False):
-    if has_sketch:
-        st.caption(recipe.match_line)
+    st.caption(recipe.match_line)
     st.slider(
         "Bars",
         2,
