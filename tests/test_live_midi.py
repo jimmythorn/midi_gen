@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import sys
 import types
+import threading
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import mido
 import pytest
@@ -18,16 +20,36 @@ if "midi_gen" not in sys.modules:
     sys.modules["midi_gen"] = _pkg
 
 from midi_gen.live_midi import (
+    PORT_LOST_MESSAGE,
     LiveMidiPlayer,
+    _all_notes_off,
     _midi_file_to_schedule,
     bar_duration_sec,
     has_iac_port,
     midi_file_bpm,
+    panic_flush,
     port_looks_like_iac,
     preferred_iac_port,
     refresh_output_ports,
     rtmidi_available,
 )
+
+
+class FakeMidiPort:
+    """Minimal MIDI output stand-in for panic / CC123 assertions."""
+
+    def __init__(self, *, fail_send: bool = False) -> None:
+        self.sent: list[mido.Message] = []
+        self.closed = False
+        self.fail_send = fail_send
+
+    def send(self, msg: mido.Message) -> None:
+        if self.fail_send:
+            raise OSError("device disconnected")
+        self.sent.append(msg)
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def _write_tiny_midi(path: Path) -> None:
@@ -97,6 +119,155 @@ def test_play_file_missing_raises(tmp_path):
     player = LiveMidiPlayer()
     with pytest.raises(FileNotFoundError):
         player.play_file(str(tmp_path / "nope.mid"), port_name="missing")
+
+
+def test_all_notes_off_sends_cc123_on_fake_port():
+    """Hard Stop flush: CC123 (All Notes Off) on all 16 channels + pitch reset."""
+    port = FakeMidiPort()
+    panic_flush(port)
+    cc123 = [
+        m
+        for m in port.sent
+        if m.type == "control_change" and m.control == 123
+    ]
+    bends = [m for m in port.sent if m.type == "pitchwheel"]
+    assert len(cc123) == 16, "panic flush must send CC123 on every channel"
+    assert all(m.control == 123 for m in cc123)
+    assert all(m.value == 0 for m in cc123)
+    assert {m.channel for m in cc123} == set(range(16))
+    assert len(bends) == 16
+    assert all(m.pitch == 0 for m in bends)
+    # No other CC besides 123 in a pure panic flush.
+    other_cc = [
+        m for m in port.sent if m.type == "control_change" and m.control != 123
+    ]
+    assert other_cc == []
+
+
+def test_all_notes_off_alias_matches_panic():
+    port_a, port_b = FakeMidiPort(), FakeMidiPort()
+    _all_notes_off(port_a)
+    panic_flush(port_b)
+    assert [
+        (m.type, getattr(m, "control", None), getattr(m, "channel", None))
+        for m in port_a.sent
+    ] == [
+        (m.type, getattr(m, "control", None), getattr(m, "channel", None))
+        for m in port_b.sent
+    ]
+
+
+def test_stop_panic_flush_sends_cc123_on_fake_port(tmp_path):
+    """Stop() must deliver CC123 all-notes-off via named-port panic flush."""
+    fake = FakeMidiPort()
+    opened: list[str] = []
+
+    def _open(name: str):
+        opened.append(name)
+        return fake
+
+    player = LiveMidiPlayer()
+    path = tmp_path / "tiny.mid"
+    _write_tiny_midi(path)
+
+    with patch("midi_gen.live_midi.list_output_ports", return_value=["Fake Bus"]), patch(
+        "midi_gen.live_midi.rtmidi_available", return_value=True
+    ), patch("midi_gen.live_midi.mido.open_output", side_effect=_open):
+        player.play_file(str(path), "Fake Bus", count_in_bars=0, loop=False)
+        deadline = time.time() + 1.0
+        while not player.playing and time.time() < deadline:
+            time.sleep(0.01)
+        player.stop(wait=True)
+
+    assert not player.playing
+    assert player.phase == "idle"
+    assert "Fake Bus" in opened
+    # Worker finally and/or Stop's panic_flush_named both send CC123 — at least one full set.
+    cc123 = [m for m in fake.sent if m.type == "control_change" and m.control == 123]
+    assert len(cc123) >= 16
+    assert all(m.control == 123 and m.value == 0 for m in cc123)
+    assert set(range(16)).issubset({m.channel for m in cc123})
+
+
+def test_panic_flush_named_sends_cc123_on_fake_port():
+    """Named-port Hard Stop path: open → CC123×16 → close (isolated unit)."""
+    fake = FakeMidiPort()
+
+    with patch("midi_gen.live_midi.mido.open_output", return_value=fake) as opener:
+        from midi_gen.live_midi import panic_flush_named
+
+        panic_flush_named("Fake Bus")
+        opener.assert_called_once_with("Fake Bus")
+
+    cc123 = [m for m in fake.sent if m.type == "control_change" and m.control == 123]
+    assert len(cc123) == 16
+    assert all(m.value == 0 for m in cc123)
+    assert {m.channel for m in cc123} == set(range(16))
+    assert fake.closed is True
+
+
+def test_send_fail_clears_playing_and_sets_port_lost(tmp_path):
+    """Mid-play send failure must clear Playing and surface port-lost message."""
+    fail_port = FakeMidiPort(fail_send=True)
+
+    player = LiveMidiPlayer()
+    path = tmp_path / "tiny.mid"
+    _write_tiny_midi(path)
+
+    with patch("midi_gen.live_midi.list_output_ports", return_value=["Fake Bus"]), patch(
+        "midi_gen.live_midi.rtmidi_available", return_value=True
+    ), patch("midi_gen.live_midi.mido.open_output", return_value=fail_port), patch(
+        "midi_gen.live_midi.panic_flush_named"
+    ):
+        player.play_file(str(path), "Fake Bus", count_in_bars=0, loop=False)
+        deadline = time.time() + 2.0
+        while player.playing and time.time() < deadline:
+            time.sleep(0.02)
+        # Worker should have exited with the honest error.
+        assert not player.playing
+        assert player.last_error == PORT_LOST_MESSAGE
+        assert player.status().playing is False
+
+
+def test_replay_after_hung_prior_thread(tmp_path):
+    """If a prior play thread will not join, panic-flush and restart cleanly."""
+    path = tmp_path / "tiny.mid"
+    _write_tiny_midi(path)
+    player = LiveMidiPlayer()
+    fake = FakeMidiPort()
+    panic_calls: list[str] = []
+
+    # Simulate a stuck prior worker that ignores the stop flag.
+    stuck = threading.Event()
+
+    def _hang_forever() -> None:
+        stuck.wait(timeout=30)
+
+    hung = threading.Thread(target=_hang_forever, name="hung-prior", daemon=True)
+    with player._lock:
+        player._thread = hung
+        player._playing = True
+        player._phase = "playing"
+        player._port_name = "Fake Bus"
+        player._stop = threading.Event()
+    hung.start()
+
+    with patch("midi_gen.live_midi.list_output_ports", return_value=["Fake Bus"]), patch(
+        "midi_gen.live_midi.rtmidi_available", return_value=True
+    ), patch("midi_gen.live_midi.mido.open_output", return_value=fake), patch(
+        "midi_gen.live_midi.panic_flush_named",
+        side_effect=lambda name: panic_calls.append(name or ""),
+    ):
+        # join timeout is 1.5s inside play_file — keep test honest but bounded.
+        player.play_file(str(path), "Fake Bus", count_in_bars=0, loop=False)
+
+    assert "Fake Bus" in panic_calls
+    # New play should be allowed (playing or finished without raise).
+    deadline = time.time() + 2.0
+    while player.playing and time.time() < deadline:
+        time.sleep(0.02)
+    assert player.phase == "idle"
+    stuck.set()
 
 
 def test_stop_clears_playing_flag(tmp_path):
@@ -176,3 +347,33 @@ def test_play_and_stop_with_virtual_port(tmp_path):
     time.sleep(0.05)
     player.stop(wait=True)
     assert not player.playing
+
+
+def test_ui_count_in_default_is_false():
+    """Instant audition: live_count_in session default must be False (opt-in)."""
+    src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
+    assert 'st.session_state["live_count_in"] = False' in src
+    assert 'st.session_state["live_count_in"] = True' not in src
+
+
+def test_ui_crisp_audit_extras_a_through_e():
+    """Source-level guards for transport freeze, Generate stop, count-in honesty."""
+    src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
+    # A — freeze transport chrome while playing
+    assert "disabled=_transport_busy" in src
+    assert '_transport_busy = bool(player.playing)' in src
+    # B — Refresh must not clobber Streaming mid-play
+    assert "if _force_refresh and _transport_busy" in src
+    assert "if player.playing:" in src  # refresh click guard
+    # C — Stop before Generate writes new MIDI
+    assert "player.stop(wait=True)" in src
+    assert src.index("player.stop(wait=True)") < src.index("generate_midi_for_style(")
+    # D — count-in honesty microcopy
+    assert "not synced to Logic" in src
+    assert "sketch BPM" in src
+    # E — last_error → live_message; keep Stop when was_playing / failed Play
+    assert 'st.session_state["live_message"] = err' in src
+    assert 'st.session_state["live_was_playing"] = bool(player.playing)' in src
+    # Natural end always sets Finished (no Streaming-prefix requirement).
+    assert 'st.session_state["live_message"] = "Finished."' in src
+    assert 'msg.startswith("Streaming")' not in src
