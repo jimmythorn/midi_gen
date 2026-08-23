@@ -20,7 +20,9 @@ if "midi_gen" not in sys.modules:
 from midi_gen.live_midi import (
     LiveMidiPlayer,
     _midi_file_to_schedule,
+    bar_duration_sec,
     has_iac_port,
+    midi_file_bpm,
     port_looks_like_iac,
     preferred_iac_port,
     refresh_output_ports,
@@ -62,6 +64,15 @@ def test_refresh_output_ports_returns_list():
     assert isinstance(status_ports, list)
 
 
+def test_bar_duration_and_midi_bpm(tmp_path):
+    assert abs(bar_duration_sec(120, 4) - 2.0) < 1e-9
+    assert abs(bar_duration_sec(60, 4) - 4.0) < 1e-9
+    assert bar_duration_sec(0, 4) > 0  # guarded floor
+    path = tmp_path / "tiny.mid"
+    _write_tiny_midi(path)
+    assert abs(midi_file_bpm(str(path)) - 120.0) < 0.5
+
+
 def test_midi_file_schedule_orders_events(tmp_path):
     path = tmp_path / "tiny.mid"
     _write_tiny_midi(path)
@@ -79,6 +90,7 @@ def test_player_status_reports_backend():
     assert status.backend == ("mido+rtmidi" if rtmidi_available() else None)
     assert isinstance(status.ports, list)
     assert status.playing is False
+    assert player.phase == "idle"
 
 
 def test_play_file_missing_raises(tmp_path):
@@ -102,6 +114,48 @@ def test_stop_clears_playing_flag(tmp_path):
     player.stop(wait=True)
     assert not player.playing
     assert player.status().playing is False
+    assert player.phase == "idle"
+
+
+def test_count_in_phase_then_stop(tmp_path):
+    """Count-in starts in count_in phase; Stop clears honestly."""
+    player = LiveMidiPlayer()
+    status = player.status()
+    if not status.available:
+        pytest.skip(status.error or "no MIDI ports")
+
+    path = tmp_path / "tiny.mid"
+    _write_tiny_midi(path)
+    port = preferred_iac_port(status.ports) or status.ports[0]
+    # Long count-in so we can observe the phase before notes.
+    player.play_file(str(path), port, count_in_bars=8, bpm=60, loop=False)
+    time.sleep(0.05)
+    assert player.playing
+    assert player.phase == "count_in"
+    player.stop(wait=True)
+    assert not player.playing
+    assert player.phase == "idle"
+    assert player.status().playing is False
+
+
+def test_loop_until_stop(tmp_path):
+    """Loop keeps Playing until Stop; natural end does not apply."""
+    player = LiveMidiPlayer()
+    status = player.status()
+    if not status.available:
+        pytest.skip(status.error or "no MIDI ports")
+
+    path = tmp_path / "tiny.mid"
+    _write_tiny_midi(path)
+    port = preferred_iac_port(status.ports) or status.ports[0]
+    player.play_file(str(path), port, count_in_bars=0, loop=True)
+    time.sleep(0.15)
+    assert player.playing
+    assert player.looping
+    player.stop(wait=True)
+    assert not player.playing
+    assert not player.looping
+    assert player.phase == "idle"
 
 
 def test_play_and_stop_with_virtual_port(tmp_path):

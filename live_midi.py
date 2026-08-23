@@ -2,7 +2,8 @@
 Live MIDI output for auditioning into a DAW (Logic Pro via macOS IAC).
 
 Streams note/CC/pitch-bend from a .mid file over a system MIDI output port
-using wall-clock scheduling. Enable IAC in Audio MIDI Setup, point a Logic
+using wall-clock scheduling. Optional app-side count-in and loop (no DAW MIDI
+clock / Logic scripting). Enable IAC in Audio MIDI Setup, point a Logic
 instrument's MIDI In at that bus, then Play.
 """
 
@@ -107,10 +108,31 @@ def _all_notes_off(port: mido.ports.BaseOutput, channels: range = range(16)) -> 
             pass
 
 
+def bar_duration_sec(bpm: float, beats_per_bar: int = 4) -> float:
+    """Wall-clock seconds for one bar at the given tempo."""
+    safe_bpm = max(1.0, float(bpm or 120.0))
+    safe_beats = max(1, int(beats_per_bar or 4))
+    return (60.0 / safe_bpm) * safe_beats
+
+
+def midi_file_bpm(path: str, default: float = 120.0) -> float:
+    """Best-effort BPM from the file's last set_tempo (else default)."""
+    try:
+        mid = mido.MidiFile(path)
+        tempo = 500000
+        for msg in mido.merge_tracks(mid.tracks):
+            if msg.type == "set_tempo":
+                tempo = msg.tempo
+        return float(mido.tempo2bpm(tempo))
+    except Exception:
+        return float(default)
+
+
 class LiveMidiPlayer:
     """
     Background wall-clock player for one MIDI file → one output port.
 
+    App-side count-in and loop only — no DAW MIDI clock / Logic scripting.
     Safe to call stop() from the UI thread. Only one clip plays at a time.
     """
 
@@ -121,6 +143,8 @@ class LiveMidiPlayer:
         self._port_name: Optional[str] = None
         self._error: Optional[str] = None
         self._playing = False
+        self._phase: str = "idle"  # idle | count_in | playing
+        self._looping = False
 
     @property
     def playing(self) -> bool:
@@ -137,6 +161,24 @@ class LiveMidiPlayer:
         with self._lock:
             return self._error
 
+    @property
+    def phase(self) -> str:
+        """idle | count_in | playing — honest UI caption source."""
+        with self._lock:
+            if not (self._playing and self._thread is not None and self._thread.is_alive()):
+                return "idle"
+            return self._phase
+
+    @property
+    def looping(self) -> bool:
+        with self._lock:
+            alive = (
+                self._playing
+                and self._thread is not None
+                and self._thread.is_alive()
+            )
+            return bool(self._looping and alive)
+
     def status(self, *, refresh: bool = False) -> LiveMidiStatus:
         ports = refresh_output_ports() if refresh else list_output_ports()
         with self._lock:
@@ -146,6 +188,8 @@ class LiveMidiPlayer:
             # Honest flag: if the worker already exited, never report Playing.
             if self._playing and (thread is None or not thread.is_alive()):
                 self._playing = False
+                self._phase = "idle"
+                self._looping = False
                 playing = False
             port_name = self._port_name
         if not rtmidi_available():
@@ -169,9 +213,22 @@ class LiveMidiPlayer:
         path: str,
         port_name: Optional[str] = None,
         *,
+        count_in_bars: float = 0.0,
+        bpm: Optional[float] = None,
+        beats_per_bar: int = 4,
+        loop: bool = False,
+        click: bool = False,
         on_finished: Optional[Callable[[], None]] = None,
     ) -> None:
-        """Start (or restart) playback of a MIDI file on the given port."""
+        """
+        Start (or restart) playback of a MIDI file on the given port.
+
+        count_in_bars: silent (default) or click bars before notes — app-side
+        only, so Logic Record can already be rolling before the sketch starts.
+        loop: repeat the sketch until Stop (all-notes-off between passes).
+        click: when True, emit a soft metronome note each beat of the count-in
+        (same port — will be captured if Logic is recording; off by default).
+        """
         midi_path = Path(path)
         if not midi_path.is_file():
             raise FileNotFoundError(path)
@@ -197,6 +254,12 @@ class LiveMidiPlayer:
         if not schedule:
             raise RuntimeError("MIDI file has no playable messages.")
 
+        play_bpm = float(bpm) if bpm and bpm > 0 else midi_file_bpm(str(midi_path))
+        count_bars = max(0.0, float(count_in_bars or 0.0))
+        count_in_sec = bar_duration_sec(play_bpm, beats_per_bar) * count_bars
+        beat_sec = 60.0 / max(1.0, play_bpm)
+        click_beats = int(round(count_bars * max(1, int(beats_per_bar or 4))))
+
         with self._lock:
             self._stop.set()
             prior = self._thread
@@ -211,26 +274,89 @@ class LiveMidiPlayer:
             self._error = None
             self._port_name = target
             self._playing = True
+            self._phase = "count_in" if count_in_sec > 0 else "playing"
+            self._looping = bool(loop)
             stop_flag = self._stop
+
+        def _wait_until(deadline: float) -> bool:
+            """Sleep until deadline; return True if stop requested."""
+            while time.perf_counter() < deadline:
+                if stop_flag.is_set():
+                    return True
+                time.sleep(min(0.01, max(0.0, deadline - time.perf_counter())))
+            return stop_flag.is_set()
+
+        def _run_count_in(port: mido.ports.BaseOutput) -> bool:
+            """Return True if stop requested during count-in."""
+            if count_in_sec <= 0:
+                return False
+            with self._lock:
+                self._phase = "count_in"
+            start = time.perf_counter()
+            if click and click_beats > 0:
+                # Soft rim-ish click on ch 9 (GM drums) when possible — still
+                # same IAC bus; prefer silent count-in for clean region capture.
+                for i in range(click_beats):
+                    if stop_flag.is_set():
+                        return True
+                    beat_at = start + i * beat_sec
+                    if _wait_until(beat_at):
+                        return True
+                    try:
+                        note = 37 if i % max(1, int(beats_per_bar)) == 0 else 42
+                        port.send(
+                            mido.Message(
+                                "note_on", channel=9, note=note, velocity=70
+                            )
+                        )
+                        port.send(
+                            mido.Message(
+                                "note_off", channel=9, note=note, velocity=0
+                            )
+                        )
+                    except Exception:
+                        pass
+                return _wait_until(start + count_in_sec)
+            return _wait_until(start + count_in_sec)
+
+        def _run_schedule(port: mido.ports.BaseOutput) -> bool:
+            """Play one pass; return True if stop requested."""
+            with self._lock:
+                self._phase = "playing"
+            start = time.perf_counter()
+            for abs_sec, msg in schedule:
+                if stop_flag.is_set():
+                    return True
+                delay = abs_sec - (time.perf_counter() - start)
+                if delay > 0:
+                    if _wait_until(time.perf_counter() + delay):
+                        return True
+                if stop_flag.is_set():
+                    return True
+                port.send(msg)
+            return stop_flag.is_set()
 
         def _run() -> None:
             port = None
             try:
                 port = mido.open_output(target)
-                start = time.perf_counter()
-                for abs_sec, msg in schedule:
-                    if stop_flag.is_set():
-                        break
-                    delay = abs_sec - (time.perf_counter() - start)
-                    if delay > 0:
-                        end_wait = time.perf_counter() + delay
-                        while time.perf_counter() < end_wait:
-                            if stop_flag.is_set():
-                                break
-                            time.sleep(min(0.01, max(0.0, end_wait - time.perf_counter())))
-                    if stop_flag.is_set():
-                        break
-                    port.send(msg)
+                if _run_count_in(port):
+                    return
+                while True:
+                    if _run_schedule(port):
+                        return
+                    with self._lock:
+                        should_loop = self._looping
+                    if not should_loop or stop_flag.is_set():
+                        return
+                    # Flush hanging notes between passes; keep Playing honest.
+                    try:
+                        _all_notes_off(port)
+                    except Exception:
+                        pass
+                    # Tiny gap so Logic sees a clean boundary between loops.
+                    if _wait_until(time.perf_counter() + 0.05):
+                        return
             except Exception as exc:
                 with self._lock:
                     self._error = str(exc)
@@ -243,6 +369,8 @@ class LiveMidiPlayer:
                         pass
                 with self._lock:
                     self._playing = False
+                    self._phase = "idle"
+                    self._looping = False
                 if on_finished:
                     try:
                         on_finished()
@@ -263,15 +391,18 @@ class LiveMidiPlayer:
         """
         with self._lock:
             self._stop.set()
+            self._looping = False
             thread = self._thread
         if wait and thread is not None and thread.is_alive():
             thread.join(timeout=timeout)
         with self._lock:
             if not (self._thread and self._thread.is_alive()):
                 self._playing = False
+                self._phase = "idle"
             elif wait:
                 # Timed out — still clear Playing so the UI is honest.
                 self._playing = False
+                self._phase = "idle"
 
 
 _SHARED_PLAYER: Optional[LiveMidiPlayer] = None
