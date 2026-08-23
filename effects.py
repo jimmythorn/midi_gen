@@ -28,12 +28,28 @@ class EffectRegistry:
         effect_name = effect_conf.get('name', '')
         
         if effect_name == 'tape_wobble':
+            wow_depth = float(effect_conf.get('wow_depth', DEFAULT_BEND_UP_CENTS))
+            flutter_depth = float(effect_conf.get('flutter_depth', DEFAULT_FLUTTER_DEPTH))
+            flutter_rate = float(effect_conf.get('flutter_rate_hz', DEFAULT_FLUTTER_RATE_HZ))
+            wow_rate = float(effect_conf.get('wow_rate_hz', DEFAULT_WOW_RATE_HZ))
+            # Sample fast enough to represent flutter (≈4× Nyquist, clamped)
+            update_rate = float(
+                effect_conf.get(
+                    'pitch_bend_update_rate',
+                    max(DEFAULT_PITCH_BEND_UPDATE_RATE, flutter_rate * 4.0),
+                )
+            )
             config = TapeWobbleConfiguration(
-                bend_up_cents=effect_conf.get('wow_depth', DEFAULT_BEND_UP_CENTS),
-                bend_down_cents=effect_conf.get('wow_depth', DEFAULT_BEND_DOWN_CENTS),
+                # Note-sync contour shares wow depth; LFOs carry the labeled rates/depths
+                bend_up_cents=wow_depth * 0.5,
+                bend_down_cents=wow_depth * 0.5,
                 randomness=effect_conf.get('randomness', DEFAULT_RANDOMNESS),
                 depth_units=effect_conf.get('depth_units', 'cents'),
-                pitch_bend_update_rate=effect_conf.get('flutter_rate_hz', DEFAULT_PITCH_BEND_UPDATE_RATE)
+                pitch_bend_update_rate=update_rate,
+                wow_rate_hz=wow_rate,
+                wow_depth_cents=wow_depth,
+                flutter_rate_hz=flutter_rate,
+                flutter_depth_cents=flutter_depth,
             )
             return TapeWobbleEffect(config)
             
@@ -97,6 +113,11 @@ class TapeWobbleConfiguration(EffectConfiguration):
     randomness: float = DEFAULT_RANDOMNESS
     depth_units: str = 'cents'
     pitch_bend_update_rate: float = DEFAULT_PITCH_BEND_UPDATE_RATE
+    # Classic tape LFOs (applied on top of note-synchronized contour)
+    wow_rate_hz: float = DEFAULT_WOW_RATE_HZ
+    wow_depth_cents: float = DEFAULT_WOW_DEPTH
+    flutter_rate_hz: float = DEFAULT_FLUTTER_RATE_HZ
+    flutter_depth_cents: float = DEFAULT_FLUTTER_DEPTH
 
     def __post_init__(self):
         """Validate configuration parameters and set effect type."""
@@ -114,6 +135,10 @@ class TapeWobbleConfiguration(EffectConfiguration):
             raise ValueError("depth_units must be 'cents' or 'semitones'")
         if self.pitch_bend_update_rate <= 0:
             raise ValueError("pitch_bend_update_rate must be positive")
+        if self.wow_rate_hz < 0 or self.flutter_rate_hz < 0:
+            raise ValueError("wow/flutter rates must be non-negative")
+        if self.wow_depth_cents < 0 or self.flutter_depth_cents < 0:
+            raise ValueError("wow/flutter depths must be non-negative")
 
 # Legacy type for backward compatibility
 MidiEvent = tuple[int, int, int, int]  # (note, start_tick, duration_tick, velocity)
@@ -291,7 +316,8 @@ class TapeWobbleEffect(MidiEffect):
             total_duration_seconds, 
             bpm, 
             ticks_per_beat,
-            note_events
+            note_events,
+            debug=debug,
         )
         
         # Convert to MIDI instructions
@@ -328,12 +354,13 @@ class TapeWobbleEffect(MidiEffect):
                               duration_sec: float, 
                               bpm: float, 
                               ticks_per_beat: int,
-                              note_events: List[Tuple[int, int]]) -> List[Tuple[float, int]]:
+                              note_events: List[Tuple[int, int]],
+                              debug: bool = False) -> List[Tuple[float, int]]:
         """
-        Generate note-synchronized wobble data points.
-        Each note alternates direction - if one note goes up, the next goes down.
+        Generate note-synchronized wobble plus classic wow/flutter LFOs.
         Returns list of (time_sec, bend_value) tuples.
         """
+        _print = print if debug else (lambda *a, **k: None)
         _print("\nGenerating alternating note-synchronized wobble data...")
         
         # Calculate musical time parameters
@@ -375,10 +402,20 @@ class TapeWobbleEffect(MidiEffect):
         max_up_cents = self.config.bend_up_cents * rand_factor
         rand_factor = 1.0 + (random.random() - 0.5) * self.config.randomness
         max_down_cents = self.config.bend_down_cents * rand_factor
+        wow_phase = random.random() * 2 * math.pi * self.config.randomness
+        flutter_phase = random.random() * 2 * math.pi * self.config.randomness
         
         _print(f"Maximum bend values (with randomness):")
         _print(f"  Up: {max_up_cents:.1f} cents")
         _print(f"  Down: {max_down_cents:.1f} cents")
+        _print(
+            f"  Wow LFO: {self.config.wow_rate_hz:.2f} Hz / "
+            f"{self.config.wow_depth_cents:.1f} cents"
+        )
+        _print(
+            f"  Flutter LFO: {self.config.flutter_rate_hz:.2f} Hz / "
+            f"{self.config.flutter_depth_cents:.1f} cents"
+        )
         
         for i in range(num_samples):
             t = i / sample_rate_hz
@@ -394,7 +431,7 @@ class TapeWobbleEffect(MidiEffect):
             # Calculate position within note
             note_start_time = note_times[current_note_idx][0]
             note_end_time = note_times[current_note_idx + 1][0] if current_note_idx + 1 < len(note_times) else duration_sec
-            note_duration = note_end_time - note_start_time
+            note_duration = max(note_end_time - note_start_time, 1e-6)
             position_in_note = (t - note_start_time) / note_duration
             
             # Determine direction for this note (alternates each note)
@@ -403,11 +440,19 @@ class TapeWobbleEffect(MidiEffect):
             # Calculate smooth curve using sine interpolation
             curve_position = (1 - math.cos(position_in_note * math.pi)) / 2
             
-            # Calculate bend amount in cents based on direction
+            # Note-sync contour
             if note_goes_up:
                 bend_cents = curve_position * max_up_cents
             else:
                 bend_cents = -curve_position * max_down_cents
+
+            # Classic tape LFOs from preset wow/flutter knobs
+            bend_cents += self.config.wow_depth_cents * math.sin(
+                2 * math.pi * self.config.wow_rate_hz * t + wow_phase
+            )
+            bend_cents += self.config.flutter_depth_cents * math.sin(
+                2 * math.pi * self.config.flutter_rate_hz * t + flutter_phase
+            )
             
             # Convert to pitch bend value
             if self.config.depth_units == 'cents':

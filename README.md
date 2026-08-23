@@ -14,17 +14,16 @@ Honest baseline: output is musically usable as a starting sketch, not a finished
 ## Quick start
 
 ```bash
-pip install -r requirements.txt
+pip install -e .
 ./run_ui.sh
 ```
 
-Open **http://127.0.0.1:8501** — generate MIDI from a musician/style query, inspect test output, download the file.
+Open **http://127.0.0.1:8501** — generate from a musician/style query, **listen to the WAV preview**, inspect notes, download MIDI/WAV.
 
 CLI (optional):
 
 ```bash
-mkdir -p /tmp/py && ln -sfn "$(pwd)" /tmp/py/midi_gen
-PYTHONPATH=/tmp/py python3 -m midi_gen
+python3 -m midi_gen
 ```
 
 Optional Cursor SDK enrichment: `export CURSOR_API_KEY=crsr_...` before `./run_ui.sh`.

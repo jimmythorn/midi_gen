@@ -96,6 +96,42 @@ def test_generate_midi_for_style(tmp_path, monkeypatch):
     assert summary["unique_pitches"] >= 1
 
 
+def test_effect_registry_maps_wow_flutter_knobs():
+    from midi_gen.effects import EffectRegistry, TapeWobbleEffect
+    effect = EffectRegistry.create_effect(
+        {
+            "name": "tape_wobble",
+            "wow_rate_hz": 0.4,
+            "wow_depth": 18,
+            "flutter_rate_hz": 9.0,
+            "flutter_depth": 4,
+            "randomness": 0.3,
+            "depth_units": "cents",
+        }
+    )
+    assert isinstance(effect, TapeWobbleEffect)
+    assert effect.config.wow_rate_hz == 0.4
+    assert effect.config.wow_depth_cents == 18
+    assert effect.config.flutter_rate_hz == 9.0
+    assert effect.config.flutter_depth_cents == 4
+    assert effect.config.pitch_bend_update_rate >= 30.0
+
+
+def test_wav_preview_renders(tmp_path):
+    from midi_gen.audio_preview import describe_preview, render_midi_to_wav_bytes
+    from midi_gen.cursor_style_lookup import generate_midi_for_style
+
+    path, _result, _options = generate_midi_for_style(
+        "Bach sequence",
+        use_cursor_sdk=False,
+        overrides={"bars": 2, "effects_preset": "clean", "debug": False},
+    )
+    wav = render_midi_to_wav_bytes(path)
+    assert wav[:4] == b"RIFF"
+    assert len(wav) > 1000
+    assert "notes" in describe_preview(path)
+
+
 def test_profile_from_sdk_shaped_dict():
     profile = profile_from_dict(
         {
