@@ -128,7 +128,9 @@ def tape_wobble(options: dict) -> List[tuple[float, int]]:
         - time_sec: The time in seconds when this bend value should be applied
         - bend_value: The MIDI pitch bend value (-8192 to 8191)
     """
-    print("\n=== Tape Wobble Generation Debug ===")
+    debug = options.get('debug', False)
+    if debug:
+        print("\n=== Tape Wobble Generation Debug ===")
     duration = options.get('duration_sec', 5.0)
     wow_rate = options.get('wow_rate_hz', DEFAULT_WOW_RATE_HZ)
     wow_depth = options.get('wow_depth', DEFAULT_WOW_DEPTH)
@@ -137,12 +139,13 @@ def tape_wobble(options: dict) -> List[tuple[float, int]]:
     randomness = options.get('randomness', DEFAULT_RANDOMNESS)
     depth_units = options.get('depth_units', 'cents')
     
-    print(f"Parameters:")
-    print(f"  Duration: {duration:.2f} sec")
-    print(f"  Wow Rate: {wow_rate:.2f} Hz, Depth: {wow_depth:.2f}")
-    print(f"  Flutter Rate: {flutter_rate:.2f} Hz, Depth: {flutter_depth:.2f}")
-    print(f"  Randomness: {randomness:.2f}")
-    print(f"  Depth Units: {depth_units}")
+    if debug:
+        print(f"Parameters:")
+        print(f"  Duration: {duration:.2f} sec")
+        print(f"  Wow Rate: {wow_rate:.2f} Hz, Depth: {wow_depth:.2f}")
+        print(f"  Flutter Rate: {flutter_rate:.2f} Hz, Depth: {flutter_depth:.2f}")
+        print(f"  Randomness: {randomness:.2f}")
+        print(f"  Depth Units: {depth_units}")
     
     # Calculate optimal sample rate
     nyquist_factor = 4.0
@@ -152,10 +155,12 @@ def tape_wobble(options: dict) -> List[tuple[float, int]]:
         DEFAULT_PITCH_BEND_UPDATE_RATE
     )
     sample_rate_hz = min(50, max(10, int(min_sample_rate)))
-    print(f"Calculated sample rate: {sample_rate_hz} Hz")
+    if debug:
+        print(f"Calculated sample rate: {sample_rate_hz} Hz")
     
     if duration <= 0:
-        print("Duration <= 0, returning empty list")
+        if debug:
+            print("Duration <= 0, returning empty list")
         return []
 
     num_samples = int(duration * sample_rate_hz)
@@ -168,13 +173,14 @@ def tape_wobble(options: dict) -> List[tuple[float, int]]:
     wow_phase = random.random() * 2 * math.pi * clamped_randomness
     flutter_phase = random.random() * 2 * math.pi * clamped_randomness
     
-    print(f"\nInitial phases:")
-    print(f"  Wow Phase: {wow_phase:.2f} rad")
-    print(f"  Flutter Phase: {flutter_phase:.2f} rad")
-    
+    if debug:
+        print(f"\nInitial phases:")
+        print(f"  Wow Phase: {wow_phase:.2f} rad")
+        print(f"  Flutter Phase: {flutter_phase:.2f} rad")
+        print("\nStarting wobble generation...")
+
     # Always emit initial center value
     wobble_data.append((0.0, 0))
-    print("\nStarting wobble generation...")
 
     # Debug counters
     total_values = 0
@@ -209,15 +215,17 @@ def tape_wobble(options: dict) -> List[tuple[float, int]]:
             last_emission_time = t
             emitted_values += 1
             
-            if emitted_values <= 5 or emitted_values % 50 == 0:  # Print first 5 and every 50th after
+            if debug and (emitted_values <= 5 or emitted_values % 50 == 0):
                 print(f"t={t:.3f}s: wow={wow:.2f}, flutter={flutter:.2f}, total={total_mod:.2f}, "
                       f"semitones={semitones:.3f}, bend={bend_value}")
 
-    print(f"\nWobble generation complete:")
-    print(f"Total values calculated: {total_values}")
-    print(f"Values emitted: {emitted_values}")
-    print(f"Compression ratio: {total_values/emitted_values:.1f}:1")
-    print("=====================================\n")
+    if debug:
+        ratio = (total_values / emitted_values) if emitted_values else 0
+        print(f"\nWobble generation complete:")
+        print(f"Total values calculated: {total_values}")
+        print(f"Values emitted: {emitted_values}")
+        print(f"Compression ratio: {ratio:.1f}:1")
+        print("=====================================\n")
     return wobble_data
 
 
@@ -246,8 +254,8 @@ class TapeWobbleEffect(MidiEffect):
                              events: List[Union[MidiInstruction, Tuple]], 
                              options: Dict) -> List[MidiInstruction]:
         """Process the complete sequence, adding pitch bend messages for the wobble effect."""
-        print("\n=== TapeWobbleEffect Processing ===")
-        
+        debug = options.get('debug', False)
+        _print = print if debug else (lambda *a, **k: None)
         # Get sequence parameters
         bpm = options.get('bpm', 120)
         ticks_per_beat = options.get('ticks_per_beat', DEFAULT_TICKS_PER_BEAT)
@@ -274,9 +282,9 @@ class TapeWobbleEffect(MidiEffect):
         note_events.sort(key=lambda x: x[0])
         
         total_duration_seconds = (max_tick / ticks_per_beat) * (60.0 / bpm)
-        print(f"Sequence duration: {total_duration_seconds:.2f} seconds")
-        print(f"BPM: {bpm}, Ticks per beat: {ticks_per_beat}")
-        print(f"Found {len(note_events)} notes")
+        _print(f"Sequence duration: {total_duration_seconds:.2f} seconds")
+        _print(f"BPM: {bpm}, Ticks per beat: {ticks_per_beat}")
+        _print(f"Found {len(note_events)} notes")
         
         # Generate wobble data based on note positions
         wobble_events = self._generate_wobble_events(
@@ -291,7 +299,7 @@ class TapeWobbleEffect(MidiEffect):
         midi_instructions: List[MidiInstruction] = []
         
         # Add RPN messages for pitch bend range
-        print("\nAdding RPN configuration messages...")
+        _print("\nAdding RPN configuration messages...")
         midi_instructions.extend([
             ('control_change', 0, 101, 0, midi_channel),   # RPN MSB
             ('control_change', 0, 100, 0, midi_channel),   # RPN LSB
@@ -307,7 +315,7 @@ class TapeWobbleEffect(MidiEffect):
                 midi_instructions.append(event)
         
         # Add pitch bend events
-        print("\nAdding pitch bend messages...")
+        _print("\nAdding pitch bend messages...")
         for time_sec, bend_value in wobble_events:
             tick = int((time_sec * bpm * ticks_per_beat) / 60.0)
             midi_instructions.append(('pitch_bend', tick, bend_value, midi_channel))
@@ -326,7 +334,7 @@ class TapeWobbleEffect(MidiEffect):
         Each note alternates direction - if one note goes up, the next goes down.
         Returns list of (time_sec, bend_value) tuples.
         """
-        print("\nGenerating alternating note-synchronized wobble data...")
+        _print("\nGenerating alternating note-synchronized wobble data...")
         
         # Calculate musical time parameters
         beats_per_bar = 4  # Assuming 4/4 time
@@ -334,10 +342,10 @@ class TapeWobbleEffect(MidiEffect):
         seconds_per_bar = seconds_per_beat * beats_per_bar
         total_bars = duration_sec / seconds_per_bar
         
-        print(f"Musical timing:")
-        print(f"  BPM: {bpm}")
-        print(f"  Total bars: {total_bars:.2f}")
-        print(f"  Seconds per bar: {seconds_per_bar:.2f}")
+        _print(f"Musical timing:")
+        _print(f"  BPM: {bpm}")
+        _print(f"  Total bars: {total_bars:.2f}")
+        _print(f"  Seconds per bar: {seconds_per_bar:.2f}")
         
         # Calculate note timings in seconds
         note_times = [(tick / ticks_per_beat * seconds_per_beat, note) 
@@ -348,7 +356,7 @@ class TapeWobbleEffect(MidiEffect):
         
         # Randomly determine initial direction
         first_note_up = random.choice([True, False])
-        print(f"\nInitial direction: {'UP' if first_note_up else 'DOWN'}")
+        _print(f"\nInitial direction: {'UP' if first_note_up else 'DOWN'}")
         
         # Calculate optimal sample rate
         sample_rate_hz = self.config.pitch_bend_update_rate
@@ -360,7 +368,7 @@ class TapeWobbleEffect(MidiEffect):
         
         # Add initial center point
         wobble_data.append((0.0, 0))
-        print("\nGenerating pitch bend curve...")
+        _print("\nGenerating pitch bend curve...")
         
         # Apply very slight random variation to max bend values
         rand_factor = 1.0 + (random.random() - 0.5) * self.config.randomness
@@ -368,9 +376,9 @@ class TapeWobbleEffect(MidiEffect):
         rand_factor = 1.0 + (random.random() - 0.5) * self.config.randomness
         max_down_cents = self.config.bend_down_cents * rand_factor
         
-        print(f"Maximum bend values (with randomness):")
-        print(f"  Up: {max_up_cents:.1f} cents")
-        print(f"  Down: {max_down_cents:.1f} cents")
+        _print(f"Maximum bend values (with randomness):")
+        _print(f"  Up: {max_up_cents:.1f} cents")
+        _print(f"  Down: {max_down_cents:.1f} cents")
         
         for i in range(num_samples):
             t = i / sample_rate_hz
@@ -424,9 +432,9 @@ class TapeWobbleEffect(MidiEffect):
                 # Log progress at key points
                 if position_in_note < 0.1 or len(wobble_data) <= 1:
                     direction = "UP" if note_goes_up else "DOWN"
-                    print(f"Note {current_note_idx + 1} ({direction}): {bend_cents:+.1f} cents (bend: {bend_value:+d})")
+                    _print(f"Note {current_note_idx + 1} ({direction}): {bend_cents:+.1f} cents (bend: {bend_value:+d})")
         
-        print(f"\nGenerated {len(wobble_data)} pitch bend points")
+        _print(f"\nGenerated {len(wobble_data)} pitch bend points")
         return wobble_data
 
 
@@ -543,7 +551,8 @@ class HumanizeVelocityEffect(MidiEffect):
         # Debug output for significant changes or pattern events
         if (abs(total_adjustment) > self.config.humanization_range // 3 or
             position_emphasis != 0 or beat_emphasis != 0):
-            print(f"Note velocity adjusted: {base} -> {new_velocity} "
+            if False:  # verbose per-note logging disabled by default
+                print(f"Note velocity adjusted: {base} -> {new_velocity} "
                   f"(total: {total_adjustment:+d}, "
                   f"pos: {position_emphasis:+d}, "
                   f"beat: {beat_emphasis:+d}, "

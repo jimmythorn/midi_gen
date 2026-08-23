@@ -1,4 +1,5 @@
 from .scale import get_scale
+from .notes import pitch_class_at_octave
 import random
 import math
 
@@ -34,50 +35,38 @@ def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4,
 
     arpeggio_source_notes = []
     
-    # Build the source notes across octaves
+    # Build the source notes across octaves (written octave → MIDI)
     for octave in range(min_octave, min_octave + range_octaves + 1):
-        arpeggio_source_notes.extend([note + (octave * 12) for note in pitch_classes])
+        arpeggio_source_notes.extend([pitch_class_at_octave(note, octave) for note in pitch_classes])
     
     # Ensure arpeggio_source_notes is not empty if pitch_classes was valid but octaves didn't yield notes
     if not arpeggio_source_notes:
         # This might happen if min_octave is too high for the root + pitch classes
         # Fallback to just the root note at the min_octave if all else fails
-        arpeggio_source_notes = [root % 12 + min_octave * 12]
-        # Or, perhaps more safely, if the initial range is problematic:
-        # arpeggio_source_notes = [pc + min_octave * 12 for pc in pitch_classes]
+        arpeggio_source_notes = [pitch_class_at_octave(root, min_octave)]
         # For now, ensuring at least one note is available.
         if not arpeggio_source_notes: # Still empty after trying with min_octave
-             arpeggio_source_notes = [(root % 12) + 4 * 12] # Default to C4 if all else fails
+             arpeggio_source_notes = [pitch_class_at_octave(root, 4)] # Default around octave 4
 
     base_pattern = []
 
     if arp_mode == 'up_down':
-        # New 'up_down' logic: constructs a pattern of exactly 'length' notes.
-        # It does not use the subsequent repetition_factor block.
-        if not arpeggio_source_notes: # Safeguard
-             arpeggio_source_notes = [(root % 12) + min_octave * 12]
-
-        half_length = length // 2
-        remaining_length = length - half_length
+        # Build an ascending then descending contour of exactly `length` notes.
+        # Skip the duplicated peak/trough note so the turnaround stays clean.
+        if not arpeggio_source_notes:  # Safeguard
+            arpeggio_source_notes = [pitch_class_at_octave(root, min_octave)]
 
         source_up = list(arpeggio_source_notes)
-        for i in range(half_length):
-            if source_up: # Check if source_up is not empty
-                base_pattern.append(source_up[i % len(source_up)])
-            elif arpeggio_source_notes: # Fallback to original source if source_up became empty (should not happen)
-                base_pattern.append(arpeggio_source_notes[i % len(arpeggio_source_notes)])
-            else: # Absolute fallback
-                base_pattern.append((root % 12) + min_octave * 12)
-        
         source_down = list(reversed(arpeggio_source_notes))
-        for i in range(remaining_length):
-            if source_down: # Check if source_down is not empty
-                base_pattern.append(source_down[i % len(source_down)])
-            elif arpeggio_source_notes: # Fallback
-                base_pattern.append(list(reversed(arpeggio_source_notes))[i % len(list(reversed(arpeggio_source_notes)))])
-            else: # Absolute fallback
-                base_pattern.append((root % 12) + min_octave * 12)
-        # base_pattern is now of 'length' and ready.
+        # Drop first of descent when it would repeat the last ascent note
+        if len(source_down) > 1 and source_up and source_down[0] == source_up[-1]:
+            source_down = source_down[1:]
+
+        cycle = source_up + source_down
+        if not cycle:
+            cycle = list(arpeggio_source_notes)
+        for i in range(length):
+            base_pattern.append(cycle[i % len(cycle)])
     else:
         # Original logic for 'up', 'down', 'random', 'order' that uses an intermediate 'pattern'
         # which is then processed by repetition_factor.
@@ -90,7 +79,7 @@ def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4,
             if arpeggio_source_notes: # Check for empty list
                  intermediate_pattern = [random.choice(arpeggio_source_notes) for _ in range(len(arpeggio_source_notes))] # Create a pattern of same length as source for now
             else:
-                 intermediate_pattern = [(root % 12 + min_octave * 12)]
+                 intermediate_pattern = [pitch_class_at_octave(root, min_octave)]
         elif arp_mode == 'order': 
             intermediate_pattern = list(arpeggio_source_notes) 
             random.shuffle(intermediate_pattern)
@@ -98,7 +87,7 @@ def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4,
             intermediate_pattern = list(arpeggio_source_notes) # Default to 'up' behavior for pattern source
 
         if not intermediate_pattern: # Handle cases where pattern might be empty
-            intermediate_pattern = [(root % 12 + min_octave * 12)] # Fallback to root note if empty
+            intermediate_pattern = [pitch_class_at_octave(root, min_octave)] # Fallback to root note if empty
 
         # Adjust for repetition_factor using the intermediate_pattern
         repetition_factor = max(1, min(10, repetition_factor))
@@ -118,7 +107,7 @@ def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4,
     if len(base_pattern) != length:
         # If too short (e.g. length was 0 or pattern construction failed), fill with root note or truncate.
         # This primarily guards against length=0 or issues if arpeggio_source_notes was initially empty.
-        if not arpeggio_source_notes and length > 0 : arpeggio_source_notes = [(root % 12 + min_octave * 12)]
+        if not arpeggio_source_notes and length > 0 : arpeggio_source_notes = [pitch_class_at_octave(root, min_octave)]
         
         if length == 0: base_pattern = []
         elif len(base_pattern) < length and arpeggio_source_notes:
@@ -164,7 +153,7 @@ def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4,
             # Build full range of notes for this chord
             current_chord_full_range = []
             for octave in range(min_octave, min_octave + range_octaves + 1):
-                current_chord_full_range.extend([pc + (octave * 12) for pc in current_chord_pitch_classes])
+                current_chord_full_range.extend([pitch_class_at_octave(pc, octave) for pc in current_chord_pitch_classes])
             
             if not current_chord_full_range: # Fallback if no notes generated
                 prog_arpeggio.append(note_in_pattern) # Keep original pattern note
@@ -200,24 +189,38 @@ def create_arpeggio(root: int, mode: str, length: int = 16, min_octave: int = 4,
                 embellished_arpeggio.append(None)
         current_arpeggio = embellished_arpeggio
 
-    # Evolution Mechanism (ensure current_arpeggio and arpeggio_source_notes are not empty)
+    # Evolution: prefer neighbor steps over full random jumps so motifs stay coherent.
     if evolution_rate > 0 and current_arpeggio and arpeggio_source_notes:
         evolved_arpeggio = []
-        for i, note in enumerate(current_arpeggio):
+        for note in current_arpeggio:
             if note is not None and random.random() < evolution_rate:
-                if random.random() < 0.5:
+                # 80% neighbor motion, 20% free pick within the source set
+                if random.random() < 0.8:
                     try:
-                        index = arpeggio_source_notes.index(note % 12 + (note // 12) * 12) # Normalize note
+                        # Match by pitch class + nearest octave instance in source
+                        candidates = [n for n in arpeggio_source_notes if n % 12 == note % 12]
+                        anchor = min(candidates, key=lambda n: abs(n - note)) if candidates else note
+                        index = arpeggio_source_notes.index(anchor)
                         new_index = (index + random.choice([-1, 1])) % len(arpeggio_source_notes)
                         evolved_arpeggio.append(arpeggio_source_notes[new_index])
                     except ValueError:
-                        evolved_arpeggio.append(random.choice(arpeggio_source_notes)) # Fallback if note not in source
+                        evolved_arpeggio.append(random.choice(arpeggio_source_notes))
                 else:
                     evolved_arpeggio.append(random.choice(arpeggio_source_notes))
             else:
                 evolved_arpeggio.append(note)
         current_arpeggio = evolved_arpeggio
 
-    # Remove None values and ensure correct length
-    final_arpeggio = [note for note in current_arpeggio if note is not None]
-    return final_arpeggio[:length] if length > 0 else final_arpeggio
+    # Remove None values, clamp to MIDI range, ensure exact length
+    final_arpeggio = [
+        max(0, min(127, int(note)))
+        for note in current_arpeggio
+        if note is not None
+    ]
+    if length > 0:
+        if len(final_arpeggio) < length and arpeggio_source_notes:
+            filler = [arpeggio_source_notes[i % len(arpeggio_source_notes)] for i in range(length)]
+            final_arpeggio = (final_arpeggio + filler)[:length]
+        else:
+            final_arpeggio = final_arpeggio[:length]
+    return final_arpeggio

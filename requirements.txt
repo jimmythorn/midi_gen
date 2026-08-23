@@ -1,5 +1,6 @@
 mido==1.3.3
 packaging==24.2
-peppercorn==0.6
-sampleproject @ git+https://github.com/pypa/sampleproject.git@621e4974ca25ce531773def586ba3ed8e736b3fc
-questionary
+questionary>=2.0.0
+streamlit>=1.32.0
+cursor-sdk>=1.0.0
+pytest>=8.0.0

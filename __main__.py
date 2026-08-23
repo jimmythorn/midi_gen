@@ -6,6 +6,10 @@
 from .arpeggio_generation import create_arp # Updated to use package name
 from typing import Dict, List, Optional
 import questionary # Import questionary
+from .cursor_style_lookup import generate_midi_for_style, lookup_musician_style
+from .effects_presets import explain_effects_config, list_presets
+from .musician_styles import list_musicians
+from .preview import format_summary_text, summarize_midi_file
 
 # Default values from the previous argparse setup
 DEFAULT_ROOT = 0
@@ -73,11 +77,54 @@ if __name__ == "__main__":
     generation_type = questionary.select(
         "Select generation type:",
         choices=[
+            questionary.Choice("Musician / style lookup (catalog + optional Cursor SDK)", value="style"),
             questionary.Choice("Arpeggio", value="arpeggio"),
             questionary.Choice("Drone/Pad", value="drone")
         ],
-        default="arpeggio"
+        default="style"
     ).ask()
+
+    if generation_type == "style":
+        print("\n--- Musician / Style Lookup ---")
+        catalog_names = [m.name for m in list_musicians()]
+        query = questionary.autocomplete(
+            "Musician or style query:",
+            choices=catalog_names,
+            default="Philip Glass"
+        ).ask() or "Philip Glass"
+        use_sdk = questionary.confirm(
+            "Use Cursor SDK if CURSOR_API_KEY is set?",
+            default=True
+        ).ask()
+        preset_choices = [
+            questionary.Choice(f"{p['label']} — {p['summary']}", value=p["id"])
+            for p in list_presets()
+        ]
+        effects_preset = questionary.select(
+            "Effects preset (plain-language):",
+            choices=preset_choices,
+            default="tape_and_human"
+        ).ask()
+        bars = int(questionary.text("Number of bars:", default="8").ask() or 8)
+
+        print("\nResolving style…")
+        path, result, options = generate_midi_for_style(
+            query,
+            use_cursor_sdk=bool(use_sdk),
+            overrides={"effects_preset": effects_preset, "bars": bars, "debug": False},
+        )
+        print(result.message)
+        print(f"Profile: {result.profile.name} [{result.profile.source}]")
+        print(f"Styles: {', '.join(result.profile.styles)}")
+        print(result.profile.description)
+        print("Effects:")
+        for line in explain_effects_config(options.get("effects_config") or []):
+            print(f"  - {line}")
+        summary = summarize_midi_file(path)
+        print("\n--- Test output ---")
+        print(format_summary_text(summary))
+        print(f"\nWrote {path}")
+        raise SystemExit(0)
 
     # --- Common Questions --- 
     use_multiple_root_notes = questionary.confirm(
@@ -206,45 +253,22 @@ if __name__ == "__main__":
                 default=DEFAULT_DRONE_WALKDOWN_STEP_TICKS
             ).ask()
 
-    # --- Effects Configuration (Currently more tied to arpeggios but could be generalized) ---
-    # For now, let's ask for effects regardless, but they are only applied in arpeggio generation.
-    # This can be refined if drones get their own effect processing.
+    # --- Effects Configuration ---
     print("\n--- Effects Configuration ---")
-    effects_config: List[Dict] = []
-
-    enable_tape_wobble = questionary.confirm("Enable Tape Wobble pitch effect?", default=DEFAULT_TAPE_WOBBLE_ENABLED).ask()
-    if enable_tape_wobble:
-        wow_rate = float(questionary.text("Wow Rate (Hz, slow pitch drift, e.g., 0.1-1.0):", default=str(DEFAULT_WOW_RATE_HZ)).ask() or DEFAULT_WOW_RATE_HZ)
-        wow_depth = float(questionary.text("Wow Depth (e.g., 5-50):", default=str(DEFAULT_WOW_DEPTH_CENTS)).ask() or DEFAULT_WOW_DEPTH_CENTS)
-        flutter_rate = float(questionary.text("Flutter Rate (Hz, faster pitch drift, e.g., 3-12):", default=str(DEFAULT_FLUTTER_RATE_HZ)).ask() or DEFAULT_FLUTTER_RATE_HZ)
-        flutter_depth = float(questionary.text("Flutter Depth (e.g., 1-10):", default=str(DEFAULT_FLUTTER_DEPTH_CENTS)).ask() or DEFAULT_FLUTTER_DEPTH_CENTS)
-        wobble_randomness = float(questionary.text("Wobble Randomness (0.0-1.0):", default=str(DEFAULT_WOBBLE_RANDOMNESS)).ask() or DEFAULT_WOBBLE_RANDOMNESS)
-        depth_units = questionary.select(
-            "Units for Wow/Flutter Depth?",
-            choices=['cents', 'semitones'],
-            default=DEFAULT_WOBBLE_DEPTH_UNITS
-        ).ask()
-        effects_config.append({
-            'name': 'tape_wobble',
-            'wow_rate_hz': wow_rate,
-            'wow_depth': wow_depth,
-            'flutter_rate_hz': flutter_rate,
-            'flutter_depth': flutter_depth,
-            'randomness': wobble_randomness,
-            'depth_units': depth_units
-        })
-
-    # Ask about humanization
-    enable_humanize = questionary.confirm(
-        "Enable Humanize Velocity effect? (adds natural variation to note velocities)",
-        default=DEFAULT_HUMANIZE_ENABLED
+    print("Presets explain what you'll hear; advanced Hz/cents knobs stay under the hood.")
+    preset_choices = [
+        questionary.Choice(f"{p['label']} — {p['summary']}", value=p["id"])
+        for p in list_presets()
+    ]
+    selected_preset = questionary.select(
+        "Effects preset:",
+        choices=preset_choices,
+        default="tape_and_human"
     ).ask()
-    if enable_humanize:
-        humanize_range = int(questionary.text("Humanize: Velocity variation range:", default=str(DEFAULT_HUMANIZE_RANGE)).ask() or DEFAULT_HUMANIZE_RANGE)
-        effects_config.append({
-            'name': 'humanize_velocity',
-            'humanization_range': humanize_range
-        })
+    from .effects_presets import build_effects_config
+    effects_config = build_effects_config(selected_preset)
+    for line in explain_effects_config(effects_config):
+        print(f"  · {line}")
 
     options: Dict = {
         'generation_type': generation_type,
