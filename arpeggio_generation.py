@@ -38,6 +38,7 @@ def create_arp(options: Dict):
     min_octave = options.get('min_octave', 4)
     max_octave = options.get('max_octave', 6)
     use_chord_tones = options.get('use_chord_tones', True)
+    mode_color = options.get('mode_color', True)
     
     # Arpeggio-specific options
     arp_steps = options.get('arp_steps', 8)
@@ -117,7 +118,8 @@ def create_arp(options: Dict):
                 arpeggio_cycle_pattern = create_arpeggio(
                     current_root_midi, mode, arp_steps, min_octave, max_octave, 
                     arp_mode, range_octaves, use_chord_tones=use_chord_tones,
-                    evolution_rate=evolution_rate, repetition_factor=repetition_factor
+                    evolution_rate=evolution_rate, repetition_factor=repetition_factor,
+                    mode_color=mode_color,
                 )
                 
                 if not arpeggio_cycle_pattern:

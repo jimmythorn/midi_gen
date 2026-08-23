@@ -2,14 +2,22 @@
 
 Python MIDI sketch tool: arpeggios, drones, plain-language effects, and **musician/style lookup** (local catalog + optional [Cursor SDK](https://cursor.com/docs/sdk/python)).
 
-Honest baseline: output is musically usable as a starting sketch, not a finished composition. Patterns are tightened versus the first pass, but this remains a conceptual generator.
+Honest baseline: output is musically usable as a starting sketch, not a finished composition.
+
+## North star
+
+**Pick style → Generate → Play into Logic → Download MIDI.**
+
+The Streamlit Style Lab is the primary surface. The CLI (`python -m midi_gen`) remains for power/dev use.
 
 ## What's new
 
-- **Musician / style lab** — query “Philip Glass”, “ambient drone”, “angular jazz”, etc.
-- **Cursor SDK hook** — when `CURSOR_API_KEY` is set, an agent can refine the style → generation recipe as JSON; otherwise the local catalog is used.
-- **Effects presets** — Clean / Human feel / Subtle tape / Worn tape / Tape + human, explained in plain language (Hz/cents stay under the hood).
-- **Streamlit test UI** — generate, inspect note preview + stats, download `.mid` / WAV, **Play into Logic via IAC**.
+- **Musician / style lab** — catalog pick or free-text vibe (“ambient drone”, “angular jazz”, …).
+- **Play into Logic (IAC)** — primary post-generate action; record in Logic to capture a region.
+- **Bend-aware Listen preview** — sine WAV honors pitch-bend so tape wow/flutter is audible.
+- **Mode color** — characteristic tones (#4 Lydian, nat6/9 Dorian, b7 Mixolydian, …) on weak beats so modes aren’t triad wallpaper.
+- **Effects presets** — Clean / Human feel / Subtle tape / Worn tape / Tape + human.
+- **Cursor SDK hook** — optional; Advanced toggle in the UI.
 
 ## Quick start
 
@@ -18,9 +26,9 @@ pip install -e .
 ./run_ui.sh
 ```
 
-Open **http://127.0.0.1:8501** — generate from a musician/style query, **listen to the WAV preview**, **Play into Logic** (IAC), inspect notes, download MIDI/WAV.
+Open **http://127.0.0.1:8501**.
 
-CLI (optional):
+CLI (optional / power users):
 
 ```bash
 python3 -m midi_gen
@@ -32,8 +40,8 @@ Optional Cursor SDK enrichment: `export CURSOR_API_KEY=crsr_...` before `./run_u
 
 1. **Audio MIDI Setup** → MIDI Studio → **IAC Driver** → enable **Device is online**.
 2. In Logic, set a Software Instrument track’s **MIDI In** to that IAC bus.
-3. In the Style Lab UI, choose the IAC port → **Play into Logic**.
-4. Optional: hit **Record** in Logic to capture a region (live stream alone does not write the project).
+3. Generate a sketch → **Play into Logic**.
+4. Hit **Record** in Logic to capture a region (live stream alone does not write the project).
 
 Requires `python-rtmidi` (installed with the package).
 
@@ -42,7 +50,7 @@ Requires `python-rtmidi` (installed with the package).
 1. Match against a curated catalog (Eno, Glass, Reich, Debussy, Coltrane, Monk, Aphex, Bach, Satie, Frahm, …).
 2. If enabled and authenticated, call Cursor SDK to return a JSON generation profile.
 3. Map the profile to arpeggio/drone options + an effects preset.
-4. Write MIDI under `generated/` and show a test summary (note count, range, preview).
+4. Write MIDI under `generated/` and show Listen / Logic / Download actions.
 
 Programmatic API:
 
@@ -71,18 +79,18 @@ Glossary: **wow** = slow pitch sway; **flutter** = faster shimmer; depths are in
 
 ## Generation modes
 
-- **Arpeggio** — patterned note cells (up / down / up_down / random / order).
-- **Drone/Pad** — sustained voicings with optional octave motion.
+- **Arpeggio** — patterned note cells with optional modal color accents.
+- **Drone/Pad** — sustained voicings with optional octave motion + color tones.
 - **Style lookup** — picks mode + params from musician/style intent.
 
 ## Tests
 
 ```bash
-PYTHONPATH=/tmp/py pytest /tmp/py/midi_gen/tests -q
+pytest tests -q
 ```
 
 ## Requirements
 
 - Python 3.10+
-- `mido`, `questionary`, `streamlit`
+- `mido`, `questionary`, `streamlit`, `numpy`, `python-rtmidi`
 - `cursor-sdk` (optional at runtime; required in requirements for the integration surface)
