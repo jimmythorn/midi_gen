@@ -209,6 +209,8 @@ class LiveMidiPlayer:
         self._looping = False
         self._count_in_bars: float = 0.0
         self._count_in_end: Optional[float] = None  # perf_counter deadline
+        self._count_in_bpm: float = 120.0
+        self._count_in_beats_per_bar: int = 4
 
     @property
     def playing(self) -> bool:
@@ -254,22 +256,46 @@ class LiveMidiPlayer:
             end = self._count_in_end
         return max(0.0, end - time.perf_counter())
 
+    def count_in_remaining_bars_beats(self) -> Optional[Tuple[int, int]]:
+        """
+        Remaining whole bars and beats in the current count-in (sketch BPM).
+
+        Returns ``(bars, beats)`` from remaining wall time, or None when not
+        in count-in. Cleared as soon as Playing starts.
+        """
+        rem = self.count_in_remaining_sec
+        if rem is None:
+            return None
+        with self._lock:
+            bpm = max(1.0, float(self._count_in_bpm or 120.0))
+            bpb = max(1, int(self._count_in_beats_per_bar or 4))
+        beat_sec = 60.0 / bpm
+        rem_beats = int(rem / beat_sec + 1e-9)
+        if rem > 0 and rem_beats == 0:
+            rem_beats = 1  # sub-beat remainder still counts as a beat left
+        bars = rem_beats // bpb
+        beats = rem_beats % bpb
+        return bars, beats
+
     def transport_caption(self) -> str:
         """
         Honest UI caption for the active phase.
 
-        Count-in → ``Count-in…`` (with bar count when known); else Playing.
+        Count-in → remaining bar/beat (and seconds) from sketch BPM.
+        Playing → plain ``Playing`` (count-in caption cleared).
         Finished / idle captions are owned by the UI after the worker exits.
         """
         phase = self.phase
         if phase == "count_in":
-            bars = self.count_in_bars
-            if bars > 0:
-                bar_txt = "1 bar" if abs(bars - 1.0) < 1e-9 else f"{bars:g} bars"
-                rem = self.count_in_remaining_sec
-                if rem is not None:
-                    return f"Count-in… ({bar_txt}, {rem:.1f}s)"
-                return f"Count-in… ({bar_txt})"
+            rem = self.count_in_remaining_sec
+            rem_bb = self.count_in_remaining_bars_beats()
+            if rem_bb is not None and rem is not None:
+                bars_left, beats_left = rem_bb
+                return (
+                    f"Count-in… {bars_left}:{beats_left} left · {rem:.1f}s"
+                )
+            if rem is not None:
+                return f"Count-in… {rem:.1f}s left"
             return "Count-in…"
         if phase == "playing":
             return "Playing"
@@ -396,6 +422,8 @@ class LiveMidiPlayer:
             self._looping = bool(loop)
             self._count_in_bars = count_bars if count_in_sec > 0 else 0.0
             self._count_in_end = None
+            self._count_in_bpm = play_bpm
+            self._count_in_beats_per_bar = max(1, int(beats_per_bar or 4))
             stop_flag = self._stop
 
         def _wait_until(deadline: float) -> bool:
@@ -423,6 +451,8 @@ class LiveMidiPlayer:
                 self._phase = "count_in"
                 self._count_in_bars = count_bars
                 self._count_in_end = start + count_in_sec
+                self._count_in_bpm = play_bpm
+                self._count_in_beats_per_bar = max(1, int(beats_per_bar or 4))
             if click and click_beats > 0:
                 # Soft rim-ish click on ch 9 (GM drums) when possible — still
                 # same IAC bus; prefer silent count-in for clean region capture.

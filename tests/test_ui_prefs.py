@@ -58,9 +58,6 @@ def test_corrupt_prefs_fall_back_to_defaults(tmp_path):
 def test_prefs_for_session_drops_stale_port(tmp_path):
     path = tmp_path / "ui_prefs.json"
     save_prefs({"live_port": "Gone Bus", "live_count_in": True}, path=path)
-    # Point load at our temp file by monkeypatching via explicit path merge:
-    # prefs_for_session uses load_prefs() default path — test the filter helper
-    # against an in-memory-equivalent by saving then loading with ports filter.
     from midi_gen import ui_prefs
 
     original = ui_prefs.prefs_path
@@ -73,3 +70,28 @@ def test_prefs_for_session_drops_stale_port(tmp_path):
         assert prefs_ok["live_port"] == "Gone Bus"
     finally:
         ui_prefs.prefs_path = original  # type: ignore[assignment]
+
+
+def test_prefs_survive_relaunch_roundtrip(tmp_path):
+    """count-in / loop / port survive a full relaunch (disk); soft-click too."""
+    path = tmp_path / "ui_prefs.json"
+    save_prefs(
+        {
+            "live_count_in": True,
+            "live_loop": True,
+            "live_port": "IAC Driver Bus 1",
+            "live_soft_click": False,
+        },
+        path=path,
+    )
+    # Simulate Streamlit relaunch: fresh load from disk.
+    restored = load_prefs(path)
+    assert restored["live_count_in"] is True
+    assert restored["live_loop"] is True
+    assert restored["live_port"] == "IAC Driver Bus 1"
+    assert restored["live_soft_click"] is False
+    # Rerun-equivalent: same values still present after a no-op merge save.
+    save_prefs({"live_count_in": True}, path=path)
+    again = load_prefs(path)
+    assert again["live_loop"] is True
+    assert again["live_port"] == "IAC Driver Bus 1"

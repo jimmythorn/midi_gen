@@ -461,7 +461,7 @@ def test_ui_crisp_audit_extras_a_through_e():
     assert "Count-in (1 silent bar)" in src
     assert 'st.session_state.get("live_soft_click", False)' in src
     assert "Soft click during count-in" in src
-    assert "can land in the" in src and "record region" in src
+    assert "click MIDI will be captured if Logic is recording" in src
     # Soft click defaults Off — never force click=True as the literal play default.
     assert 'st.session_state["live_soft_click"] = True' not in src
     # E — last_error → live_message; keep Stop when was_playing / failed Play
@@ -470,8 +470,9 @@ def test_ui_crisp_audit_extras_a_through_e():
     # Natural end always sets Finished (no Streaming-prefix requirement).
     assert 'st.session_state["live_message"] = "Finished."' in src
     assert 'msg.startswith("Streaming")' not in src
-    # Later — Panic beside Stop; countdown caption; prefs persist
+    # Later PASS ACs — All notes off (not fake transport); countdown; prefs
     assert 'key="panic_logic"' in src
+    assert '"All notes off"' in src
     assert "player.panic(" in src
     assert "transport_caption()" in src
     assert "_persist_live_prefs" in src
@@ -523,7 +524,7 @@ def test_player_panic_flushes_cc123_without_stopping(tmp_path):
 
 
 def test_transport_caption_count_in(tmp_path):
-    """Count-in phase exposes Count-in… caption (then Playing / idle)."""
+    """Count-in shows remaining bar:beat + seconds; clears to Playing/Idle."""
     fake = FakeMidiPort()
     player = LiveMidiPlayer()
     path = tmp_path / "tiny.mid"
@@ -534,23 +535,38 @@ def test_transport_caption_count_in(tmp_path):
     ), patch("midi_gen.live_midi.mido.open_output", return_value=fake), patch(
         "midi_gen.live_midi.panic_flush_named"
     ):
+        # 2 bars @ 60 BPM 4/4 = 8s; remaining should show bars:beats from sketch BPM.
         player.play_file(
             str(path),
             "Fake Bus",
-            count_in_bars=4,
+            count_in_bars=2,
             bpm=60,
+            beats_per_bar=4,
             loop=False,
             click=False,
         )
         deadline = time.time() + 1.0
         while player.phase != "count_in" and time.time() < deadline:
             time.sleep(0.01)
+        assert player.phase == "count_in"
         caption = player.transport_caption()
         assert caption.startswith("Count-in…")
-        assert "bar" in caption
+        assert "left" in caption
+        assert "s" in caption
+        rem_bb = player.count_in_remaining_bars_beats()
+        assert rem_bb is not None
+        bars_left, beats_left = rem_bb
+        assert bars_left >= 1  # early in a 2-bar count-in
+        assert 0 <= beats_left < 4
+        # Playing caption must clear count-in wording.
+        with player._lock:
+            player._phase = "playing"
+            player._count_in_end = None
+        assert player.transport_caption() == "Playing"
         player.stop(wait=True)
 
     assert player.transport_caption() == "Idle"
+    assert player.count_in_remaining_bars_beats() is None
 
 
 def test_soft_click_count_in_emits_notes(tmp_path):

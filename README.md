@@ -15,7 +15,7 @@ The Streamlit Style Lab is the primary surface. The CLI (`python -m midi_gen`) r
 - **Musician / style lab** — catalog pick (**who**) or free-text vibe (**feel**); featured cards + vibe chips are entry points, not a closed set.
 - **Flexible matching** — aliases (gymnopédie → Satie, sheets of sound → Coltrane, …) + richer vibe tags across the full catalog.
 - **Recipe preview + match line** before Generate; **Try instead** related styles after.
-- **Play into Logic (IAC)** — Audition→Capture strip; Refresh ports; Count-in / Loop (app-side); Panic (CC123); Record in Logic to keep a region.
+- **Play into Logic (IAC)** — Audition→Capture strip; Refresh ports; Count-in / Loop (app-side); All notes off (CC123); Record in Logic to keep a region.
 - **Transport prefs** — count-in / loop / soft-click / last MIDI port persist locally across Streamlit restarts (defaults Off / Off / Off).
 - **Bend-aware Listen preview** — sine WAV honors pitch-bend so tape wow/flutter is audible.
 - **Mode color** — characteristic tones (#4 Lydian, nat6/9 Dorian, b7 Mixolydian, …) on weak beats so modes aren’t triad wallpaper.
@@ -44,7 +44,7 @@ Optional Cursor SDK enrichment: `export CURSOR_API_KEY=crsr_...` before `./run_u
 1. **Audio MIDI Setup** → MIDI Studio → **IAC Driver** → enable **Device is online**.
 2. In Logic, set a Software Instrument track’s **MIDI In** to that IAC bus (must match the port Style Lab plays to when you have more than one).
 3. Generate a sketch → **Arm → Record in Logic → Play here** (live stream alone does not write a region).
-4. Optional **Count-in (1 silent bar)** (off by default for instant audition) and/or **Loop sketch** — app-side only, inside the Audition→Capture strip; Stop panic-flushes hanging notes. **Panic** sends all-notes-off (CC123) without stopping. Soft click during count-in is an Advanced opt-in (off by default — click notes can land in the record region).
+4. Optional **Count-in (1 silent bar)** (off by default for instant audition) and/or **Loop sketch** — app-side only, inside the Audition→Capture strip; Stop panic-flushes hanging notes. **All notes off** sends CC123 without stopping (works idle when a port is known). Soft click during count-in is an Advanced opt-in (off by default — click MIDI is captured if Logic is recording).
 5. If you enabled IAC mid-session, hit **Refresh ports** — no relaunch needed.
 
 Requires `python-rtmidi` (installed with the package). Silence checklist under Play covers MIDI In match / track hears input / instrument loaded.

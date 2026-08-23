@@ -591,8 +591,8 @@ with st.expander("Advanced"):
     )
     if soft_click:
         st.caption(
-            "Warning: soft-click notes travel the same IAC bus and can land in the "
-            "Logic record region if you are already recording."
+            "Warning: click MIDI will be captured if Logic is recording "
+            "(same IAC bus as the sketch)."
         )
     else:
         st.caption("When Off, count-in stays truly silent (no click notes).")
@@ -864,19 +864,19 @@ else:
                 st.session_state["live_message"] = "Stopped."
                 st.rerun()
         with panic_col:
-            # Panic: manual CC123 flush on selected/open port — Playing or idle-with-port.
+            # Explicit all-notes-off — not fake transport. Works idle if port known.
             panic_port = st.session_state.get("live_port") or player.port_name
             if st.button(
-                "Panic",
+                "All notes off",
                 use_container_width=True,
                 disabled=not bool(panic_port),
                 key="panic_logic",
-                help="All notes off (CC123) on the selected MIDI port. "
-                "Does not Stop playback — use Stop to end the stream.",
+                help="Panic / all notes off (CC123) on the selected MIDI port. "
+                "Works while Playing or idle. Does not Stop — use Stop to end the stream.",
             ):
                 player.panic(panic_port)
                 st.session_state["live_message"] = (
-                    f"Panic — all notes off on {panic_port}."
+                    f"All notes off (CC123) on {panic_port}."
                 )
                 st.rerun()
 
@@ -920,8 +920,8 @@ else:
             _playback_status_poll()
         elif st.session_state.get("live_message") == "Stopped.":
             st.caption("Stopped.")
-        elif str(st.session_state.get("live_message") or "").startswith("Panic"):
-            st.caption("Panic — all notes off.")
+        elif str(st.session_state.get("live_message") or "").startswith("All notes off"):
+            st.caption("All notes off.")
 
         st.markdown(SILENCE_CHECKLIST_HTML, unsafe_allow_html=True)
 
