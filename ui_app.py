@@ -718,11 +718,8 @@ with surprise_col:
     last_result = (
         last_run_for_surprise.get("result") if last_run_for_surprise else None
     )
-    previous_id = (
-        getattr(getattr(last_result, "profile", None), "id", None)
-        if last_result is not None
-        else None
-    )
+    # Skip bouncing straight back to the last Surprise target when possible.
+    previous_id = st.session_state.get("last_surprise_id")
     surprise_pick = surprise_related_profile(
         recipe.profile,
         vibe_hint=query,
@@ -738,6 +735,7 @@ with surprise_col:
     ):
         if surprise_pick is not None:
             # Named catalog identity jump — do not soft-steer knobs on current.
+            st.session_state["last_surprise_id"] = surprise_pick.id
             st.session_state["pending_related_name"] = surprise_pick.name
             st.rerun()
 st.markdown("</div>", unsafe_allow_html=True)

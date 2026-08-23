@@ -210,21 +210,19 @@ def surprise_related_profile(
     previous_id: Optional[str] = None,
 ) -> Optional[MusicianStyleProfile]:
     """
-    Zero-decision dice into a related named style (related[0]).
+    Surprise me → related[0] named identity jump (Matching Next parked).
 
-    Prefers related_from_lookup_result(last_result) when a prior lookup exists,
-    else related_profiles(current). If related[0] equals previous_id, take
-    related[1] when available. Empty → find_profiles on styles, skip current.
-    Matching Next is parked — existing related helpers only.
+    related = related_from_lookup_result(last_result) if last lookup
+    else related_profiles(current). Take related[0]; if that equals previous,
+    take related[1] when available. Empty → find_profiles on styles, skip self.
     """
-    related: List[MusicianStyleProfile] = []
     if last_result is not None:
         related = related_from_lookup_result(
             last_result,
             limit=2,
             vibe_hint=vibe_hint,
         )
-    if not related:
+    else:
         related = related_profiles(
             profile,
             limit=2,
@@ -232,9 +230,7 @@ def surprise_related_profile(
             vibe_hint=vibe_hint,
         )
     if not related:
-        seed = vibe_hint.strip() or " ".join(
-            [profile.name] + list(profile.styles[:6])
-        )
+        seed = vibe_hint.strip() or " ".join(list(profile.styles[:8])) or profile.name
         related = [
             p for p in find_profiles(seed, limit=4) if p.id != profile.id
         ]
@@ -243,9 +239,9 @@ def surprise_related_profile(
     pick = related[0]
     if previous_id and pick.id == previous_id and len(related) > 1:
         pick = related[1]
-    elif pick.id == profile.id and len(related) > 1:
-        pick = related[1]
-    return pick if pick.id != profile.id else (related[1] if len(related) > 1 else None)
+    if pick.id == profile.id:
+        return related[1] if len(related) > 1 else None
+    return pick
 
 
 def _fallback_blurb(profile: MusicianStyleProfile) -> str:
