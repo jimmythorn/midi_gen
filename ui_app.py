@@ -11,6 +11,7 @@ Launch:
 
 from __future__ import annotations
 
+import random
 import sys
 import types
 from datetime import timedelta
@@ -38,12 +39,17 @@ from midi_gen.live_midi import (
 from midi_gen.musician_styles import list_musicians, list_styles
 from midi_gen.preview import events_to_roll_rows, format_summary_text, summarize_midi_file
 from midi_gen.style_prompting import (
+    clamp_bars,
+    double_bars,
     featured_style_cards,
     format_match_line,
+    format_plain_feel_match,
+    half_bars,
+    mood_chip_packs,
     preview_recipe,
     related_from_lookup_result,
     resolve_happy_path_query,
-    vibe_chips,
+    surprise_related_profile,
 )
 from midi_gen.ui_prefs import load_prefs, prefs_for_session, save_prefs
 
@@ -325,16 +331,53 @@ st.markdown(
         font-size: 0.92rem;
         margin-top: 0.35rem;
       }
+      .recipe-preview .feel {
+        color: var(--text);
+        font-size: 1.0rem;
+        margin-top: 0.4rem;
+        font-weight: 500;
+      }
       .path-hint {
         color: var(--muted);
         font-size: 0.88rem;
         margin: 0.15rem 0 0.65rem 0;
+      }
+      .feel-path-label {
+        font-family: "Space Grotesk", sans-serif;
+        font-size: 1.15rem;
+        font-weight: 600;
+        color: var(--text);
+        margin: 0.35rem 0 0.35rem 0;
+      }
+      .mood-pack-label {
+        color: var(--accent);
+        font-size: 0.78rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        margin: 0.65rem 0 0.35rem 0;
+      }
+      .post-feel {
+        font-family: "Space Grotesk", sans-serif;
+        font-size: 1.15rem;
+        font-weight: 600;
+        color: var(--text);
+        margin: 0.35rem 0 0.55rem 0;
+      }
+      .effect-lite {
+        color: var(--muted);
+        font-size: 0.82rem;
+        margin: 0.15rem 0 0.45rem 0;
       }
       .featured-blurb {
         color: var(--muted);
         font-size: 0.82rem;
         margin: 0.2rem 0 0.55rem 0;
         min-height: 2.2em;
+      }
+      .bars-chip-row {
+        max-width: 40rem;
+        margin: 0.25rem 0 0.75rem 0;
       }
     </style>
     """,
@@ -347,7 +390,7 @@ presets = list_presets()
 preset_ids = [p["id"] for p in presets]
 preset_labels = {p["id"]: f"{p['label']} — {p['summary']}" for p in presets}
 featured_cards = featured_style_cards()
-vibe_examples = vibe_chips()
+mood_packs = mood_chip_packs()
 
 IAC_FIRST_RUN_TIP = """
 <div class="tip">
@@ -440,11 +483,15 @@ if "catalog_pick" not in st.session_state:
     )
 if "vibe_text" not in st.session_state:
     st.session_state["vibe_text"] = ""
+if "bars" not in st.session_state:
+    st.session_state["bars"] = 8
+if "effects_preset" not in st.session_state:
+    st.session_state["effects_preset"] = "tape_and_human"
 
 # Transport prefs (count-in / loop / soft-click) before Advanced widgets bind.
 _seed_transport_bool_prefs()
 
-# Pending related-style regenerate (Try instead)
+# Pending related-style regenerate (Try instead / Surprise me — named identity jump)
 _pending_related = st.session_state.pop("pending_related_name", None)
 if _pending_related:
     # Named catalog hit → who path; otherwise leave as feel override
@@ -455,61 +502,142 @@ if _pending_related:
         st.session_state["vibe_text"] = _pending_related
     st.session_state["auto_generate"] = True
 
-# --- Featured style cards (entry points across full catalog) ---
-st.markdown("#### Featured styles")
-st.caption("Tap a name to select that catalog profile — not a closed list; full catalog below.")
-feat_cols = st.columns(3)
-for i, card in enumerate(featured_cards):
-    with feat_cols[i % 3]:
-        if st.button(card.name, key=f"feat_{card.id}", use_container_width=True):
-            st.session_state["catalog_pick"] = card.name
-            st.session_state["vibe_text"] = ""
-            st.rerun()
-        st.markdown(f'<p class="featured-blurb">{card.blurb}</p>', unsafe_allow_html=True)
+# Again: same recipe, new take/seed (not an identity jump)
+_pending_again = st.session_state.pop("pending_again", False)
+if _pending_again:
+    st.session_state["gen_seed"] = random.randint(1, 2_147_483_646)
+    st.session_state["auto_generate"] = True
 
-# --- Catalog (who) ---
-if st.session_state["catalog_pick"] not in musician_names:
-    st.session_state["catalog_pick"] = musician_names[0]
-catalog = st.selectbox(
-    "Style (catalog — who)",
-    options=musician_names,
-    help="Named musician/style profiles from the full curated catalog.",
-    key="catalog_pick",
-)
-# --- Free-text vibe (feel) — first-class, not a thin alias ---
-st.text_input(
-    "Or type a vibe (feel)",
-    placeholder="e.g. ambient drone, gymnopédie, sheets of sound, anything…",
-    help=(
-        "First-class path: type any feel. Soft-matches the catalog (aliases + tags), "
-        "optional SDK enrich, or an honest generic sketch — chips below are examples only."
-    ),
-    key="vibe_text",
-)
-st.markdown(
-    '<p class="path-hint">Chips teach the language — you can always type beyond them.</p>',
-    unsafe_allow_html=True,
-)
-chip_rows = [vibe_examples[i : i + 4] for i in range(0, len(vibe_examples), 4)]
-for row_i, row in enumerate(chip_rows):
-    cols = st.columns(4)
-    for j, chip in enumerate(row):
-        with cols[j]:
-            if st.button(chip, key=f"vibe_chip_{row_i}_{j}", use_container_width=True):
-                st.session_state["vibe_text"] = chip
+has_sketch = bool(st.session_state.get("last_run"))
+
+# --- Featured style cards (entry points; collapse after first successful Generate) ---
+with st.expander(
+    "Featured styles",
+    expanded=not has_sketch,
+):
+    st.caption("Tap a name to select that catalog profile — not a closed list; full catalog below.")
+    feat_cols = st.columns(3)
+    for i, card in enumerate(featured_cards):
+        with feat_cols[i % 3]:
+            if st.button(card.name, key=f"feat_{card.id}", use_container_width=True):
+                st.session_state["catalog_pick"] = card.name
+                st.session_state["vibe_text"] = ""
                 st.rerun()
+            st.markdown(f'<p class="featured-blurb">{card.blurb}</p>', unsafe_allow_html=True)
+
+# --- Empty-state feel path: bigger type-a-feel / tap-a-chip; hide geek chrome ---
+if not has_sketch:
+    st.markdown(
+        '<p class="feel-path-label">Type a feel or tap a chip</p>',
+        unsafe_allow_html=True,
+    )
+    st.text_input(
+        "Vibe (feel)",
+        placeholder="e.g. ambient drone, gymnopédie, sheets of sound, anything…",
+        help=(
+            "First-class path: type any feel. Soft-matches the catalog (aliases + tags), "
+            "optional SDK enrich, or an honest generic sketch — packs below are examples only."
+        ),
+        key="vibe_text",
+        label_visibility="collapsed",
+    )
+    st.markdown(
+        '<p class="path-hint">Mood packs teach the language — you can always type beyond them.</p>',
+        unsafe_allow_html=True,
+    )
+    for pack in mood_packs:
+        st.markdown(
+            f'<p class="mood-pack-label">{pack.label}</p>',
+            unsafe_allow_html=True,
+        )
+        cols = st.columns(max(2, len(pack.chips)))
+        for j, chip in enumerate(pack.chips):
+            with cols[j]:
+                if st.button(chip, key=f"mood_{pack.id}_{j}", use_container_width=True):
+                    st.session_state["vibe_text"] = chip
+                    st.rerun()
+    # Who path still available, collapsed (not geek chrome on cold start)
+    with st.expander("Or pick a named style (catalog)", expanded=False):
+        if st.session_state["catalog_pick"] not in musician_names:
+            st.session_state["catalog_pick"] = musician_names[0]
+        st.selectbox(
+            "Style (catalog — who)",
+            options=musician_names,
+            help="Named musician/style profiles from the full curated catalog.",
+            key="catalog_pick",
+        )
+else:
+    # Post-gen: catalog + vibe remain editable; packs stay available but quieter
+    if st.session_state["catalog_pick"] not in musician_names:
+        st.session_state["catalog_pick"] = musician_names[0]
+    st.selectbox(
+        "Style (catalog — who)",
+        options=musician_names,
+        help="Named musician/style profiles from the full curated catalog.",
+        key="catalog_pick",
+    )
+    st.text_input(
+        "Or type a vibe (feel)",
+        placeholder="e.g. ambient drone, gymnopédie, sheets of sound, anything…",
+        help=(
+            "First-class path: type any feel. Soft-matches the catalog (aliases + tags), "
+            "optional SDK enrich, or an honest generic sketch — chips below are examples only."
+        ),
+        key="vibe_text",
+    )
+    with st.expander("Mood packs", expanded=False):
+        st.caption("Examples only — free-text stays first-class.")
+        for pack in mood_packs:
+            st.markdown(
+                f'<p class="mood-pack-label">{pack.label}</p>',
+                unsafe_allow_html=True,
+            )
+            cols = st.columns(max(2, len(pack.chips)))
+            for j, chip in enumerate(pack.chips):
+                with cols[j]:
+                    if st.button(
+                        chip,
+                        key=f"mood_post_{pack.id}_{j}",
+                        use_container_width=True,
+                    ):
+                        st.session_state["vibe_text"] = chip
+                        st.rerun()
 
 query = resolve_happy_path_query(st.session_state["catalog_pick"], st.session_state["vibe_text"])
+effects_preset = st.session_state.get("effects_preset") or "tape_and_human"
+if effects_preset not in preset_ids:
+    effects_preset = "tape_and_human"
+    st.session_state["effects_preset"] = effects_preset
 
-effects_preset = st.selectbox(
-    "Effects",
-    options=preset_ids,
-    format_func=lambda i: preset_labels[i],
-    index=preset_ids.index("tape_and_human"),
-    help="Seasoning after notes are written — not a substitute for style pick.",
-)
+# --- Half / Double bars (real bars knob; no settings sprawl) ---
+st.session_state["bars"] = clamp_bars(int(st.session_state.get("bars", 8)))
+st.markdown('<div class="bars-chip-row">', unsafe_allow_html=True)
+bars_label, half_col, double_col = st.columns([2, 1, 1])
+with bars_label:
+    st.caption(f"Loop length · **{st.session_state['bars']} bars**")
+with half_col:
+    if st.button(
+        "½ Half",
+        use_container_width=True,
+        key="bars_half",
+        disabled=st.session_state["bars"] <= 2,
+        help="Halve sketch length for a shorter playable loop.",
+    ):
+        st.session_state["bars"] = half_bars(st.session_state["bars"])
+        st.rerun()
+with double_col:
+    if st.button(
+        "2× Double",
+        use_container_width=True,
+        key="bars_double",
+        disabled=st.session_state["bars"] >= 32,
+        help="Double sketch length for a longer playable loop.",
+    ):
+        st.session_state["bars"] = double_bars(st.session_state["bars"])
+        st.rerun()
+st.markdown("</div>", unsafe_allow_html=True)
 
-# --- Recipe preview + match transparency (pre-Generate, no MIDI write) ---
+# --- Recipe preview + plain-feel clarity (pre-Generate, no MIDI write) ---
 recipe = preview_recipe(
     catalog_name=st.session_state["catalog_pick"],
     vibe_text=st.session_state["vibe_text"],
@@ -525,19 +653,25 @@ st.markdown(
     <div class="recipe-preview">
       <div class="label">About to generate · {path_note}</div>
       <div class="line">{recipe.one_liner}</div>
-      <div class="match">{recipe.match_line}</div>
+      <div class="feel">{recipe.plain_feel_line}</div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-with st.expander("Advanced"):
-    bars = st.slider(
+# Defaults when Advanced is collapsed; widgets below may override.
+use_sdk = False
+bpm_override = 0
+
+# Geek chrome (match type, SDK, soft-click, bars slider) — Advanced only
+with st.expander("Advanced", expanded=False):
+    st.caption(recipe.match_line)
+    st.slider(
         "Bars",
         2,
         32,
-        int(st.session_state.get("bars", 8)),
         help="Defaults to the catalog profile length when left alone.",
+        key="bars",
     )
     use_sdk = st.toggle(
         "Cursor SDK enrichment",
@@ -571,9 +705,38 @@ with st.expander("Advanced"):
     # Persist soft-click even before a sketch exists.
     _persist_live_prefs()
 
+bars = clamp_bars(int(st.session_state.get("bars", 8)))
 
+# --- Generate + Surprise me (adjacent; Surprise = named related jump, then generate) ---
 st.markdown('<div class="generate-wrap">', unsafe_allow_html=True)
-generate = st.button("Generate", type="primary", use_container_width=True)
+gen_col, surprise_col = st.columns([3, 1])
+with gen_col:
+    generate = st.button("Generate", type="primary", use_container_width=True)
+with surprise_col:
+    last_run_for_surprise = st.session_state.get("last_run")
+    last_result = (
+        last_run_for_surprise.get("result") if last_run_for_surprise else None
+    )
+    # Skip bouncing straight back to the last Surprise target when possible.
+    previous_id = st.session_state.get("last_surprise_id")
+    surprise_pick = surprise_related_profile(
+        recipe.profile,
+        vibe_hint=query,
+        last_result=last_result,
+        previous_id=previous_id,
+    )
+    if st.button(
+        "Surprise me",
+        use_container_width=True,
+        key="surprise_me",
+        disabled=surprise_pick is None,
+        help="Dice into a related named style from the full catalog, then generate.",
+    ):
+        if surprise_pick is not None:
+            # Named catalog identity jump — do not soft-steer knobs on current.
+            st.session_state["last_surprise_id"] = surprise_pick.id
+            st.session_state["pending_related_name"] = surprise_pick.name
+            st.rerun()
 st.markdown("</div>", unsafe_allow_html=True)
 if st.session_state.pop("auto_generate", False):
     generate = True
@@ -593,6 +756,9 @@ if generate:
         }
         if bpm_override:
             overrides["bpm"] = int(bpm_override)
+        # Again / explicit seed → new take; otherwise leave RNG unbound
+        if "gen_seed" in st.session_state:
+            overrides["seed"] = int(st.session_state.pop("gen_seed"))
         try:
             path, result, options = generate_midi_for_style(
                 query,
@@ -601,6 +767,7 @@ if generate:
             )
             summary = summarize_midi_file(path)
             wav_bytes = render_midi_to_wav_bytes(path)
+            plain = format_plain_feel_match(result.profile)
             st.session_state["last_run"] = {
                 "path": path,
                 "result": result,
@@ -609,6 +776,7 @@ if generate:
                 "query": query,
                 "wav_bytes": wav_bytes,
                 "preview_caption": describe_preview(path),
+                "plain_feel_line": plain,
                 "match_line": format_match_line(
                     result.profile,
                     effects_preset=options.get("effects_preset") or effects_preset,
@@ -618,6 +786,8 @@ if generate:
             }
             st.session_state.pop("generate_error", None)
             st.session_state.pop("live_message", None)
+            # Refresh layout (collapse featured, show post-gen chrome)
+            st.rerun()
         except Exception as exc:
             st.session_state["generate_error"] = str(exc)
 
@@ -645,7 +815,7 @@ if "live_port" not in st.session_state and default_port:
 # First-run / empty-state IAC tip (not buried; dismiss after successful Play)
 if not run:
     _show_iac_tip()
-    st.info("Pick a style or type a vibe, then Generate.")
+    st.info("Type a feel or tap a chip, then Generate — or Surprise me.")
 else:
     result = run["result"]
     options = run["options"]
@@ -655,16 +825,26 @@ else:
     midi_bytes = Path(path).read_bytes()
 
     st.success(result.message)
-    st.caption(run.get("match_line") or format_match_line(profile))
+    # Plain-feel clarity on happy path; geek match type stays in Advanced only
+    plain = run.get("plain_feel_line") or format_plain_feel_match(profile)
+    st.markdown(f'<p class="post-feel">{plain}</p>', unsafe_allow_html=True)
     st.caption(
-        f"{profile.name} · {options.get('mode')} · {options.get('bpm')} BPM · "
-        f"{options.get('bars')} bars · {profile.generation_type}"
+        f"{options.get('mode')} · {options.get('bpm')} BPM · "
+        f"{options.get('bars')} bars"
     )
 
-    # --- Try instead / related (flexibility lever; full-catalog related) ---
+    # --- Again + Try instead (hero-level with Play; above the fold) ---
     related = related_from_lookup_result(
         result, limit=3, vibe_hint=run.get("query") or ""
     )
+    if st.button(
+        "Again",
+        use_container_width=True,
+        key="again_take",
+        help="Same recipe, new take/seed.",
+    ):
+        st.session_state["pending_again"] = True
+        st.rerun()
     if related:
         st.markdown("#### Try instead")
         st.caption("Adjacent feels from the full catalog — regenerates without resetting the form.")
@@ -927,6 +1107,28 @@ else:
             disabled=not bool(run.get("wav_bytes")),
         )
 
+    # Effects as light post-gen chips only (no Effects panel / deep studio)
+    st.markdown(
+        '<p class="effect-lite">Effects seasoning</p>',
+        unsafe_allow_html=True,
+    )
+    current_fx = options.get("effects_preset") or effects_preset
+    fx_cols = st.columns(min(5, len(preset_ids)))
+    for i, pid in enumerate(preset_ids):
+        with fx_cols[i % len(fx_cols)]:
+            label = presets[i]["label"] if i < len(presets) else pid
+            is_on = pid == current_fx
+            if st.button(
+                f"{'● ' if is_on else ''}{label}",
+                key=f"fx_chip_{pid}",
+                use_container_width=True,
+                help=preset_labels.get(pid, pid),
+            ):
+                if pid != current_fx:
+                    st.session_state["effects_preset"] = pid
+                    st.session_state["auto_generate"] = True
+                    st.rerun()
+
     st.markdown("### Listen")
     st.caption(
         "Quick sine preview — Play into Logic for real feel. "
@@ -937,6 +1139,7 @@ else:
 
     # --- Geek / Debug (collapsed lab chrome) ---
     with st.expander("Geek / Debug"):
+        st.caption(run.get("match_line") or format_match_line(profile))
         st.markdown(
             f"""
             <div class="metric-row">

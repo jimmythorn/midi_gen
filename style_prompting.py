@@ -58,6 +58,71 @@ VIBE_CHIPS: tuple[str, ...] = (
     "spare neoclassical",
 )
 
+# Playful packs spanning the full catalog — entry points, not a closed set.
+# Each chip soft-matches via lookup (aliases + tags), not locked musician IDs.
+MOOD_CHIP_PACKS: tuple[dict, ...] = (
+    {
+        "id": "soft_sparse",
+        "label": "Soft & sparse",
+        "chips": [
+            "ambient drone",
+            "spare neoclassical",
+            "impressionist wash",
+            "worn tape piano",
+        ],
+    },
+    {
+        "id": "pulse_phase",
+        "label": "Pulse & phase",
+        "chips": [
+            "minimal pulse",
+            "additive cells",
+            "phase pulse",
+            "clear sequence",
+        ],
+    },
+    {
+        "id": "jazz_grit",
+        "label": "Jazz & grit",
+        "chips": [
+            "angular jazz",
+            "dense modal sheets",
+            "glitchy idm",
+            "modal fire",
+        ],
+    },
+)
+
+# Sketch length bounds (match Advanced slider / create_arp clamps).
+BARS_MIN = 2
+BARS_MAX = 32
+
+# Plain-feel vocabulary (happy-path line, not geek match type).
+_FEEL_PREF: tuple[str, ...] = (
+    "ambient",
+    "phase",
+    "modal",
+    "angular",
+    "glitch",
+    "impressionist",
+    "spare",
+    "felt",
+    "baroque",
+    "minimal",
+    "sequence",
+)
+_SHAPE_PREF: tuple[str, ...] = (
+    "additive",
+    "sheets",
+    "glitch",
+    "pulse",
+    "phase",
+    "angular",
+    "sequence",
+    "wash",
+    "ostinato",
+)
+
 
 @dataclass(frozen=True)
 class FeaturedStyleCard:
@@ -76,6 +141,7 @@ class RecipePreview:
     match_type: str  # catalog | sdk | hybrid | generic
     one_liner: str
     match_line: str
+    plain_feel_line: str
 
 
 def featured_style_cards(
@@ -95,6 +161,87 @@ def featured_style_cards(
 
 def vibe_chips() -> List[str]:
     return list(VIBE_CHIPS)
+
+
+@dataclass(frozen=True)
+class MoodChipPack:
+    id: str
+    label: str
+    chips: tuple[str, ...]
+
+
+def mood_chip_packs() -> List[MoodChipPack]:
+    """2–3 playful packs; chips remain examples, free-text stays first-class."""
+    out: List[MoodChipPack] = []
+    for raw in MOOD_CHIP_PACKS:
+        chips = tuple(str(c) for c in raw.get("chips") or ())
+        if not chips:
+            continue
+        out.append(
+            MoodChipPack(
+                id=str(raw.get("id") or raw.get("label") or "pack"),
+                label=str(raw.get("label") or raw.get("id") or "Pack"),
+                chips=chips,
+            )
+        )
+    return out
+
+
+def clamp_bars(bars: int) -> int:
+    return max(BARS_MIN, min(BARS_MAX, int(bars)))
+
+
+def half_bars(bars: int) -> int:
+    """Halve sketch length for a shorter playable loop (floor at BARS_MIN)."""
+    return clamp_bars(max(BARS_MIN, int(bars) // 2))
+
+
+def double_bars(bars: int) -> int:
+    """Double sketch length for a longer playable loop (cap at BARS_MAX)."""
+    return clamp_bars(int(bars) * 2)
+
+
+def surprise_related_profile(
+    profile: MusicianStyleProfile,
+    *,
+    vibe_hint: str = "",
+    also_considered: Optional[Sequence[MusicianStyleProfile]] = None,
+    last_result: Any = None,
+    previous_id: Optional[str] = None,
+) -> Optional[MusicianStyleProfile]:
+    """
+    Surprise me → related[0] named identity jump (Matching Next parked).
+
+    related = related_from_lookup_result(last_result) if last lookup
+    else related_profiles(current). Take related[0]; if that equals previous,
+    take related[1] when available. Empty → find_profiles on styles, skip self.
+    """
+    if last_result is not None:
+        related = related_from_lookup_result(
+            last_result,
+            limit=2,
+            vibe_hint=vibe_hint,
+        )
+    else:
+        related = related_profiles(
+            profile,
+            limit=2,
+            also_considered=also_considered,
+            vibe_hint=vibe_hint,
+        )
+    if not related:
+        seed = vibe_hint.strip() or " ".join(list(profile.styles[:8])) or profile.name
+        related = [
+            p for p in find_profiles(seed, limit=4) if p.id != profile.id
+        ]
+    if not related:
+        return None
+    pick = related[0]
+    if previous_id and pick.id == previous_id and len(related) > 1:
+        pick = related[1]
+    if pick.id == profile.id:
+        return related[1] if len(related) > 1 else None
+    return pick
 
 
 def _fallback_blurb(profile: MusicianStyleProfile) -> str:
@@ -152,7 +299,7 @@ def format_match_line(
     matched_locally: bool = True,
     used_cursor_sdk: bool = False,
 ) -> str:
-    """Matched: name · type · mode · effects"""
+    """Geek match transparency — Advanced only. Matched: name · type · mode · effects"""
     mtype = match_type or _match_type_for_profile(
         profile,
         matched_locally=matched_locally,
@@ -166,6 +313,47 @@ def format_match_line(
     return (
         f"Matched: {profile.name} · {mtype} · {profile.mode} · {preset_label}"
     )
+
+
+def _style_token_bag(profile: MusicianStyleProfile) -> set[str]:
+    bag: set[str] = set()
+    for raw in profile.styles:
+        s = (raw or "").lower().strip()
+        if not s:
+            continue
+        bag.add(s)
+        bag.update(s.replace("-", " ").split())
+    return bag
+
+
+def format_plain_feel_match(profile: MusicianStyleProfile) -> str:
+    """
+    Plain-feel clarity for happy path (not geek match type).
+
+    ``Sounds like {name} ({feel} · {shape})``
+    - feel = first useful styles[] tag (curated preference)
+    - shape = drone if generation_type==drone else style shape word, else pulse
+
+    Examples: Eno ambient·drone; Glass minimal·additive; Reich phase·pulse;
+    Coltrane modal·sheets.
+    """
+    bag = _style_token_bag(profile)
+    feel = next((w for w in _FEEL_PREF if w in bag), None)
+    if feel is None:
+        if profile.styles:
+            feel = str(profile.styles[0]).lower().replace("-", " ").split()[0]
+        else:
+            feel = "sketch"
+    if profile.generation_type == "drone":
+        shape = "drone"
+    else:
+        shape = next((w for w in _SHAPE_PREF if w in bag), "pulse")
+    return f"Sounds like {profile.name} ({feel} · {shape})"
+
+
+# Back-compat alias used by early Fun Now wiring
+def format_plain_feel_line(profile: MusicianStyleProfile) -> str:
+    return format_plain_feel_match(profile)
 
 
 def preview_recipe(
@@ -205,6 +393,7 @@ def preview_recipe(
             matched_locally=result.matched_locally,
             used_cursor_sdk=result.used_cursor_sdk,
         ),
+        plain_feel_line=format_plain_feel_match(profile),
     )
 
 
