@@ -17,6 +17,7 @@ eggs/
 ENV/
 .env
 generated/
+*.mid
 .midi_gen_ui_prefs.json
 .midi_gen/
 htmlcov/

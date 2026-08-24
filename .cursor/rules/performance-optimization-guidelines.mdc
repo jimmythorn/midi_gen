@@ -1,0 +1,729 @@
+---
+description: Performance Optimization Guidelines for atlas-web and atlas-native Component Libraries
+globs: packages/**/*.{ts,tsx,js,jsx}
+alwaysApply: true
+---
+
+# 🚀 Performance Optimization Guidelines
+
+## Executive Summary
+
+This document provides comprehensive performance standards and optimization techniques for both `atlas-web` (React) and `atlas-native` (React Native) component libraries. Following these guidelines will ensure:
+
+- ⚡ **Fast Initial Load**: Optimized bundle size and resource loading
+- 🔄 **Efficient Rendering**: Minimized re-renders and DOM/native operations
+- 📱 **Smooth Interactions**: 60fps animations and responsive user interactions
+- 🧠 **Resource Efficiency**: Optimized memory usage and reduced battery impact
+
+---
+
+## 💯 Performance Metrics & Targets
+
+| Metric | atlas-web Target | atlas-native Target | Measurement Tool |
+|--------|------------------|---------------------|------------------|
+| **Initial Render** | < 150ms | < 250ms | React DevTools, Performance marks |
+| **Re-render Time** | < 10ms | < 16ms (60fps) | React DevTools, Profiler API |
+| **Bundle Size** | < 100KB (gzipped) | < 2MB (per screen) | Webpack Bundle Analyzer, Metro |
+| **Memory Usage** | < 60MB (main bundle) | < 150MB (iOS/Android) | Chrome DevTools, Xcode Instruments |
+| **Interaction Response** | < 100ms | < 100ms | Performance API, React Native Profiler |
+| **Time-to-Interactive** | < 3s (3G) | < 2s (app startup) | Lighthouse, React Native Performance |
+
+---
+
+## 🔍 Common Performance Issues & Solutions
+
+### Problem: Excessive Re-renders
+
+<table>
+<tr>
+<th>Issue</th>
+<th>Solution</th>
+</tr>
+<tr>
+<td>
+
+```tsx
+// ❌ Problem: Re-renders on every parent update
+function ExpensiveComponent({ data, onAction }) {
+  // Recalculates on every render
+  const processedData = complexProcessing(data);
+  
+  return (
+    <div>
+      {processedData.map(item => (
+        // New function created every render
+        <Item key={item.id} onClick={() => onAction(item.id)} />
+      ))}
+    </div>
+  );
+}
+```
+
+</td>
+<td>
+
+```tsx
+// ✅ Solution: Memoization & stable callbacks
+function OptimizedComponent({ data, onAction }) {
+  // Memoize expensive calculations
+  const processedData = useMemo(() => {
+    return complexProcessing(data);
+  }, [data]);
+  
+  // Stable callback reference
+  const handleItemAction = useCallback((id) => {
+    onAction(id);
+  }, [onAction]);
+  
+  return (
+    <div>
+      {processedData.map(item => (
+        <Item 
+          key={item.id} 
+          onClick={handleItemAction} 
+          id={item.id}
+        />
+      ))}
+    </div>
+  );
+}
+
+// Add memo for pure components
+const Item = React.memo(({ id, onClick }) => {
+  return <div onClick={() => onClick(id)}>Item {id}</div>
+});
+```
+
+</td>
+</tr>
+</table>
+
+### Problem: Large Bundle Size
+
+<table>
+<tr>
+<th>Issue</th>
+<th>Solution</th>
+</tr>
+<tr>
+<td>
+
+```tsx
+// ❌ Problem: Importing entire libraries
+import moment from 'moment'; // 300KB+
+import { Button, Card, Table, Form, /* etc... */ } 
+  from 'ui-library';
+
+function Dashboard() {
+  const today = moment().format('MMM Do YYYY');
+  // ...
+}
+```
+
+</td>
+<td>
+
+```tsx
+// ✅ Solution: Tree-shaking friendly imports
+import { format } from 'date-fns'; // ~3KB
+import Button from 'ui-library/Button';
+import Card from 'ui-library/Card';
+// Only import what you need
+
+// Code-splitting with lazy loading
+const DataTable = React.lazy(() => import('./DataTable'));
+
+function Dashboard() {
+  const today = format(new Date(), 'MMM do yyyy');
+  // ...
+}
+```
+
+</td>
+</tr>
+</table>
+
+---
+
+## 🧩 Shared Optimization Techniques
+
+### 1. Component Memoization Strategy
+
+Apply this strategy to both web and native components:
+
+```tsx
+// When to use React.memo:
+// 1. For pure functional components
+// 2. When props change infrequently
+// 3. For expensive rendering operations
+
+// Component with expensive rendering
+const DataGrid = React.memo(function DataGrid({ data, columns }) {
+  // Implementation...
+  return (/* grid rendering */);
+}, (prevProps, nextProps) => {
+  // Custom comparison for complex props
+  return (
+    prevProps.data.length === nextProps.data.length &&
+    prevProps.data.every((item, i) => item.id === nextProps.data[i].id) &&
+    prevProps.columns === nextProps.columns
+  );
+});
+
+// Memoizing expensive calculations
+function ChartContainer({ data }) {
+  // Recalculated only when data changes
+  const processedData = useMemo(() => {
+    return data.map(/* expensive transformations */);
+  }, [data]);
+  
+  return <Chart data={processedData} />;
+}
+
+// Stable callback references
+function ProductList({ onProductSelect }) {
+  const handleSelect = useCallback((id) => {
+    onProductSelect(id);
+  }, [onProductSelect]);
+  
+  return (
+    <>
+      {products.map(product => (
+        <Product 
+          key={product.id}
+          onClick={handleSelect}
+          productId={product.id}
+        />
+      ))}
+    </>
+  );
+}
+```
+
+### 2. State Management Optimization
+
+```tsx
+// ❌ Avoid: Deeply nested state objects
+const [state, setState] = useState({
+  user: {
+    preferences: {
+      theme: 'light',
+      notifications: {
+        email: true,
+        push: false
+      }
+    }
+  }
+});
+
+// Later updating deeply nested property:
+setState(prev => ({
+  ...prev,
+  user: {
+    ...prev.user,
+    preferences: {
+      ...prev.user.preferences,
+      notifications: {
+        ...prev.user.preferences.notifications,
+        push: true
+      }
+    }
+  }
+}));
+
+// ✅ Better: Flatten state when possible
+const [theme, setTheme] = useState('light');
+const [emailNotifications, setEmailNotifications] = useState(true);
+const [pushNotifications, setPushNotifications] = useState(false);
+
+// Clean, targeted updates:
+setPushNotifications(true);
+
+// ✅ Alternative: Use a reducer for complex state
+const [state, dispatch] = useReducer(userReducer, initialState);
+
+// Later:
+dispatch({ type: 'TOGGLE_PUSH_NOTIFICATIONS' });
+```
+
+### 3. Virtualization for Long Lists
+
+For both platforms, virtualize lists that may contain many items:
+
+```tsx
+// Web implementation with react-window
+import { FixedSizeList } from 'react-window';
+
+function VirtualizedList({ items }) {
+  const Row = ({ index, style }) => (
+    <div style={style}>
+      <div>{items[index].name}</div>
+    </div>
+  );
+
+  return (
+    <FixedSizeList
+      height={400}
+      width="100%"
+      itemCount={items.length}
+      itemSize={35}
+    >
+      {Row}
+    </FixedSizeList>
+  );
+}
+
+// Native implementation
+import { FlatList } from 'react-native';
+
+function VirtualizedList({ items }) {
+  const renderItem = ({ item }) => (
+    <View style={styles.item}>
+      <Text>{item.name}</Text>
+    </View>
+  );
+
+  return (
+    <FlatList
+      data={items}
+      renderItem={renderItem}
+      keyExtractor={item => item.id}
+      initialNumToRender={10}
+      maxToRenderPerBatch={10}
+      windowSize={5}
+    />
+  );
+}
+```
+
+---
+
+## 🌍 Web-Specific Optimizations
+
+### 1. React 18 Concurrent Features
+
+```tsx
+// Using startTransition for non-urgent updates
+import { startTransition } from 'react';
+
+function SearchResults() {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  
+  const handleSearch = (e) => {
+    // Update the input immediately
+    setQuery(e.target.value);
+    
+    // Mark results update as non-urgent
+    startTransition(() => {
+      // This update can be interrupted
+      setResults(searchData(e.target.value));
+    });
+  };
+  
+  return (
+    <div>
+      <input value={query} onChange={handleSearch} />
+      {/* Show loading UI during transition */}
+      <div className={isPending ? 'dimmed' : ''}>
+        {results.map(result => (
+          <ResultItem key={result.id} data={result} />
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+### 2. Web Asset Optimization
+
+```tsx
+// Use next-gen image formats with responsive sizing
+function ProductImage({ product }) {
+  return (
+    <picture>
+      <source 
+        srcSet={product.imageWebp} 
+        type="image/webp" 
+        media="(min-width: 800px)"
+      />
+      <source 
+        srcSet={product.imageSm} 
+        media="(max-width: 799px)"
+      />
+      <img 
+        src={product.image} 
+        alt={product.name}
+        loading="lazy" // Native lazy loading
+        width="300"
+        height="200"
+      />
+    </picture>
+  );
+}
+
+// Load non-critical CSS asynchronously
+function loadStylesheet(url) {
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = url;
+  document.head.appendChild(link);
+}
+
+// After critical content loads
+if (typeof window !== 'undefined') {
+  window.addEventListener('load', () => {
+    requestIdleCallback(() => {
+      loadStylesheet('/non-critical-styles.css');
+    });
+  });
+}
+```
+
+### 3. DOM Optimizations
+
+```tsx
+// Batch DOM changes
+function UpdateMultipleElements() {
+  const updateDomBatch = () => {
+    // React 18 already batches these
+    setName(newName);
+    setEmail(newEmail);
+    setPhone(newPhone);
+    
+    // For legacy DOM operations outside React:
+    requestAnimationFrame(() => {
+      element1.style.height = '100px';
+      element2.className = 'updated';
+      element3.textContent = 'New content';
+    });
+  };
+}
+
+// Use CSS transforms for animations
+// ❌ Avoid: Changing width/height/left/top
+// ✅ Prefer: transform and opacity
+
+const styles = {
+  animatedElement: {
+    transform: 'translateX(10px) scale(1.1)',
+    transition: 'transform 150ms ease-out',
+    willChange: 'transform' // For browsers that support it
+  }
+};
+```
+
+---
+
+## 📱 Native-Specific Optimizations
+
+### 1. React Native Animation Optimization
+
+```tsx
+// Using react-native-reanimated for UI thread animations
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring
+} from 'react-native-reanimated';
+
+function AnimatedComponent() {
+  // Values shared between JS and UI thread
+  const offset = useSharedValue(0);
+  
+  // Style calculated on the UI thread
+  const animatedStyles = useAnimatedStyle(() => {
+    return {
+      transform: [{ translateX: offset.value }]
+    };
+  });
+  
+  const handlePress = () => {
+    // Run on UI thread without blocking JS
+    offset.value = withSpring(100);
+  };
+  
+  return (
+    <Pressable onPress={handlePress}>
+      <Animated.View style={[styles.box, animatedStyles]} />
+    </Pressable>
+  );
+}
+```
+
+### 2. Native Asset and Memory Management
+
+```tsx
+// Image optimization
+import FastImage from 'react-native-fast-image';
+
+function OptimizedImageList({ products }) {
+  // Preload critical images
+  useEffect(() => {
+    const uris = products.slice(0, 5).map(p => ({ uri: p.image }));
+    FastImage.preload(uris);
+  }, [products]);
+  
+  return (
+    <FlatList
+      data={products}
+      renderItem={({ item }) => (
+        <FastImage
+          style={styles.productImage}
+          source={{ uri: item.image }}
+          resizeMode={FastImage.resizeMode.cover}
+        />
+      )}
+      // Remove hidden items from memory
+      removeClippedSubviews={true}
+      // Unload images on scroll
+      onEndReachedThreshold={0.5}
+    />
+  );
+}
+
+// Memory leak prevention
+function ComponentWithCleanup() {
+  useEffect(() => {
+    const subscription = someService.subscribe();
+    // Important: Clean up to prevent memory leaks
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+}
+```
+
+### 3. Native Navigation Optimization
+
+```tsx
+// Optimize screen transitions
+import { NavigationContainer } from '@react-navigation/native';
+import { createStackNavigator, TransitionPresets } from '@react-navigation/stack';
+
+const Stack = createStackNavigator();
+
+function AppNavigator() {
+  return (
+    <NavigationContainer>
+      <Stack.Navigator
+        screenOptions={{
+          // Shared element transitions for smoother UX
+          ...TransitionPresets.SlideFromRightIOS,
+          // Faster transition animations
+          transitionSpec: {
+            open: { animation: 'timing', config: { duration: 300 } },
+            close: { animation: 'timing', config: { duration: 300 } },
+          },
+          // Keep screen in memory when navigating away
+          detachPreviousScreen: false,
+        }}
+      >
+        <Stack.Screen name="Home" component={HomeScreen} />
+        <Stack.Screen name="Details" component={DetailsScreen} />
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+}
+```
+
+---
+
+## 📊 Performance Measurement & Validation
+
+### Web Performance Measurement
+
+```tsx
+// Component with performance monitoring
+import { useCallback, useState } from 'react';
+import { Profiler } from 'react';
+
+function onRenderCallback(
+  id, // the "id" prop of the Profiler tree
+  phase, // "mount" or "update"
+  actualDuration, // time spent rendering
+  baseDuration, // estimated time for entire subtree
+  startTime, // when React began rendering
+  commitTime // when React committed changes
+) {
+  // Log or send to analytics
+  console.log(`${id} took ${actualDuration}ms to ${phase}`);
+  
+  // Alert on slow renders in development
+  if (process.env.NODE_ENV === 'development' && actualDuration > 10) {
+    console.warn(`Slow render detected: ${id} took ${actualDuration}ms`);
+  }
+}
+
+function ProfiledComponent() {
+  return (
+    <Profiler id="MyComponent" onRender={onRenderCallback}>
+      <ExpensiveComponent />
+    </Profiler>
+  );
+}
+```
+
+### Native Performance Measurement
+
+```tsx
+// React Native performance monitoring
+import { InteractionManager } from 'react-native';
+
+function trackInteraction() {
+  const start = Date.now();
+  
+  // Create a tracked interaction
+  const handle = InteractionManager.createInteractionHandle();
+  
+  // Perform work
+  expensiveOperation();
+  
+  // Complete the interaction
+  InteractionManager.clearInteractionHandle(handle);
+  
+  console.log(`Operation took: ${Date.now() - start}ms`);
+}
+
+// Monitor JS frame rate
+const frameCount = 0;
+const startTime = Date.now();
+
+const checkFrameRate = () => {
+  frameCount++;
+  const elapsed = Date.now() - startTime;
+  if (elapsed > 1000) {
+    const fps = Math.round((frameCount * 1000) / elapsed);
+    console.log(`Current frame rate: ${fps}fps`);
+    
+    if (fps < 55) {
+      console.warn('Frame rate below target 60fps');
+    }
+    
+    frameCount = 0;
+    startTime = Date.now();
+  }
+  requestAnimationFrame(checkFrameRate);
+};
+
+requestAnimationFrame(checkFrameRate);
+```
+
+---
+
+## 🚦 Performance Testing in CI/CD
+
+### Web Performance Testing
+
+```yaml
+# Example GitHub Action for web performance testing
+name: Web Performance Testing
+
+on:
+  pull_request:
+    paths:
+      - 'packages/atlas-web/**'
+
+jobs:
+  lighthouse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run Lighthouse CI
+        uses: treosh/lighthouse-ci-action@v9
+        with:
+          urls: |
+            https://staging.example.com/
+          budgetPath: ./lighthouse-budget.json
+          uploadArtifacts: true
+          
+  bundle-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+      - name: Install dependencies
+        run: npm ci
+      - name: Build with bundle analysis
+        run: npm run build:analyze
+      - name: Check bundle size
+        uses: jackfranklin/check-bundle-size-action@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          bundleSize: ./bundle-stats.json
+          thresholds: |
+            main.js=100KB
+            vendors.js=250KB
+```
+
+### Native Performance Testing
+
+```yaml
+# Example GitHub Action for native performance testing
+name: Native Performance Testing
+
+on:
+  pull_request:
+    paths:
+      - 'packages/atlas-native/**'
+
+jobs:
+  hermes-profile:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup React Native environment
+        uses: actions/setup-node@v3
+      - name: Install dependencies
+        run: npm ci
+      - name: Build and profile with Hermes
+        run: npm run profile:hermes
+      - name: Analyze startup time
+        run: node ./scripts/analyze-startup-time.js
+        
+  bundle-size:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Check bundle size
+        run: |
+          npm ci
+          npm run build:android
+          node ./scripts/check-bundle-size.js --max-size 5MB
+```
+
+---
+
+## 📈 Progressive Performance Improvement
+
+### Performance Audit Checklist
+
+1. **Component Audit**
+   - [ ] Review component render cycles with React DevTools Profiler
+   - [ ] Identify unnecessary re-renders and implement `React.memo` where appropriate
+   - [ ] Check for proper hook dependency arrays
+   - [ ] Verify that effects are cleaning up resources properly
+
+2. **Bundle Optimization**
+   - [ ] Run bundle analysis tools (Webpack Bundle Analyzer, Source Map Explorer)
+   - [ ] Identify large dependencies and consider alternatives
+   - [ ] Implement code-splitting for routes and heavy components
+   - [ ] Ensure tree-shaking is working by checking bundled output
+
+3. **Resource Optimization**
+   - [ ] Optimize and properly size images
+   - [ ] Implement lazy loading for offscreen content
+   - [ ] Audit network requests for unnecessary or duplicate calls
+   - [ ] Consider server-side rendering for critical content
+
+4. **User Experience**
+   - [ ] Measure and optimize Time to Interactive
+   - [ ] Add loading states and skeleton screens
+   - [ ] Implement throttling and debouncing for event handlers
+   - [ ] Test performance on low-end devices
+
+---
+
+> **Remember**: Performance optimization is continuous, not a one-time task. Regularly profile your components and prioritize improvements with the highest user impact.
+```

@@ -1,0 +1,78 @@
+---
+description: Package Installation and Dependency Management Standards
+globs: packages/**/{package.json,yarn.lock,pnpm-lock.yaml,package-lock.json}
+alwaysApply: true
+---
+
+# 📦 Package Installation and Dependency Management
+
+This document defines best practices for managing dependencies across the atlas component ecosystem, ensuring consistency, security, and optimal performance across both web and native platforms.
+
+## 🎯 Core Installation Principles
+
+When installing libraries:
+
+1. **Use Package Manager Scripts** - Do not rely on manual version selection or outdated knowledge. Use the appropriate package manager to install the latest compatible version:
+
+```bash
+# yarn (preferred)
+yarn add [-D] package-name
+
+# npm
+npm install [--save-dev] package-name
+```
+
+2. **Version Management** - For critical dependencies, follow these versioning guidelines:
+   - Use exact versions (`"react": "18.2.0"`) for core framework dependencies
+   - Use caret ranges (`"lodash": "^4.17.21"`) for utilities and stable libraries
+   - Pin exact versions for dependencies with known breaking changes
+
+## 🔄 Cross-Platform Dependency Management
+
+### Shared Dependencies (atlas-core, atlas-tokens)
+- Keep versions in sync across all packages to prevent subtle incompatibilities
+- Use workspaces to manage shared dependencies (via pnpm/yarn workspaces)
+- Document cross-package dependencies in each package's README.md
+
+### Platform-Specific Dependencies
+- **Web-Only Dependencies** (atlas-web)
+  - Clearly document browser compatibility requirements
+  - Consider bundle size impacts (use `bundlephobia` to evaluate)
+  
+- **Native-Only Dependencies** (atlas-native)
+  - Document iOS and Android version compatibility
+  - Verify native module support for both platforms
+  - Consider impact on app binary size and startup time
+
+## 🔒 Security and Maintenance
+
+- Run `yarn audit` or equivalent regularly to check for vulnerabilities
+- Include automated dependency checks in CI pipelines
+- Document policy for handling dependency deprecations
+- Review licenses for all production dependencies
+
+## 🧪 Testing Dependency Changes
+
+Before committing dependency changes:
+1. Run the full test suite to verify compatibility
+2. Test platform-specific functionality separately for atlas-web and atlas-native
+3. Verify build process completes successfully
+4. Document significant version changes in commit messages
+
+## 📋 Example: Adding a Component Library Dependency
+
+```bash
+# 1. Navigate to the appropriate package
+cd packages/atlas-web
+
+# 2. Add the dependency with your package manager
+pnpm add -D @floating-ui/react
+
+# 3. Update peer dependencies if needed
+# Edit package.json manually for peer dependencies
+
+# 4. Document the new dependency in README or CHANGELOG
+```
+
+> **Note**: For dependencies used across packages, consider adding them to the root workspace and using proper workspace protocols.
+```

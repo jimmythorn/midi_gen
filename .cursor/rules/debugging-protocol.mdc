@@ -1,0 +1,202 @@
+---
+alwaysApply: true
+---
+
+# UNIVERSAL SOFTWARE DEBUGGING PROTOCOL - MANDATORY EXECUTION
+
+## STOP: Execute This Protocol BEFORE Proposing ANY Solutions
+
+Assumption bias and premature solution-jumping have cost users days of wasted effort across all software domains. Follow this protocol religiously for ANY debugging scenario.
+
+---
+
+## PHASE 1: MANDATORY DIAGNOSTIC INTERROGATION
+
+Execute ALL steps before proposing solutions.
+
+### Environment & Context
+
+- What environment(s) are you seeing this in? (dev/staging/prod, OS, browser, device)
+- Does this happen consistently or intermittently?
+- Can you reproduce this with minimal steps?
+- When did this issue first appear? (recent changes, deployments, updates)
+
+### Precise Symptom Analysis
+
+- Describe the EXACT behavior vs expected behavior (specific, measurable differences)
+- When exactly does the issue occur? (timing, sequence, conditions)
+- Does this affect single instances or multiple? (isolation vs systemic)
+- What's the scope of impact? (users affected, frequency, severity)
+
+### Data & Evidence Collection
+
+- What are the actual values/outputs involved? (logs, metrics, measurements)
+- Are there error messages, warnings, or stack traces?
+- Can you capture the problematic state/data during the issue?
+- What debugging have you already attempted?
+
+### Diagnostic Question Templates
+
+- Scope: Does this affect single instance/all instances/specific subset?
+- Timing: When exactly does this happen in the process/workflow/lifecycle?
+- Environment: Does this behave differently in dev/staging/prod/different browsers/devices?
+- Data: What are the actual inputs/outputs/values when this occurs?
+- History: Did this work before? What changed recently?
+- Isolation: Can you reproduce this with minimal data/simple case/isolated component?
+
+---
+
+## PHASE 2: BIAS INTERRUPTION CHECKLIST
+
+Consider multiple problem categories:
+
+- Data/Input Issue? (validation, formatting, edge cases, null/undefined)
+- Environment Issue? (platform differences, configuration, dependencies)
+- Logic/Algorithm Issue? (business logic, calculations, conditionals)
+- State Management Issue? (synchronization, race conditions, stale data)
+- Performance Issue? (memory, CPU, network, blocking operations)
+- Integration Issue? (API calls, database, external services)
+- Concurrency Issue? (threading, async operations, timing)
+- Configuration Issue? (settings, environment variables, feature flags)
+
+Consider: What if my first assumption about the root cause is completely wrong?
+
+---
+
+## PHASE 3: SOLUTION HIERARCHY - MANDATORY ORDER
+
+Follow this exact order:
+
+### Tier 1: 30-Second Fixes - Try FIRST
+
+1. Data validation: null checks, type validation, boundary conditions
+2. Environment conditionals: OS, browser, device-specific logic
+3. Basic value sanitization: trimming, parsing, formatting
+4. Simple configuration changes: flags, settings, parameters
+5. Cache clearing: browser cache, application cache, temporary data
+
+### Tier 2: 2-5 Minute Fixes - Try SECOND
+
+1. Input/output verification: log actual vs expected values
+2. State inspection: current state, state transitions, data flow
+3. Dependency updates: version conflicts, compatibility issues
+4. Error handling: try-catch blocks, graceful degradation
+5. Timing adjustments: delays, debouncing, throttling
+
+### Tier 3: 10+ Minute Fixes - Try LAST
+
+1. Algorithm optimization: performance improvements, refactoring
+2. Architecture changes: design patterns, structural modifications
+3. Complex state management: advanced synchronization, coordination
+4. Custom implementations: building new solutions from scratch
+
+---
+
+## PHASE 4: EVIDENCE-BASED VALIDATION
+
+Before implementing ANY solution:
+
+- Log the actual values to confirm hypothesis
+- Test in isolation to verify the root cause
+- Create minimal reproduction to validate theory
+- Examine what the data reveals about failure point
+
+Provide diagnostic code/steps BEFORE proposing fixes.
+
+---
+
+## PHASE 5: HYPOTHESIS RANKING
+
+Present solutions in this priority order:
+
+1. High Probability + Low Effort (data validation, environment differences)
+2. High Probability + Medium Effort (state issues, configuration problems)
+3. Medium Probability + Low Effort (edge cases, error handling)
+4. Low Probability + High Effort (architecture overhauls, complex algorithms)
+
+State confidence level with specific percentages.
+
+---
+
+## UNIVERSAL ISSUE QUICK REFERENCE
+
+If user reports these symptoms, check these causes FIRST:
+
+- Inconsistent behavior → Environment differences, data validation
+- Works sometimes, fails others → Race conditions, async timing, edge cases
+- Slow performance → Data size, algorithm efficiency, blocking operations
+- Unexpected output → Input validation, type coercion, null/undefined
+- Crashes/errors → Exception handling, boundary conditions, resource limits
+- UI glitches → State synchronization, rendering timing, CSS conflicts
+- Network issues → Timeout settings, error handling, retry logic
+- Data corruption → Serialization, encoding, concurrent access
+
+---
+
+## SYSTEMATIC DEBUGGING PROCESS
+
+For ANY software issue, follow this sequence:
+
+1. Reproduce → Can you make it happen reliably?
+2. Isolate → What's the minimal case that triggers it?
+3. Inspect → What are the actual values/states involved?
+4. Hypothesize → What are 3 possible root causes?
+5. Test → Which hypothesis can you validate quickest?
+6. Fix → Apply the simplest solution that addresses the root cause
+7. Verify → Does the fix resolve the issue without side effects?
+
+---
+
+## DOMAIN-SPECIFIC QUICK CHECKS
+
+Frontend Issues: Console errors, network tab, element inspector, responsive design
+Backend Issues: Server logs, database queries, API responses, resource usage
+Mobile Issues: Device logs, platform differences, memory usage, network conditions
+Database Issues: Query performance, indexing, data integrity, connection pooling
+DevOps Issues: Configuration, environment variables, deployment logs, resource limits
+
+---
+
+## FAILURE PREVENTION IMPERATIVES
+
+1. Diagnose the problem, don't assume the solution
+2. Simple, common causes before complex, rare ones
+3. Data and environment issues are more common than logic errors
+4. If suggesting architecture changes, you probably missed something basic
+5. Logs and evidence beat theories and assumptions
+6. Reproduce first, theorize second
+
+---
+
+## RED FLAGS - STOP AND RECONSIDER
+
+If suggesting these WITHOUT trying simpler fixes first, STOP:
+
+- Complete rewrites or architecture overhauls
+- Complex design pattern implementations
+- Advanced optimization techniques
+- Custom framework/library solutions
+- "Let's try a completely different approach"
+- Multiple simultaneous changes
+
+Check: Did I try data validation, environment checks, and basic logging first?
+
+---
+
+## SUCCESS INDICATORS
+
+- Issue resolved in <3 diagnostic iterations
+- Correct problem category identified on first try
+- Evidence-gathering steps provided before solutions
+- Root cause matches hypothesis
+
+## FAILURE INDICATORS
+
+- > 5 different solution approaches suggested
+- Jumped to complex solutions without evidence
+- No diagnostic questions asked first
+- User says "none of these are working" or "this is getting complicated"
+
+---
+
+Every debugging session that takes >2 hours without systematic diagnosis is a failure of process, not complexity. Execute this protocol religiously for ALL software issues.
