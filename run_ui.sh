@@ -5,13 +5,32 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 PORT="${PORT:-8501}"
 HOST="${HOST:-0.0.0.0}"
-export PATH="${HOME}/.local/bin:/usr/local/bin:${PATH}"
 export STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
 
+if [[ -f "$ROOT/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT/.env"
+  set +a
+fi
+
+# Keep the project venv first. Prepending /usr/local/bin shadows it with
+# system python3 while `pip` can still be the venv one, which then rejects --user.
+if [[ -x "$ROOT/venv/bin/python" ]]; then
+  PYTHON="$ROOT/venv/bin/python"
+  export PATH="$ROOT/venv/bin:${HOME}/.local/bin:/usr/local/bin:${PATH}"
+elif [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
+  PYTHON="${VIRTUAL_ENV}/bin/python"
+  export PATH="${VIRTUAL_ENV}/bin:${HOME}/.local/bin:/usr/local/bin:${PATH}"
+else
+  export PATH="${HOME}/.local/bin:/usr/local/bin:${PATH}"
+  PYTHON="$(command -v python3)"
+fi
+
 # Prefer editable install when available; otherwise symlink package name
-if ! python3 -c "import midi_gen" >/dev/null 2>&1; then
+if ! "$PYTHON" -c "import midi_gen" >/dev/null 2>&1; then
   if [[ -f "$ROOT/pyproject.toml" ]]; then
-    pip install --user -e "$ROOT" >/dev/null
+    "$PYTHON" -m pip install -e "$ROOT"
   else
     PY_LINK_ROOT="${TMPDIR:-/tmp}/midi_gen_py"
     mkdir -p "$PY_LINK_ROOT"
@@ -41,14 +60,14 @@ if command -v midi-gen-ui >/dev/null 2>&1; then
   exec midi-gen-ui
 fi
 
-UI_APP="$(python3 - <<'PY'
+UI_APP="$("$PYTHON" - <<'PY'
 import midi_gen, pathlib
 print(pathlib.Path(midi_gen.__file__).resolve().parent / "ui_app.py")
 PY
 )"
 
 echo "MIDI Style Lab → http://127.0.0.1:${PORT}"
-exec python3 -m streamlit run "$UI_APP" \
+exec "$PYTHON" -m streamlit run "$UI_APP" \
   --server.port "$PORT" \
   --server.address "$HOST" \
   --server.headless true \

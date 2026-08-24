@@ -2,13 +2,15 @@
 Live MIDI output for auditioning into a DAW (Logic Pro via macOS IAC).
 
 Streams note/CC/pitch-bend from a .mid file over a system MIDI output port
-using wall-clock scheduling. Optional app-side count-in and loop (no DAW MIDI
-clock / Logic scripting). Enable IAC in Audio MIDI Setup, point a Logic
-instrument's MIDI In at that bus, then Play.
+using wall-clock scheduling at sketch BPM, or by following Logic's MIDI
+Start/Clock so notes land on the DAW grid. Optional outbound clock if Logic
+is the slave. Enable IAC in Audio MIDI Setup, point a Logic instrument's
+MIDI In at that bus, then Play.
 """
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from dataclasses import dataclass
@@ -17,7 +19,14 @@ from typing import Callable, List, Optional, Sequence, Tuple
 
 import mido
 
-from .midi_tempo import midi_file_schedule
+from .midi_tempo import (
+    midi_file_schedule,
+    midi_file_tick_schedule,
+    seconds_schedule_at_bpm,
+    tick_to_seconds,
+    due_index,
+    spp_to_ticks,
+)
 
 try:
     import rtmidi  # noqa: F401
@@ -54,6 +63,21 @@ def list_output_ports() -> List[str]:
             except Exception:
                 pass
         return list(mido.get_output_names())
+    except Exception:
+        return []
+
+
+def list_input_ports() -> List[str]:
+    """Return MIDI input port names (empty if backend missing or no devices)."""
+    if not rtmidi_available():
+        return []
+    try:
+        if getattr(mido.backend, "module_name", "") != "mido.backends.rtmidi":
+            try:
+                mido.set_backend("mido.backends.rtmidi")
+            except Exception:
+                pass
+        return list(mido.get_input_names())
     except Exception:
         return []
 
@@ -103,11 +127,21 @@ PORT_LOST_MESSAGE = "MIDI port lost — Refresh ports."
 
 
 def _all_notes_off(port, channels: range = range(16)) -> None:
-    """Panic flush: CC123 (All Notes Off) + pitch-bend reset on every channel."""
+    """
+    Release hanging notes on ``port``.
+
+    Logic software instruments often ignore CC123 (All Notes Off) over IAC, so
+    Stop must also drop sustain, send All Sound Off, and explicit note_off for
+    every pitch. Pitch-bend reset stays so tape wobble does not leave a bend.
+    """
     for ch in channels:
         try:
+            port.send(mido.Message("control_change", channel=ch, control=64, value=0))
+            port.send(mido.Message("control_change", channel=ch, control=120, value=0))
             port.send(mido.Message("control_change", channel=ch, control=123, value=0))
             port.send(mido.Message("pitchwheel", channel=ch, pitch=0))
+            for note in range(128):
+                port.send(mido.Message("note_off", channel=ch, note=note, velocity=0))
         except Exception:
             pass
 
@@ -119,7 +153,8 @@ def panic_flush(port) -> None:
 
 def panic_flush_named(port_name: Optional[str]) -> None:
     """
-    Open ``port_name`` briefly and send all-notes-off (CC123).
+    Open ``port_name`` briefly and send a full note-kill flush
+    (sustain off, CC120, CC123, explicit note_off × 128).
 
     Used when Stop must flush hanging notes even if the play worker is stuck,
     and when Re-Play abandons a prior thread that did not join in time.
@@ -170,11 +205,41 @@ def _is_port_loss_error(exc: BaseException) -> bool:
     return any(n in text for n in needles)
 
 
+CLOCKS_PER_QUARTER = 24
+
+
 def bar_duration_sec(bpm: float, beats_per_bar: int = 4) -> float:
     """Wall-clock seconds for one bar at the given tempo."""
     safe_bpm = max(1.0, float(bpm or 120.0))
     safe_beats = max(1, int(beats_per_bar or 4))
     return (60.0 / safe_bpm) * safe_beats
+
+
+def clock_period_sec(bpm: float) -> float:
+    """Seconds between MIDI clocks (24 per quarter note)."""
+    return (60.0 / max(1.0, float(bpm or 120.0))) / CLOCKS_PER_QUARTER
+
+
+def pass_duration_sec(
+    file_duration: float,
+    bpm: float,
+    *,
+    beats_per_bar: int = 4,
+    bars: Optional[float] = None,
+) -> float:
+    """
+    Loop / clock length on the beat grid.
+
+    Prefer explicit bar count (sketch length). Otherwise snap file length up
+    to the next beat so wrap-around does not drift.
+    """
+    beat = 60.0 / max(1.0, float(bpm or 120.0))
+    raw = max(0.0, float(file_duration or 0.0))
+    if bars is not None and float(bars) > 0:
+        raw = max(raw, bar_duration_sec(bpm, beats_per_bar) * float(bars))
+    if raw <= 0:
+        return beat * max(1, int(beats_per_bar or 4))
+    return max(beat, math.ceil(raw / beat - 1e-9) * beat)
 
 
 def midi_file_bpm(path: str, default: float = 120.0) -> float:
@@ -192,10 +257,11 @@ def midi_file_bpm(path: str, default: float = 120.0) -> float:
 
 class LiveMidiPlayer:
     """
-    Background wall-clock player for one MIDI file → one output port.
+    Background player for one MIDI file → one output port.
 
-    App-side count-in and loop only — no DAW MIDI clock / Logic scripting.
-    Safe to call stop() from the UI thread. Only one clip plays at a time.
+    Default: wall-clock at sketch BPM. Optional follow of incoming MIDI
+    Start/Clock so notes land on Logic's grid. Safe to call stop() from the
+    UI thread. Only one clip plays at a time.
     """
 
     def __init__(self) -> None:
@@ -205,7 +271,7 @@ class LiveMidiPlayer:
         self._port_name: Optional[str] = None
         self._error: Optional[str] = None
         self._playing = False
-        self._phase: str = "idle"  # idle | count_in | playing
+        self._phase: str = "idle"  # idle | syncing | count_in | playing
         self._looping = False
         self._count_in_bars: float = 0.0
         self._count_in_end: Optional[float] = None  # perf_counter deadline
@@ -229,7 +295,7 @@ class LiveMidiPlayer:
 
     @property
     def phase(self) -> str:
-        """idle | count_in | playing — honest UI caption source."""
+        """idle | syncing | count_in | playing — honest UI caption source."""
         with self._lock:
             if not (self._playing and self._thread is not None and self._thread.is_alive()):
                 return "idle"
@@ -286,6 +352,8 @@ class LiveMidiPlayer:
         Finished / idle captions are owned by the UI after the worker exits.
         """
         phase = self.phase
+        if phase == "syncing":
+            return "Waiting for Logic Play…"
         if phase == "count_in":
             rem = self.count_in_remaining_sec
             rem_bb = self.count_in_remaining_bars_beats()
@@ -349,8 +417,11 @@ class LiveMidiPlayer:
         count_in_bars: float = 0.0,
         bpm: Optional[float] = None,
         beats_per_bar: int = 4,
+        bars: Optional[float] = None,
         loop: bool = False,
         click: bool = False,
+        send_clock: bool = False,
+        sync: str = "internal",
         on_finished: Optional[Callable[[], None]] = None,
     ) -> None:
         """
@@ -358,9 +429,13 @@ class LiveMidiPlayer:
 
         count_in_bars: silent (default) or click bars before notes — app-side
         only, so Logic Record can already be rolling before the sketch starts.
-        loop: repeat the sketch until Stop (all-notes-off between passes).
+        bars: sketch length used for loop wrap and clock span (beat-aligned).
+        loop: repeat the sketch until Stop (no gap; no panic between passes).
         click: when True, emit a soft metronome note each beat of the count-in
         (same port — will be captured if Logic is recording; off by default).
+        send_clock: MIDI Start/Clock/Stop at sketch BPM (Logic as slave).
+        sync: ``internal`` wall-clock, or ``follow`` wait for Logic MIDI Start
+        then chase incoming clock so notes hit Logic's beat.
         """
         midi_path = Path(path)
         if not midi_path.is_file():
@@ -383,15 +458,29 @@ class LiveMidiPlayer:
                 raise RuntimeError(f"Port not found: {target!r}. Available: {ports}")
             target = match
 
-        schedule, _duration = midi_file_schedule(str(midi_path))
-        if not schedule:
+        tick_schedule, last_tick, tpb = midi_file_tick_schedule(str(midi_path))
+        if not tick_schedule:
             raise RuntimeError("MIDI file has no playable messages.")
 
         play_bpm = float(bpm) if bpm and bpm > 0 else midi_file_bpm(str(midi_path))
-        count_bars = max(0.0, float(count_in_bars or 0.0))
+        follow = str(sync or "internal").lower() == "follow"
+        use_clock_out = bool(send_clock) and not follow
+        count_bars = 0.0 if follow else max(0.0, float(count_in_bars or 0.0))
         count_in_sec = bar_duration_sec(play_bpm, beats_per_bar) * count_bars
         beat_sec = 60.0 / max(1.0, play_bpm)
         click_beats = int(round(count_bars * max(1, int(beats_per_bar or 4))))
+        beat_ticks = max(1, int(tpb))
+        pass_ticks = max(1, int(last_tick))
+        if bars is not None and float(bars) > 0:
+            pass_ticks = max(
+                pass_ticks,
+                int(round(float(bars) * max(1, int(beats_per_bar or 4)) * beat_ticks)),
+            )
+        if pass_ticks % beat_ticks:
+            pass_ticks = ((pass_ticks + beat_ticks - 1) // beat_ticks) * beat_ticks
+        schedule = seconds_schedule_at_bpm(tick_schedule, play_bpm, tpb)
+        pass_len = tick_to_seconds(pass_ticks, play_bpm, tpb)
+        clock_dt = clock_period_sec(play_bpm)
 
         with self._lock:
             self._stop.set()
@@ -418,7 +507,11 @@ class LiveMidiPlayer:
             self._error = None
             self._port_name = target
             self._playing = True
-            self._phase = "count_in" if count_in_sec > 0 else "playing"
+            self._phase = (
+                "syncing"
+                if follow
+                else ("count_in" if count_in_sec > 0 else "playing")
+            )
             self._looping = bool(loop)
             self._count_in_bars = count_bars if count_in_sec > 0 else 0.0
             self._count_in_end = None
@@ -427,12 +520,15 @@ class LiveMidiPlayer:
             stop_flag = self._stop
 
         def _wait_until(deadline: float) -> bool:
-            """Sleep until deadline; return True if stop requested."""
-            while time.perf_counter() < deadline:
+            """Sleep until deadline; 2ms chunks, spin last ~1ms. True if stop."""
+            while True:
                 if stop_flag.is_set():
                     return True
-                time.sleep(min(0.01, max(0.0, deadline - time.perf_counter())))
-            return stop_flag.is_set()
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0:
+                    return stop_flag.is_set()
+                if remaining > 0.0015:
+                    time.sleep(min(0.002, remaining - 0.001))
 
         def _send(port, msg: mido.Message) -> None:
             try:
@@ -484,49 +580,161 @@ class LiveMidiPlayer:
             # click=False: truly silent — wait only, no notes.
             return _wait_until(start + count_in_sec)
 
-        def _run_schedule(port) -> bool:
-            """Play one pass; return True if stop requested."""
+        def _run_timed(port) -> None:
+            """Wall-clock notes at sketch BPM. Optional outbound clock as slave master."""
             with self._lock:
                 self._phase = "playing"
                 self._count_in_end = None
-            start = time.perf_counter()
-            for abs_sec, msg in schedule:
+            if use_clock_out:
+                try:
+                    _send(port, mido.Message("songpos", pos=0))
+                except Exception:
+                    pass
+                _send(port, mido.Message("start"))
+            session_start = time.perf_counter()
+            # Downbeat is MIDI Start. First clock is 1/24 after, not at t=0.
+            next_clock_n = 1
+            pass_index = 0
+            i = 0
+            while True:
                 if stop_flag.is_set():
-                    return True
-                delay = abs_sec - (time.perf_counter() - start)
-                if delay > 0:
-                    if _wait_until(time.perf_counter() + delay):
+                    return
+                pass_end = (pass_index + 1) * pass_len
+                note_t: Optional[float] = None
+                if i < len(schedule):
+                    candidate = pass_index * pass_len + schedule[i][0]
+                    if candidate <= pass_end + 1e-9:
+                        note_t = candidate
+                clock_t = next_clock_n * clock_dt
+                due: List[float] = [pass_end]
+                if note_t is not None:
+                    due.append(note_t)
+                if use_clock_out and clock_t <= pass_end + 1e-9:
+                    due.append(clock_t)
+                t = min(due)
+                if _wait_until(session_start + t):
+                    return
+                if use_clock_out and abs(clock_t - t) <= 1e-9:
+                    elapsed = time.perf_counter() - session_start
+                    now_n = int(elapsed / clock_dt + 1e-9)
+                    if now_n > next_clock_n:
+                        next_clock_n = now_n
+                        continue
+                    _send(port, mido.Message("clock"))
+                    next_clock_n += 1
+                    continue
+                if note_t is not None and abs(note_t - t) <= 1e-9:
+                    _send(port, schedule[i][1])
+                    i += 1
+                    continue
+                with self._lock:
+                    should_loop = self._looping
+                if not should_loop or stop_flag.is_set():
+                    return
+                pass_index += 1
+                i = 0
+
+        def _run_follow(port, sync_in) -> None:
+            """Fire notes on Logic MIDI Start, then chase incoming clock."""
+            with self._lock:
+                self._phase = "syncing"
+                self._count_in_end = None
+            ticks_per_clock = float(tpb) / float(CLOCKS_PER_QUARTER)
+            song_tick = 0.0
+            i = 0
+            pass_index = 0
+            locked = False
+
+            def _flush() -> bool:
+                nonlocal i, pass_index
+                while True:
+                    local = song_tick - pass_index * pass_ticks
+                    if local < -1e-9:
+                        return False
+                    new_i = due_index(tick_schedule, i, local)
+                    for k in range(i, new_i):
+                        _send(port, tick_schedule[k][1])
+                    i = new_i
+                    if local + 1e-9 < pass_ticks:
+                        return False
+                    with self._lock:
+                        looping_now = self._looping
+                    if not looping_now:
                         return True
-                if stop_flag.is_set():
-                    return True
-                _send(port, msg)
-            return stop_flag.is_set()
+                    pass_index += 1
+                    i = 0
+
+            while not stop_flag.is_set():
+                try:
+                    pending = list(sync_in.iter_pending())
+                except Exception:
+                    pending = []
+                if not pending:
+                    time.sleep(0.001)
+                    continue
+                for msg in pending:
+                    typ = getattr(msg, "type", "")
+                    if typ == "start":
+                        song_tick = 0.0
+                        i = 0
+                        pass_index = 0
+                        locked = True
+                        with self._lock:
+                            self._phase = "playing"
+                        if _flush():
+                            return
+                    elif typ == "continue":
+                        locked = True
+                        with self._lock:
+                            self._phase = "playing"
+                        if _flush():
+                            return
+                    elif typ == "songpos":
+                        song_tick = float(
+                            spp_to_ticks(int(getattr(msg, "pos", 0) or 0), tpb)
+                        )
+                        bar_ticks = beat_ticks * max(1, int(beats_per_bar or 4))
+                        if bar_ticks and int(round(song_tick)) % bar_ticks == 0:
+                            locked = True
+                            pass_index = int(song_tick // pass_ticks) if pass_ticks else 0
+                            local = song_tick - pass_index * pass_ticks
+                            i = due_index(tick_schedule, 0, local)
+                            with self._lock:
+                                self._phase = "playing"
+                            if _flush():
+                                return
+                    elif typ == "clock":
+                        if not locked:
+                            continue
+                        song_tick += ticks_per_clock
+                        if _flush():
+                            return
+                    elif typ == "stop":
+                        if locked:
+                            return
 
         def _run() -> None:
             port = None
+            sync_in = None
+            sent_start = False
             try:
                 try:
                     port = mido.open_output(target)
                 except Exception as exc:
                     # Open failure is always a port problem for the user.
                     raise RuntimeError(PORT_LOST_MESSAGE) from exc
+                if follow:
+                    try:
+                        sync_in = mido.open_input(target)
+                    except Exception:
+                        sync_in = None
+                if follow and sync_in is not None:
+                    _run_follow(port, sync_in)
+                    return
                 if _run_count_in(port):
                     return
-                while True:
-                    if _run_schedule(port):
-                        return
-                    with self._lock:
-                        should_loop = self._looping
-                    if not should_loop or stop_flag.is_set():
-                        return
-                    # Flush hanging notes between passes; keep Playing honest.
-                    try:
-                        panic_flush(port)
-                    except Exception:
-                        pass
-                    # Tiny gap so Logic sees a clean boundary between loops.
-                    if _wait_until(time.perf_counter() + 0.05):
-                        return
+                sent_start = bool(use_clock_out)
+                _run_timed(port)
             except Exception as exc:
                 with self._lock:
                     if isinstance(exc, RuntimeError) and str(exc) == PORT_LOST_MESSAGE:
@@ -536,8 +744,18 @@ class LiveMidiPlayer:
                     else:
                         self._error = str(exc)
             finally:
+                if sync_in is not None:
+                    try:
+                        sync_in.close()
+                    except Exception:
+                        pass
                 if port is not None:
                     try:
+                        if sent_start:
+                            try:
+                                port.send(mido.Message("stop"))
+                            except Exception:
+                                pass
                         panic_flush(port)
                         port.close()
                     except Exception:
@@ -563,11 +781,11 @@ class LiveMidiPlayer:
 
     def stop(self, wait: bool = True, timeout: float = 2.0) -> None:
         """
-        Hard Stop: request worker exit, panic-flush (CC123), clear Playing.
+        Hard Stop: request worker exit, panic-flush, clear Playing.
 
         Default wait=True so the UI does not linger on Playing. Always flushes
-        all-notes-off on the active port name so hanging notes die even when
-        the worker is slow or stuck.
+        hanging notes on the active port (explicit note_off + CC120/123) even
+        when the worker is slow or stuck — Logic ignores CC123 alone.
         """
         with self._lock:
             self._stop.set()

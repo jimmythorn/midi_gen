@@ -16,7 +16,11 @@ if "midi_gen" not in sys.modules:
     sys.modules["midi_gen"] = _pkg
 
 from midi_gen.arpeggio import create_arpeggio
-from midi_gen.cursor_style_lookup import lookup_musician_style, generate_midi_for_style
+from midi_gen.cursor_style_lookup import (
+    lookup_musician_style,
+    generate_midi_for_style,
+    load_dotenv_if_present,
+)
 from midi_gen.effects_presets import build_effects_config, explain_effects_config, get_preset
 from midi_gen.musician_styles import find_best_profile, list_styles, profile_from_dict
 from midi_gen.notes import note_str_to_midi, note_to_name
@@ -49,6 +53,32 @@ def test_lookup_offline_no_sdk():
     options = result.to_options()
     assert options["generation_type"] == "arpeggio"
     assert isinstance(options["effects_config"], list)
+
+
+def test_feel_does_not_replace_pinned_artist():
+    result = lookup_musician_style(
+        "Philip Glass — ambient drone",
+        use_cursor_sdk=False,
+        identity_name="Philip Glass",
+        vibe_text="ambient drone",
+    )
+    assert result.profile.id == "glass_minimal"
+    feel_only = lookup_musician_style("ambient drone", use_cursor_sdk=False)
+    assert feel_only.profile.id == "eno_ambient"
+
+
+def test_load_dotenv_if_present_fills_missing_only(monkeypatch, tmp_path):
+    import os
+
+    monkeypatch.delenv("CURSOR_API_KEY", raising=False)
+    env_path = tmp_path / ".env"
+    env_path.write_text("CURSOR_API_KEY=crsr_test_only\n", encoding="utf-8")
+    load_dotenv_if_present(env_path)
+    assert os.environ["CURSOR_API_KEY"] == "crsr_test_only"
+    monkeypatch.setenv("CURSOR_API_KEY", "keep_me")
+    env_path.write_text("CURSOR_API_KEY=other\n", encoding="utf-8")
+    load_dotenv_if_present(env_path)
+    assert os.environ["CURSOR_API_KEY"] == "keep_me"
 
 
 def test_effects_presets_plain_language():
@@ -132,6 +162,71 @@ def test_wav_preview_renders(tmp_path):
     assert "notes" in describe_preview(path)
 
 
+def test_sdk_research_prompt_asks_for_style_notes():
+    from midi_gen.cursor_style_lookup import STYLE_PROFILE_JSON_SCHEMA
+
+    assert "Research the query first" in STYLE_PROFILE_JSON_SCHEMA
+    assert "style_notes" in STYLE_PROFILE_JSON_SCHEMA
+    assert "hints only" in STYLE_PROFILE_JSON_SCHEMA
+
+
+def test_sdk_recipe_wins_over_widget_overrides(monkeypatch, tmp_path):
+    """Researched params must reach MIDI options; bars/seed still apply."""
+    from midi_gen.cursor_style_lookup import generate_midi_for_style
+    from midi_gen.musician_styles import profile_from_dict
+
+    researched = profile_from_dict(
+        {
+            "name": "Custom Research",
+            "styles": ["ambient"],
+            "generation_type": "drone",
+            "mode": "lydian",
+            "bpm": 64,
+            "arp_steps": 4,
+            "effects_preset": "subtle_tape",
+            "style_notes": "Long tones, slow pulse, lydian color.",
+        },
+        source="cursor_sdk",
+    )
+
+    monkeypatch.setattr(
+        "midi_gen.cursor_style_lookup.cursor_sdk_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "midi_gen.cursor_style_lookup.lookup_with_cursor_sdk",
+        lambda query, timeout_ms=120_000, **_kwargs: (researched, '{"bpm":64}'),
+    )
+    path, result, options = generate_midi_for_style(
+        "zzzz-unknown-vibe-no-catalog-hit",
+        use_cursor_sdk=True,
+        overrides={
+            "bpm": 180,
+            "arp_steps": 16,
+            "effects_preset": "clean",
+            "bars": 4,
+            "debug": False,
+        },
+        live_tweak=False,
+    )
+    assert result.used_cursor_sdk
+    assert options["bpm"] == 64
+    assert options["effects_preset"] == "subtle_tape"
+    assert options["mode"] == "lydian"
+    assert options["bars"] == 4
+    assert researched.style_notes.startswith("Long tones")
+    assert Path(path).exists()
+
+    _, _, tweaked = generate_midi_for_style(
+        "zzzz-unknown-vibe-no-catalog-hit",
+        use_cursor_sdk=True,
+        overrides={"bpm": 180, "effects_preset": "clean", "bars": 4, "debug": False},
+        live_tweak=True,
+    )
+    assert tweaked["bpm"] == 180
+    assert tweaked["effects_preset"] == "clean"
+
+
 def test_profile_from_sdk_shaped_dict():
     profile = profile_from_dict(
         {
@@ -142,9 +237,11 @@ def test_profile_from_sdk_shaped_dict():
             "bpm": 140,
             "arp_steps": 12,  # invalid -> clamped to 8
             "effects_preset": "human_feel",
+            "style_notes": "Modal vamps, walking inner voices.",
         },
         source="cursor_sdk",
     )
     assert profile.source == "cursor_sdk"
     assert profile.arp_steps == 8
     assert profile.bpm == 140
+    assert "Modal vamps" in profile.style_notes

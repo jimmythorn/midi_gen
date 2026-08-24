@@ -1,7 +1,8 @@
 """
 Thin helpers for stylistic prompting UI.
 
-Keeps named catalog (who) and free-text vibe (feel) as two honest paths.
+Keeps named catalog (who) plus optional free-text vibe (feel) as layers.
+Feel is additive — it does not replace the selected artist.
 Featured cards + vibe chips are entry points across the full catalog — not a
 closed allow-list, and not limited to any fixed shortlist of musicians.
 """
@@ -137,7 +138,7 @@ class RecipePreview:
 
     query: str
     profile: MusicianStyleProfile
-    path: str  # "catalog" | "vibe"
+    path: str  # "catalog" | "vibe" | "both"
     match_type: str  # catalog | sdk | hybrid | generic
     one_liner: str
     match_line: str
@@ -363,23 +364,35 @@ def preview_recipe(
     effects_preset: Optional[str] = None,
 ) -> RecipePreview:
     """
-    Offline lookup preview (no MIDI). Vibe overrides catalog when non-empty.
+    Offline lookup preview (no MIDI). Feel layers on the catalog artist.
     """
     from .cursor_style_lookup import lookup_musician_style
 
+    identity = (catalog_name or "").strip()
     vibe = (vibe_text or "").strip()
-    path = "vibe" if vibe else "catalog"
-    query = vibe if vibe else catalog_name
-    result = lookup_musician_style(query, use_cursor_sdk=False)
+    query = resolve_happy_path_query(identity, vibe)
+    if identity and vibe:
+        path = "both"
+    elif vibe:
+        path = "vibe"
+    else:
+        path = "catalog"
+    result = lookup_musician_style(
+        query,
+        use_cursor_sdk=False,
+        identity_name=identity or None,
+    )
     profile = result.profile
     mtype = _match_type_for_profile(
         profile,
         matched_locally=result.matched_locally,
         used_cursor_sdk=result.used_cursor_sdk,
     )
-    # Free-text with no catalog hit → honest generic
     if path == "vibe" and not result.matched_locally:
         mtype = "generic"
+    plain = format_plain_feel_match(profile)
+    if identity and vibe:
+        plain = f"{plain} · feel {vibe}"
     return RecipePreview(
         query=query,
         profile=profile,
@@ -393,7 +406,7 @@ def preview_recipe(
             matched_locally=result.matched_locally,
             used_cursor_sdk=result.used_cursor_sdk,
         ),
-        plain_feel_line=format_plain_feel_match(profile),
+        plain_feel_line=plain,
     )
 
 
@@ -481,6 +494,11 @@ def related_from_lookup_result(
 
 
 def resolve_happy_path_query(catalog_name: str, vibe_text: str = "") -> str:
-    """Vibe (feel) wins when filled; otherwise named catalog (who)."""
+    """Catalog artist plus optional feel. Feel layers on; it does not replace who."""
+    who = (catalog_name or "").strip()
     vibe = (vibe_text or "").strip()
-    return vibe if vibe else catalog_name
+    if who and vibe:
+        if who.lower() in vibe.lower():
+            return vibe
+        return f"{who} — {vibe}"
+    return who or vibe

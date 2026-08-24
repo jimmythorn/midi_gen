@@ -15,6 +15,7 @@ downloads/
 .eggs/
 eggs/
 ENV/
+.env
 generated/
 .midi_gen_ui_prefs.json
 .midi_gen/

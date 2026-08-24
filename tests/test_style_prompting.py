@@ -114,8 +114,9 @@ def test_vibe_chips_are_examples_not_closed_set():
     assert 6 <= len(chips) <= 8
     # Free-text beyond chips still resolves
     assert find_best_profile("baroque sequence").id == "bach_sequence"
-    assert resolve_happy_path_query("Philip Glass", "angular jazz") == "angular jazz"
+    assert resolve_happy_path_query("Philip Glass", "angular jazz") == "Philip Glass — angular jazz"
     assert resolve_happy_path_query("Philip Glass", "  ") == "Philip Glass"
+    assert resolve_happy_path_query("", "ambient drone") == "ambient drone"
 
 
 def test_mood_chip_packs_span_catalog_examples():
@@ -192,17 +193,18 @@ def test_recipe_preview_and_match_line():
         vibe_text="ambient drone",
         effects_preset="subtle_tape",
     )
-    assert feel.path == "vibe"
-    assert feel.profile.id == "eno_ambient"
-    assert "Matched:" in feel.match_line
-    assert feel.plain_feel_line == "Sounds like Brian Eno (ambient · drone)"
+    assert feel.path == "both"
+    assert feel.profile.id == "glass_minimal"
+    assert "Philip Glass" in feel.query
+    assert "ambient drone" in feel.query
+    assert "feel ambient drone" in feel.plain_feel_line
 
     generic = preview_recipe(
         catalog_name="Philip Glass",
         vibe_text="zzzzqwerty totally unknown vibe 999",
     )
-    assert generic.path == "vibe"
-    assert generic.match_type == "generic"
+    assert generic.path == "both"
+    assert generic.profile.id == "glass_minimal"
     line = format_recipe_one_liner(who.profile)
     assert "Erik Satie" in line
     assert "Matched:" in format_match_line(who.profile, match_type="catalog")

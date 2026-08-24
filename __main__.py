@@ -6,10 +6,12 @@
 from .arpeggio_generation import create_arp # Updated to use package name
 from typing import Dict, List, Optional
 import questionary # Import questionary
-from .cursor_style_lookup import generate_midi_for_style, lookup_musician_style
+from .cursor_style_lookup import generate_midi_for_style, lookup_musician_style, load_dotenv_if_present
 from .effects_presets import explain_effects_config, list_presets
 from .musician_styles import list_musicians
 from .preview import format_summary_text, summarize_midi_file
+
+load_dotenv_if_present()
 
 # Default values from the previous argparse setup
 DEFAULT_ROOT = 0

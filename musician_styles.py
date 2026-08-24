@@ -56,6 +56,8 @@ class MusicianStyleProfile:
     drone_walkdown_num_steps: int = 2
     drone_walkdown_step_ticks: int = 240
     source: str = "catalog"  # catalog | cursor_sdk | hybrid
+    # Research notes from Cursor SDK (empty for catalog-only profiles)
+    style_notes: str = ""
 
     def to_options(self, effects_config: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """Convert profile into options dict consumed by create_arp()."""
@@ -685,6 +687,7 @@ def profile_from_dict(data: Dict[str, Any], source: str = "cursor_sdk") -> Music
             except (ValueError, IndexError, TypeError):
                 continue
         base["root_notes"] = cleaned_roots or ["E3", "A3", "D3", "G3"]
+    base["style_notes"] = str(base.get("style_notes") or "").strip()[:800]
     return MusicianStyleProfile(**base)
 
 

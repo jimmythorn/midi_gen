@@ -19,6 +19,7 @@ if "midi_gen" not in sys.modules:
     _pkg.__file__ = str(_ROOT / "__init__.py")
     sys.modules["midi_gen"] = _pkg
 
+from midi_gen.midi_tempo import tick_to_seconds
 from midi_gen.live_midi import (
     PORT_LOST_MESSAGE,
     LiveMidiPlayer,
@@ -26,9 +27,11 @@ from midi_gen.live_midi import (
     _is_port_loss_error,
     _midi_file_to_schedule,
     bar_duration_sec,
+    clock_period_sec,
     has_iac_port,
     midi_file_bpm,
     panic_flush,
+    pass_duration_sec,
     port_looks_like_iac,
     preferred_iac_port,
     refresh_output_ports,
@@ -54,6 +57,28 @@ class FakeMidiPort:
         if self.fail_send:
             raise self.fail_exc
         self.sent.append(msg)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeMidiInput:
+    """Push MIDI into the follow-clock waiter."""
+
+    def __init__(self) -> None:
+        self._q: list[mido.Message] = []
+        self._lock = threading.Lock()
+        self.closed = False
+
+    def push(self, msg: mido.Message) -> None:
+        with self._lock:
+            self._q.append(msg)
+
+    def iter_pending(self):
+        with self._lock:
+            items = list(self._q)
+            self._q.clear()
+        return iter(items)
 
     def close(self) -> None:
         self.closed = True
@@ -97,6 +122,11 @@ def test_bar_duration_and_midi_bpm(tmp_path):
     assert abs(bar_duration_sec(120, 4) - 2.0) < 1e-9
     assert abs(bar_duration_sec(60, 4) - 4.0) < 1e-9
     assert bar_duration_sec(0, 4) > 0  # guarded floor
+    assert abs(clock_period_sec(120) * 24 - 0.5) < 1e-9
+    assert abs(pass_duration_sec(0.49, 120, bars=1) - 2.0) < 1e-9
+    assert abs(pass_duration_sec(0.4, 120) - 0.5) < 1e-9
+    assert abs(tick_to_seconds(480, 120, 480) - 0.5) < 1e-9
+    assert abs(tick_to_seconds(240, 120, 480) - 0.25) < 1e-9
     path = tmp_path / "tiny.mid"
     _write_tiny_midi(path)
     assert abs(midi_file_bpm(str(path)) - 120.0) < 0.5
@@ -129,7 +159,7 @@ def test_play_file_missing_raises(tmp_path):
 
 
 def test_all_notes_off_sends_cc123_on_fake_port():
-    """Hard Stop flush: CC123 (All Notes Off) on all 16 channels + pitch reset."""
+    """Hard Stop flush: sustain off, CC120/123, pitch reset, explicit note_off."""
     port = FakeMidiPort()
     panic_flush(port)
     cc123 = [
@@ -137,18 +167,29 @@ def test_all_notes_off_sends_cc123_on_fake_port():
         for m in port.sent
         if m.type == "control_change" and m.control == 123
     ]
+    cc120 = [
+        m
+        for m in port.sent
+        if m.type == "control_change" and m.control == 120
+    ]
+    sustain = [
+        m
+        for m in port.sent
+        if m.type == "control_change" and m.control == 64
+    ]
     bends = [m for m in port.sent if m.type == "pitchwheel"]
+    offs = [m for m in port.sent if m.type == "note_off"]
     assert len(cc123) == 16, "panic flush must send CC123 on every channel"
-    assert all(m.control == 123 for m in cc123)
-    assert all(m.value == 0 for m in cc123)
+    assert len(cc120) == 16
+    assert len(sustain) == 16
+    assert all(m.value == 0 for m in cc123 + cc120 + sustain)
     assert {m.channel for m in cc123} == set(range(16))
     assert len(bends) == 16
     assert all(m.pitch == 0 for m in bends)
-    # No other CC besides 123 in a pure panic flush.
-    other_cc = [
-        m for m in port.sent if m.type == "control_change" and m.control != 123
-    ]
-    assert other_cc == []
+    assert len(offs) == 128 * 16
+    assert {(m.channel, m.note) for m in offs} == {
+        (ch, n) for ch in range(16) for n in range(128)
+    }
 
 
 def test_all_notes_off_alias_matches_panic():
@@ -194,6 +235,8 @@ def test_stop_panic_flush_sends_cc123_on_fake_port(tmp_path):
     assert len(cc123) >= 16
     assert all(m.control == 123 and m.value == 0 for m in cc123)
     assert set(range(16)).issubset({m.channel for m in cc123})
+    offs = [m for m in fake.sent if m.type == "note_off"]
+    assert len(offs) >= 128 * 16
 
 
 def test_panic_flush_named_sends_cc123_on_fake_port():
@@ -210,6 +253,8 @@ def test_panic_flush_named_sends_cc123_on_fake_port():
     assert len(cc123) == 16
     assert all(m.value == 0 for m in cc123)
     assert {m.channel for m in cc123} == set(range(16))
+    offs = [m for m in fake.sent if m.type == "note_off"]
+    assert len(offs) == 128 * 16
     assert fake.closed is True
 
 
@@ -311,6 +356,36 @@ def test_silent_count_in_sends_no_notes(tmp_path):
 
     assert not player.playing
     assert player.phase == "idle"
+
+
+def test_stop_mid_sustain_emits_note_off_for_sounding_pitch(tmp_path):
+    """Stop during a long drone note must send that pitch's note_off (Logic ignores CC123)."""
+    mid = mido.MidiFile()
+    track = mido.MidiTrack()
+    mid.tracks.append(track)
+    track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(60)))
+    track.append(mido.Message("note_on", note=60, velocity=90, time=0))
+    track.append(mido.Message("note_off", note=60, velocity=0, time=480 * 16))
+    path = tmp_path / "drone.mid"
+    mid.save(path)
+
+    fake = FakeMidiPort()
+    player = LiveMidiPlayer()
+    with patch("midi_gen.live_midi.list_output_ports", return_value=["Fake Bus"]), patch(
+        "midi_gen.live_midi.rtmidi_available", return_value=True
+    ), patch("midi_gen.live_midi.mido.open_output", return_value=fake):
+        player.play_file(str(path), "Fake Bus", count_in_bars=0, loop=False)
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            if any(m.type == "note_on" and m.note == 60 for m in fake.sent):
+                break
+            time.sleep(0.01)
+        assert any(m.type == "note_on" and m.note == 60 for m in fake.sent)
+        player.stop(wait=True)
+
+    assert not player.playing
+    offs = [m for m in fake.sent if m.type == "note_off" and m.note == 60]
+    assert offs, "Stop must note_off the hanging pitch, not only CC123"
 
 
 def test_replay_after_hung_prior_thread(tmp_path):
@@ -450,14 +525,18 @@ def test_ui_crisp_audit_extras_a_through_e():
     assert "disabled=_transport_busy" in src
     assert '_transport_busy = bool(player.playing)' in src
     # B — Refresh must not clobber Streaming mid-play
-    assert "if _force_refresh and _transport_busy" in src
-    assert "if player.playing:" in src  # refresh click guard
+    assert "if _force_refresh and player.playing" in src
+    assert "def _apply_refresh_ports" in src
+    assert "if player.playing:" in src
     # C — Stop before Generate writes new MIDI
     assert "player.stop(wait=True)" in src
     assert src.index("player.stop(wait=True)") < src.index("generate_midi_for_style(")
-    # D — count-in honesty; silent when soft-click Off; denser opts collapsed
-    assert "not synced to Logic" in src
-    assert "sketch BPM" in src
+    # D — Logic lock (follow MIDI Start); denser opts collapsed
+    assert "Lock to Logic clock" in src
+    assert "waiting for Logic Play" in src
+    assert 'key="live_sync_logic"' in src
+    assert "not synced to Logic" not in src
+    assert "Sketch tempo" in src
     assert "Count-in (1 silent bar)" in src
     assert 'st.session_state.get("live_soft_click", False)' in src
     assert "Soft click during count-in" in src
@@ -524,6 +603,8 @@ def test_player_panic_flushes_cc123_without_stopping(tmp_path):
     # Panic alone sends 16; Stop afterward may add another set via the same open path.
     assert len(cc123) >= 16
     assert set(range(16)).issubset({m.channel for m in cc123})
+    offs = [m for m in fake.sent if m.type == "note_off"]
+    assert len(offs) >= 128 * 16
 
 
 def test_transport_caption_count_in(tmp_path):
@@ -604,3 +685,96 @@ def test_soft_click_count_in_emits_notes(tmp_path):
         m for m in fake.sent if m.type in ("note_on", "note_off") and m.channel == 9
     ]
     assert click_notes, "soft click count-in should emit ch9 metronome notes"
+
+
+def test_play_sends_midi_start_clock_stop(tmp_path):
+    """Playback emits MIDI Start/Clock/Stop at sketch BPM."""
+    fake = FakeMidiPort()
+    player = LiveMidiPlayer()
+    path = tmp_path / "tiny.mid"
+    _write_tiny_midi(path)
+
+    with patch("midi_gen.live_midi.list_output_ports", return_value=["Fake Bus"]), patch(
+        "midi_gen.live_midi.rtmidi_available", return_value=True
+    ), patch("midi_gen.live_midi.mido.open_output", return_value=fake), patch(
+        "midi_gen.live_midi.panic_flush_named"
+    ):
+        player.play_file(
+            str(path),
+            "Fake Bus",
+            count_in_bars=0,
+            bpm=120,
+            bars=1,
+            loop=False,
+            send_clock=True,
+            sync="internal",
+        )
+        deadline = time.time() + 2.0
+        while player.playing and time.time() < deadline:
+            if any(m.type == "clock" for m in fake.sent) and any(
+                m.type == "note_on" for m in fake.sent
+            ):
+                break
+            time.sleep(0.02)
+        player.stop(wait=True)
+
+    types = [m.type for m in fake.sent]
+    assert "start" in types
+    assert "clock" in types
+    assert "stop" in types
+    assert types.index("start") < types.index("clock")
+    assert types.index("note_on") < types.index("clock")
+
+
+def test_follow_logic_start_fires_downbeat_notes(tmp_path):
+    """Notes wait for MIDI Start, then fire on tick 0 (Logic downbeat)."""
+    fake_out = FakeMidiPort()
+    fake_in = FakeMidiInput()
+    player = LiveMidiPlayer()
+    path = tmp_path / "tiny.mid"
+    _write_tiny_midi(path)
+
+    with patch("midi_gen.live_midi.list_output_ports", return_value=["Fake Bus"]), patch(
+        "midi_gen.live_midi.rtmidi_available", return_value=True
+    ), patch("midi_gen.live_midi.mido.open_output", return_value=fake_out), patch(
+        "midi_gen.live_midi.mido.open_input", return_value=fake_in
+    ), patch("midi_gen.live_midi.panic_flush_named"):
+        player.play_file(
+            str(path),
+            "Fake Bus",
+            count_in_bars=0,
+            bpm=120,
+            bars=1,
+            loop=False,
+            sync="follow",
+            send_clock=False,
+        )
+        deadline = time.time() + 1.0
+        while player.phase != "syncing" and time.time() < deadline:
+            time.sleep(0.01)
+        assert player.phase == "syncing"
+        assert player.transport_caption() == "Waiting for Logic Play…"
+        time.sleep(0.05)
+        assert not any(m.type == "note_on" for m in fake_out.sent)
+        fake_in.push(mido.Message("start"))
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            if any(m.type == "note_on" and m.note == 60 for m in fake_out.sent):
+                break
+            time.sleep(0.01)
+        player.stop(wait=True)
+
+    assert any(m.type == "note_on" and m.note == 60 for m in fake_out.sent)
+    assert not any(m.type == "clock" for m in fake_out.sent)
+
+
+def test_scheduler_has_no_loop_gap_and_tight_wait():
+    src = (_ROOT / "live_midi.py").read_text(encoding="utf-8")
+    assert "time.sleep(min(0.002, remaining - 0.001))" in src
+    assert "time.sleep(min(0.01" not in src
+    assert "time.perf_counter() + 0.05" not in src
+    assert 'mido.Message("clock")' in src
+    assert 'mido.Message("start")' in src
+    assert "panic_flush(port)" in src
+    # Loop must not panic between passes (that stall desyncs the grid).
+    assert "no gap; no panic between passes" in src

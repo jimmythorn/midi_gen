@@ -18,10 +18,11 @@ DEFAULT_PREFS: Dict[str, Any] = {
     "live_count_in": False,
     "live_loop": False,
     "live_soft_click": False,
+    "live_sync_logic": True,
     "live_port": None,
 }
 
-_BOOL_KEYS = ("live_count_in", "live_loop", "live_soft_click")
+_BOOL_KEYS = ("live_count_in", "live_loop", "live_soft_click", "live_sync_logic")
 
 
 def prefs_path() -> Path:
