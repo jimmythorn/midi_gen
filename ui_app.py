@@ -197,14 +197,15 @@ def _apply_double_bars() -> None:
 
 
 # --- One-page chrome: home stays sacred; extras are full-screen takeovers ---
+# PASS bar order: Browse → Mood → Length → Effects → Capture → Advanced → Geek last.
 TAKEOVER_LABELS = {
-    "browse": "Browse styles",
-    "moods": "Mood packs",
-    "length": "Length & feel",
+    "browse": "Browse",
+    "moods": "Mood",
+    "length": "Length",
     "effects": "Effects",
-    "capture": "Capture setup",
+    "capture": "Capture",
     "advanced": "Advanced",
-    "geek": "Geek / Debug",
+    "geek": "Geek",
 }
 
 
@@ -1097,7 +1098,7 @@ def _render_search_feel() -> None:
         placeholder="e.g. ambient drone, gymnopédie, sheets of sound, anything…",
         help=(
             "Layers on the selected artist. Does not replace them. "
-            "Browse styles for who; Mood packs for example chips."
+            "Browse for who; Mood for example chips."
         ),
         key="vibe_text",
         label_visibility="collapsed",
@@ -1146,6 +1147,7 @@ def _render_generate_row() -> bool:
 
 
 def _render_again_try(run_data: dict) -> None:
+    """Fun Now sacred — Again + Try instead stay with Play on main."""
     result = run_data["result"]
     related = related_from_lookup_result(
         result, limit=3, vibe_hint=run_data.get("query") or ""
@@ -1172,7 +1174,7 @@ def _render_again_try(run_data: dict) -> None:
                 )
 
 
-def _render_play_hero(run_data: dict) -> None:
+def _render_play_hero(run_data: dict, *, with_fun_now: bool = False) -> None:
     """Sacred Play / Stop / Panic — stays on home (and sticky if playing in a takeover)."""
     result = run_data["result"]
     options = run_data["options"]
@@ -1186,11 +1188,20 @@ def _render_play_hero(run_data: dict) -> None:
     if "live_sync_logic" not in st.session_state:
         st.session_state["live_sync_logic"] = True
 
+    # Fun Now (Again / Try instead) sits with Play on main — not buried in a takeover.
+    if with_fun_now:
+        _render_again_try(run_data)
+
     st.markdown("### Play into Logic")
+    # Honest: live stream ≠ region. Capture takeover is the record path (not a second page).
+    st.caption(
+        "Live stream only — never writes a Logic region. "
+        "Capture is the record path (Arm → Record in Logic → Play here)."
+    )
     if not live.available:
         st.warning(
             live.error
-            or "No MIDI ports available. Enable IAC Driver, then Capture setup → Refresh."
+            or "No MIDI ports available. Enable IAC Driver, then Capture → Refresh."
         )
     else:
         port_now = st.session_state.get("live_port") or (ports[0] if ports else None)
@@ -1643,7 +1654,7 @@ else:
             st.error(f"Generation failed: {st.session_state['generate_error']}")
 
     if not run:
-        st.info("Type a feel or open Mood packs, then Generate — or Surprise me.")
+        st.info("Type a feel or open Mood, then Generate — or Surprise me.")
     else:
         result = run["result"]
         options = run["options"]
@@ -1658,8 +1669,8 @@ else:
         notes = str(getattr(profile, "style_notes", "") or "").strip()
         if notes:
             st.caption(notes)
-        _render_again_try(run)
-        _render_play_hero(run)
+        # Again + Try instead with Play (Fun Now sacred on main).
+        _render_play_hero(run, with_fun_now=True)
         _render_download(run)
         _render_effects_chips(run)
 

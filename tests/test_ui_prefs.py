@@ -261,31 +261,62 @@ def test_sdk_status_follows_toggle_and_key():
 
 
 def test_one_page_chrome_takeovers_source_and_nav():
-    """Home keeps Search/Generate/Play; extras are takeover buttons, not pages."""
+    """PASS bar: Search+Generate+Play on main; takeovers only; stream ≠ region."""
     src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
     assert "TAKEOVER_LABELS" in src
     assert 'f"takeover_{key}"' in src
     assert 'key="takeover_back"' in src
-    assert '"browse"' in src and '"moods"' in src and '"capture"' in src
-    assert '"advanced"' in src and '"geek"' in src and '"effects"' in src
-    assert '"length"' in src
+    # Chrome order / short PASS labels
+    assert '"Browse"' in src and '"Mood"' in src and '"Length"' in src
+    assert '"Effects"' in src and '"Capture"' in src
+    assert '"Advanced"' in src and '"Geek"' in src
+    assert list(
+        k
+        for k in ("browse", "moods", "length", "effects", "capture", "advanced", "geek")
+        if f'"{k}"' in src
+    ) == [
+        "browse",
+        "moods",
+        "length",
+        "effects",
+        "capture",
+        "advanced",
+        "geek",
+    ]
     assert "st.navigation" not in src
     assert "pages/" not in src
-    # Sacred home anchors
+    # Sacred home / Fun Now
     assert '"Generate"' in src
     assert '"Surprise me"' in src
     assert '"Play into Logic"' in src
     assert '"Download MIDI"' in src
     assert '"Again"' in src
+    assert "Try instead" in src
+    assert "with_fun_now" in src
     assert "Not finding a musician" in src or "ARTIST_REJECT_DRIP" in src
+    # Play honesty: live stream ≠ region; Capture is record path
+    assert "never writes a Logic region" in src
+    assert "Capture is the record path" in src
+    cap = src.index("def _render_capture_setup")
+    adv = src.index("def _render_advanced_takeover")
+    assert "AUDITION_CAPTURE_STRIP_HTML" in src[cap:adv]
+    play = src[src.index("def _render_play_hero") : src.index("def _render_download")]
+    assert "AUDITION_CAPTURE_STRIP_HTML" not in play
 
     at = _apptest()
     assert _takeover_is_closed(at)
     home_keys = {b.key for b in at.button}
     assert "takeover_browse" in home_keys
     assert "takeover_capture" in home_keys
+    assert "takeover_geek" in home_keys
     assert "feat_glass_minimal" not in home_keys  # featured buried in Browse
     assert "bars_half" not in home_keys  # length knobs buried
+    # Chrome button labels match PASS short names
+    labels = {b.key: b.label for b in at.button if b.key and b.key.startswith("takeover_")}
+    assert labels["takeover_browse"] == "Browse"
+    assert labels["takeover_moods"] == "Mood"
+    assert labels["takeover_capture"] == "Capture"
+    assert labels["takeover_geek"] == "Geek"
     _open_takeover(at, "capture")
     assert "refresh_ports" in {b.key for b in at.button}
     at.button(key="takeover_back").click().run()
