@@ -150,11 +150,14 @@ def test_require_artist_genres_drive_cousin_few_shot():
     assert result.profile.chord_progression
     # Jazz/angular genres → Monk cousin fingerprint (not tautology).
     monk = get_profile_by_id("monk_angles")
+    assert result.candidates, "cousin path must surface local neighbors"
+    assert result.candidates[0].id == "monk_angles"
+    assert "Monk" in result.message
     assert any(s in result.profile.styles for s in ("jazz", "bebop", "hard bop", "angular"))
-    assert "Monk" in result.message or result.candidates[0].id == "monk_angles"
     assert result.profile.generation_type == monk.generation_type
     assert result.profile.mode == monk.mode
     assert result.profile.development.get("mutate_ops") == monk.development.get("mutate_ops")
+    assert result.profile.chord_progression == monk.chord_progression
     opts = result.profile.to_options()
     assert "development" in opts
     assert "chord_progression" in opts
