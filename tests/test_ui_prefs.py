@@ -21,7 +21,7 @@ def test_load_prefs_defaults_when_missing(tmp_path):
     path = tmp_path / "missing.json"
     prefs = load_prefs(path)
     assert prefs["live_count_in"] is False
-    assert prefs["live_loop"] is False
+    assert prefs["live_loop"] is True
     assert prefs["live_soft_click"] is False
     assert prefs["live_sync_logic"] is True
     assert prefs["live_port"] is None
