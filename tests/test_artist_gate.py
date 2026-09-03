@@ -23,15 +23,24 @@ from midi_gen.artist_gate import (
     resolve_artist_query,
 )
 from midi_gen.cursor_style_lookup import generate_midi_for_style, lookup_musician_style
-from midi_gen.spotify_client import SpotifyArtist
+from midi_gen.spotify_client import MIN_SPOTIFY_FOLLOWERS, SpotifyArtist
 
 
-def _artist(name: str = "Philip Glass", *, type_: str = "artist") -> SpotifyArtist:
+def _artist(
+    name: str = "Philip Glass",
+    *,
+    type_: str = "artist",
+    followers_total: int | None = MIN_SPOTIFY_FOLLOWERS,
+) -> SpotifyArtist:
+    raw: dict = {"id": "spotify-artist-1", "name": name, "type": type_}
+    if followers_total is not None:
+        raw["followers"] = {"total": followers_total}
     return SpotifyArtist(
         id="spotify-artist-1",
         name=name,
         type=type_,
-        raw={"id": "spotify-artist-1", "name": name, "type": type_},
+        followers_total=followers_total,
+        raw=raw,
     )
 
 
@@ -90,16 +99,47 @@ def test_ted_bundy_class_query_rejected():
 
 def test_spotify_non_artist_type_rejected():
     def weird(_query: str):
-        return [_artist("Podcast Host", type_="show")]
+        return [_artist("Podcast Host", type_="show", followers_total=999_999)]
 
     result = resolve_artist_query("zzzz-artist-probe-9f3a", spotify_search=weird)
     assert isinstance(result, ArtistGateReject)
     assert result.reason == "not_a_musician"
 
 
+def test_spotify_artist_9999_followers_rejected():
+    def hit(_query: str):
+        return [_artist("Almost Famous", followers_total=9_999)]
+
+    result = resolve_artist_query("Almost Famous", spotify_search=hit)
+    assert isinstance(result, ArtistGateReject)
+    assert result.reason == "too_small"
+
+
+def test_spotify_artist_10000_followers_accepted():
+    def hit(_query: str):
+        return [_artist("Miles Davis", followers_total=10_000)]
+
+    result = resolve_artist_query("Miles Davis", spotify_search=hit)
+    assert isinstance(result, ArtistGateAccept)
+    assert result.source == "spotify"
+    assert result.spotify_artist is not None
+    assert result.spotify_artist.name == "Miles Davis"
+    assert result.spotify_artist.type == "artist"
+    assert result.spotify_artist.followers_total == 10_000
+
+
+def test_spotify_artist_missing_followers_fail_closed():
+    def hit(_query: str):
+        return [_artist("No Count", followers_total=None)]
+
+    result = resolve_artist_query("No Count", spotify_search=hit)
+    assert isinstance(result, ArtistGateReject)
+    assert result.reason == "not_a_musician"
+
+
 def test_spotify_artist_accepted():
     def hit(_query: str):
-        return [_artist("Miles Davis")]
+        return [_artist("Miles Davis", followers_total=1_500_000)]
 
     result = resolve_artist_query("Miles Davis", spotify_search=hit)
     assert isinstance(result, ArtistGateAccept)

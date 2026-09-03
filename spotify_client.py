@@ -24,12 +24,37 @@ class SpotifyClientError(Exception):
     """HTTP / config failure talking to Spotify."""
 
 
+# Product lock: Spotify has no monthly-listeners field; followers.total is the proxy floor.
+MIN_SPOTIFY_FOLLOWERS = 10_000
+
+
 @dataclass(frozen=True)
 class SpotifyArtist:
     id: str
     name: str
     type: str
+    followers_total: Optional[int]
     raw: Dict[str, Any]
+
+
+def _parse_followers_total(item: Dict[str, Any]) -> Optional[int]:
+    """
+    Extract followers.total from a Spotify artist search item.
+
+    Missing / malformed followers → None (caller fail-closes).
+    Never uses popularity or scrapes web/charts.
+    """
+    followers = item.get("followers")
+    if not isinstance(followers, dict):
+        return None
+    total = followers.get("total")
+    if isinstance(total, bool):
+        return None
+    if isinstance(total, int):
+        return total
+    if isinstance(total, float) and total.is_integer():
+        return int(total)
+    return None
 
 
 def load_spotify_credentials(
@@ -142,6 +167,7 @@ def search_artists(
                 id=artist_id,
                 name=name,
                 type=item_type,
+                followers_total=_parse_followers_total(item),
                 raw=item,
             )
         )
