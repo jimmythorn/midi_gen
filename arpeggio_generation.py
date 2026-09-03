@@ -285,7 +285,15 @@ def create_arp(options: Dict):
                 int(drone_options.get("drone_variation_interval_bars", 2)),
                 int(development["mutate_every_n"]),
             )
-        final_event_list = generate_drone_events(drone_options, processed_root_notes_midi)
+        # Same seed contract as arpeggio path — Again / explicit seed must bind drone RNG
+        drone_rng = (
+            random.Random(options.get("seed"))
+            if options.get("seed") is not None
+            else random.Random()
+        )
+        final_event_list = generate_drone_events(
+            drone_options, processed_root_notes_midi, rng=drone_rng
+        )
         if debug:
             print(f"[INFO] Drone generation selected. {len(final_event_list)} drone events generated.")
 

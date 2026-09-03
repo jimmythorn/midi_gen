@@ -25,6 +25,7 @@ def _drone_color_note(
     min_octave: int,
     max_octave: int,
     avoid: List[int],
+    rng: random.Random,
 ) -> Optional[int]:
     """Pick one characteristic color tone in range, not already in the voicing."""
     color_pcs = get_mode_color_pitch_classes(root_midi_note, mode)
@@ -47,13 +48,24 @@ def _drone_color_note(
                 note = pitch_class_at_octave(pc, octave)
                 if low <= note <= high and note not in avoid:
                     candidates.append(note)
-    return random.choice(candidates) if candidates else None
+    return rng.choice(candidates) if candidates else None
 
 
-def generate_drone_events(options: Dict, processed_root_notes_midi: List[int]) -> List[MidiEvent]:
+def generate_drone_events(
+    options: Dict,
+    processed_root_notes_midi: List[int],
+    rng: Optional[random.Random] = None,
+) -> List[MidiEvent]:
     """
     Generates drone events with dynamic voicing, octave doubling/shifts, and DIATONIC melodic walkdowns.
+
+    When ``rng`` is omitted, builds ``random.Random(options['seed'])`` if seed is
+    set, otherwise an unbound ``Random()`` — same contract as the arpeggio path.
     """
+    if rng is None:
+        seed = options.get("seed")
+        rng = random.Random(seed) if seed is not None else random.Random()
+
     bpm = options.get('bpm', 120)
     total_bars = options.get('bars', 16)
     mode = options.get('mode', 'major')
@@ -167,6 +179,7 @@ def generate_drone_events(options: Dict, processed_root_notes_midi: List[int]) -
                         min_octave_param,
                         max_octave_param,
                         current_interval_base_notes,
+                        rng,
                     )
                     if color_note is not None:
                         current_interval_base_notes.append(color_note)
@@ -178,11 +191,11 @@ def generate_drone_events(options: Dict, processed_root_notes_midi: List[int]) -
             if allow_octave_shifts:
                 # Create a list of indices to shuffle for randomizing which note gets shifted
                 indices_to_try_shift = list(range(len(notes_for_direct_play_and_doubling_source)))
-                random.shuffle(indices_to_try_shift)
+                rng.shuffle(indices_to_try_shift)
                 for i in indices_to_try_shift:
                     note_to_potentially_shift = notes_for_direct_play_and_doubling_source[i]
-                    if random.random() < octave_shift_one_note_chance: # Apply overall chance here too
-                        direction = random.choice([-12, 12])
+                    if rng.random() < octave_shift_one_note_chance: # Apply overall chance here too
+                        direction = rng.choice([-12, 12])
                         shifted_note = note_to_potentially_shift + direction
                         low, high = midi_octave_bounds(min_octave_param, max_octave_param)
                         if low <= shifted_note <= high and 0 <= shifted_note <= 127:
@@ -198,17 +211,17 @@ def generate_drone_events(options: Dict, processed_root_notes_midi: List[int]) -
             # 4. Process octave doubling (max one per interval, with walkdowns) for each of these main notes
             has_doubled_a_note_this_interval = False
             shuffled_sources_for_doubling = list(notes_for_direct_play_and_doubling_source) # Create a copy to shuffle
-            random.shuffle(shuffled_sources_for_doubling)
+            rng.shuffle(shuffled_sources_for_doubling)
 
             # Octave doubling is independent of walkdowns: always emit the
             # doubled target when chance fires; walk-in is an optional garnish.
             for note_being_doubled_source in shuffled_sources_for_doubling:
                 if has_doubled_a_note_this_interval:
                     break
-                if random.random() >= octave_doubling_chance:
+                if rng.random() >= octave_doubling_chance:
                     continue
 
-                direction = random.choice([-12, 12])
+                direction = rng.choice([-12, 12])
                 # Never emit MIDI note 0 (C-1) — clamp floor matches arp/midi path.
                 doubled_note_target = max(1, min(127, note_being_doubled_source + direction))
                 low, high = midi_octave_bounds(min_octave_param, max_octave_param + 1)
