@@ -237,7 +237,7 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         range_octaves=2,
         evolution_rate=0.12,
         repetition_factor=5,
-        embellish=True,
+        embellish=False,  # color via mode_color, not Coltrane neighbor density
         rhythmic_variation=False,
         chord_progression=["Db3", "Ab3", "Eb3", "Ab3"],  # floating modal vamp
         effects_preset="subtle_tape",
@@ -296,7 +296,7 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
             "jazz", "angular", "angular jazz", "piano", "spaced", "bebop",
             "quirky", "leaps", "crooked", "dissonant", "stride",
         ],
-        description="Angular order leaps, quirky rests, embellished corners, crooked cell mutate.",
+        description="Angular order leaps, dissonant color accents, crooked rest/invert mutate.",
         generation_type="arpeggio",
         mode="major",
         bpm=112,
@@ -305,14 +305,15 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         min_octave=3,
         max_octave=5,
         use_chord_tones=True,
-        mode_color=True,  # major triad identity; angularity from order + rests
+        # Angular dissonance (b2 / #4) — not Coltrane 6/9/11 sheets.
+        mode_color={"enabled": True, "intervals": [1, 6], "accent_every": 2},
         arp_mode="order",
         arp_steps=8,
         range_octaves=2,
         evolution_rate=0.25,
         repetition_factor=4,
-        embellish=True,
-        rhythmic_variation=True,  # rests / crooked rhythm
+        embellish=False,
+        rhythmic_variation=False,  # rests from crooked development, not RV
         chord_progression=["Bb3", "Eb3", "F3", "Bb3"],
         effects_preset="human_feel",
         # Crooked: rests and contour flips — not phase creep.
@@ -348,8 +349,8 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         range_octaves=2,
         evolution_rate=0.4,
         repetition_factor=3,
-        embellish=True,
-        rhythmic_variation=True,
+        embellish=False,  # instability via RV + mutate, not neighbor embellish
+        rhythmic_variation=True,  # Aphex identity: unstable rhythm cells
         chord_progression=["E2", "B2", "A2", "E3"],
         effects_preset="worn_tape",
         # Jittery every-bar mutate — not a clean sequence, not Reich phase.

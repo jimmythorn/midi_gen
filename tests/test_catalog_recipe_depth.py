@@ -1,4 +1,9 @@
-"""Interesting-returns A: deepen six sparse catalog recipes (fingerprint guards)."""
+"""Interesting-returns A: deepen six catalog recipes into locked A PASS cluster.
+
+A PASS bar (product-locked): generation_type, mode_color, development+progression,
+density/vamp. Wrong knobs off unless the identity uses them
+(embellish / RV / phase_creep / additive_only).
+"""
 
 from __future__ import annotations
 
@@ -26,6 +31,12 @@ SPARSE_IDS = (
     "satie_neoclassical",
     "frahm_felt",
 )
+
+# Identities that honestly use optional wrong-knob flags (locked + Aphex RV).
+EMBELLISH_IDS = frozenset({"coltrane_sheets"})
+RV_IDS = frozenset({"reich_phase", "coltrane_sheets", "aphex_glitch"})
+PHASE_IDS = frozenset({"reich_phase"})
+ADDITIVE_IDS = frozenset({"glass_minimal"})
 
 
 def _mode_color_fingerprint(mode_color: Any) -> Tuple:
@@ -55,7 +66,7 @@ def _development_fingerprint(development: Optional[Dict[str, Any]]) -> Tuple:
 
 
 def _recipe_fingerprint(profile) -> Tuple:
-    """Bound knobs that must distinguish catalog recipes in 4–8 bars."""
+    """A PASS bound knobs (+ honest wrong-knob flags) for uniqueness."""
     prog = tuple(profile.chord_progression) if profile.chord_progression else None
     return (
         profile.generation_type,
@@ -77,16 +88,43 @@ def test_catalog_size_unchanged():
     assert ids == set(LOCKED_IDS) | set(SPARSE_IDS)
 
 
-def test_sparse_six_all_set_development():
+def test_sparse_six_all_set_development_and_progression():
     for pid in SPARSE_IDS:
         profile = get_profile_by_id(pid)
         assert profile is not None, pid
         assert profile.development is not None, f"{pid} must set development"
         assert profile.development.get("enabled") is True
         assert profile.development.get("mutate_ops"), f"{pid} needs mutate_ops"
+        assert profile.chord_progression, f"{pid} must set chord_progression / vamp"
         opts = profile.to_options()
         assert "development" in opts
+        assert "chord_progression" in opts
         assert opts["development"]["mutate_ops"] == profile.development["mutate_ops"]
+
+
+def test_wrong_knobs_off_unless_identity_uses_them():
+    """embellish / RV / phase_creep / additive_only stay off when identity does not use them."""
+    for profile in MUSICIAN_STYLE_CATALOG:
+        if profile.id in EMBELLISH_IDS:
+            assert profile.embellish is True, profile.id
+        else:
+            assert profile.embellish is False, f"{profile.id} must not turn on embellish"
+
+        if profile.id in RV_IDS:
+            assert profile.rhythmic_variation is True, profile.id
+        else:
+            assert profile.rhythmic_variation is False, f"{profile.id} must not turn on RV"
+
+        assert profile.development is not None, profile.id
+        if profile.id in PHASE_IDS:
+            assert profile.development.get("phase_creep") is True, profile.id
+        else:
+            assert profile.development.get("phase_creep") is not True, profile.id
+
+        if profile.id in ADDITIVE_IDS:
+            assert profile.development.get("additive_only") is True, profile.id
+        else:
+            assert profile.development.get("additive_only") is not True, profile.id
 
 
 def test_locked_four_development_unchanged():
@@ -149,44 +187,44 @@ def test_all_ten_recipe_fingerprints_unique():
     assert len(fps) == 10
 
 
-def test_sparse_six_honest_archetypes():
+def test_sparse_six_a_pass_archetypes():
+    """A PASS knobs: generation_type, mode_color, development+progression, density/vamp."""
     debussy = get_profile_by_id("debussy_color")
     assert debussy.generation_type == "arpeggio"
     assert debussy.mode == "lydian"
     assert isinstance(debussy.mode_color, dict)
     assert debussy.mode_color["intervals"] == [6, 2, 9]
-    assert debussy.chord_progression is not None
-    assert debussy.development["phase_creep"] is False
-    assert debussy.development["additive_only"] is False
+    assert debussy.chord_progression == ["Db3", "Ab3", "Eb3", "Ab3"]
+    assert debussy.development["mutate_ops"] == ["invert", "add_attack", "thin"]
     assert debussy.development["mutate_every_n"] >= 3
+    assert debussy.embellish is False
     assert debussy.rhythmic_variation is False
-    assert debussy.embellish is True
 
     monk = get_profile_by_id("monk_angles")
     assert monk.arp_mode == "order"
-    assert monk.rhythmic_variation is True
-    assert monk.embellish is True
-    assert monk.development["phase_creep"] is False
+    assert isinstance(monk.mode_color, dict)
+    assert monk.mode_color["intervals"] == [1, 6]
+    assert monk.chord_progression == ["Bb3", "Eb3", "F3", "Bb3"]
     assert "add_rest" in monk.development["mutate_ops"]
+    assert monk.embellish is False
+    assert monk.rhythmic_variation is False
     assert monk.effects_preset == "human_feel"
 
     aphex = get_profile_by_id("aphex_glitch")
     assert aphex.arp_steps == 16
-    assert aphex.rhythmic_variation is True
+    assert aphex.rhythmic_variation is True  # identity uses RV
+    assert aphex.embellish is False
     assert aphex.effects_preset == "worn_tape"
     assert isinstance(aphex.mode_color, dict)
     assert aphex.mode_color["intervals"] == [1]
     assert aphex.development["mutate_every_n"] == 1
-    assert aphex.development["phase_creep"] is False
-    assert aphex.development["additive_only"] is False
+    assert aphex.chord_progression == ["E2", "B2", "A2", "E3"]
 
     bach = get_profile_by_id("bach_sequence")
     assert bach.use_chord_tones is True
     assert bach.effects_preset == "clean"
-    assert bach.rhythmic_variation is False
     assert bach.embellish is False
-    assert bach.development["phase_creep"] is False
-    assert bach.development["additive_only"] is False
+    assert bach.rhythmic_variation is False
     assert bach.development["mutate_ops"] == ["invert", "add_attack"]
     assert bach.chord_progression == ["A3", "D3", "E3", "A3"]
     assert bach.arp_steps == 16
@@ -199,8 +237,7 @@ def test_sparse_six_honest_archetypes():
     assert satie.development["seed_bars"] == 4
     assert satie.development["mutate_every_n"] == 4
     assert satie.development["mutate_ops"] == ["invert"]
-    assert satie.development["additive_only"] is False
-    assert satie.development["phase_creep"] is False
+    assert satie.chord_progression == ["G3", "D3", "C3", "G3"]
     assert satie.embellish is False
     assert satie.rhythmic_variation is False
 
@@ -209,46 +246,37 @@ def test_sparse_six_honest_archetypes():
     assert frahm.effects_preset == "tape_and_human"
     assert isinstance(frahm.mode_color, dict)
     assert frahm.mode_color["intervals"] == [2, 9]
-    assert frahm.development["phase_creep"] is False
-    assert frahm.development["additive_only"] is False
+    assert frahm.chord_progression == ["D3", "A3", "G3", "C4"]
+    assert frahm.development["mutate_ops"] == ["add_attack", "invert"]
     assert frahm.development["mutate_every_n"] >= 3
-    assert frahm.rhythmic_variation is False
     assert frahm.embellish is False
+    assert frahm.rhythmic_variation is False
 
 
-def test_sparse_six_not_wallpaper_clones_of_locked():
-    """Each of the six must differ from locked four on development archetype flags."""
+def test_sparse_six_not_fake_glass_or_eno():
     glass = get_profile_by_id("glass_minimal")
     reich = get_profile_by_id("reich_phase")
     coltrane = get_profile_by_id("coltrane_sheets")
     eno = get_profile_by_id("eno_ambient")
 
-    # No sparse recipe silently becomes Glass additive cells
     for pid in SPARSE_IDS:
         p = get_profile_by_id(pid)
         assert p.development.get("additive_only") is not True, pid
-
-    # No sparse recipe silently becomes Reich phase
-    for pid in SPARSE_IDS:
-        p = get_profile_by_id(pid)
         assert p.development.get("phase_creep") is not True, pid
 
-    # Satie must not match Glass development ops/timing
     satie = get_profile_by_id("satie_neoclassical")
     assert satie.development["mutate_ops"] != glass.development["mutate_ops"]
     assert satie.arp_steps != glass.arp_steps
 
-    # Frahm must not be Eno drone
     frahm = get_profile_by_id("frahm_felt")
     assert frahm.generation_type != eno.generation_type
 
-    # Bach must not use Reich phase ops
     bach = get_profile_by_id("bach_sequence")
     assert "phase_creep" not in bach.development["mutate_ops"]
     assert bach.development["mutate_ops"] != reich.development["mutate_ops"]
 
-    # Aphex must not equal Coltrane mode_color / effects / mode
     aphex = get_profile_by_id("aphex_glitch")
     assert aphex.mode != coltrane.mode
     assert aphex.mode_color != coltrane.mode_color
     assert aphex.effects_preset != coltrane.effects_preset
+    assert aphex.embellish is False  # not Coltrane sheets
