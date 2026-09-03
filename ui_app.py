@@ -29,6 +29,7 @@ if "midi_gen" not in sys.modules:
 import streamlit as st
 
 from midi_gen.audio_preview import describe_preview, render_midi_to_wav_bytes
+from midi_gen.artist_gate import ArtistRejected
 from midi_gen.cursor_style_lookup import cursor_sdk_available, generate_midi_for_style
 from midi_gen.effects_presets import EFFECT_PARAM_HELP, explain_effects_config, list_presets
 from midi_gen.live_midi import (
@@ -1086,15 +1087,27 @@ if generate:
                     result.profile
                 )
             st.session_state.pop("generate_error", None)
+            st.session_state.pop("artist_reject_reason", None)
             st.session_state.pop("live_message", None)
             # Refresh layout (collapse featured, show post-gen chrome)
             st.rerun()
+        except ArtistRejected as exc:
+            # Sample Musician drip: typed reject reason (not_a_musician / …).
+            st.session_state["artist_reject_reason"] = exc.result.reason
+            st.session_state["generate_error"] = str(exc)
+            st.session_state.pop("pending_replay", False)
         except Exception as exc:
+            st.session_state.pop("artist_reject_reason", None)
             st.session_state["generate_error"] = str(exc)
             st.session_state.pop("pending_replay", False)
 
 if st.session_state.get("generate_error"):
-    st.error(f"Generation failed: {st.session_state['generate_error']}")
+    _reject = st.session_state.get("artist_reject_reason")
+    st.error(
+        f"Rejected ({_reject}): {st.session_state['generate_error']}"
+        if _reject
+        else f"Generation failed: {st.session_state['generate_error']}"
+    )
 
 run = st.session_state.get("last_run")
 # Honor an explicit mid-session Refresh request before painting status.

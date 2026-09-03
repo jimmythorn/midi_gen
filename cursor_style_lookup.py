@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from .artist_gate import ArtistRejected, require_artist
 from .musician_styles import (
     MUSICIAN_STYLE_CATALOG,
     MusicianStyleProfile,
@@ -223,19 +224,25 @@ def lookup_musician_style(
     force_sdk: bool = False,
     identity_name: Optional[str] = None,
     vibe_text: Optional[str] = None,
+    skip_artist_gate: bool = False,
 ) -> StyleLookupResult:
     """
     Resolve a musician/style query into a MIDI generation profile.
 
     Resolution order:
-    1. Local catalog match (always attempted)
-    2. Optional Cursor SDK enrichment when CURSOR_API_KEY is set
-    3. Fallback to best local match or a generic ambient sketch
+    1. Artist gate (catalog/alias, else Spotify type=artist) — fail closed
+    2. Local catalog match
+    3. Optional Cursor SDK enrichment when CURSOR_API_KEY is set
+    4. Fallback to best local match or a generic ambient sketch
 
     ``identity_name`` pins the catalog artist so a feel cannot replace them.
+    Raises ``ArtistRejected`` when the gate fails (no create_arp / SDK after).
     """
     query = (query or "").strip()
     feel = (vibe_text or "").strip() or None
+    if not skip_artist_gate:
+        # Reject before any Cursor SDK enrich or generic invent-a-sketch path.
+        require_artist(query, identity_name=identity_name)
     identity = _catalog_identity(identity_name)
     candidates = find_profiles(query, limit=5) if query else []
     local_best = identity or (candidates[0] if candidates else None)
@@ -330,11 +337,17 @@ def generate_midi_for_style(
     """
     Lookup style and generate a MIDI file.
 
+    Artist gate runs first (catalog/alias or Spotify type=artist). Rejects
+    raise ``ArtistRejected`` before ``create_arp`` or Cursor SDK lookup.
+
     When the Cursor SDK returns a recipe, widget overrides are ignored except
     loop length / seed / debug — unless ``live_tweak`` (user moved a live knob).
 
     Returns (midi_path, lookup_result, options_used).
     """
+    # Fail closed before create_arp / SDK — shared gate with lookup.
+    require_artist(query, identity_name=identity_name)
+
     from .arpeggio_generation import create_arp
 
     result = lookup_musician_style(
@@ -342,6 +355,7 @@ def generate_midi_for_style(
         use_cursor_sdk=use_cursor_sdk,
         identity_name=identity_name,
         vibe_text=vibe_text,
+        skip_artist_gate=True,  # already gated above
     )
     options = result.to_options()
     if overrides:
