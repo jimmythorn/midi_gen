@@ -98,38 +98,6 @@ def test_prefs_survive_relaunch_roundtrip(tmp_path):
     assert again["live_port"] == "IAC Driver Bus 1"
 
 
-def test_mood_chip_sets_vibe_text_without_widget_exception():
-    """Chip click must set vibe_text via on_click, not after the text_input binds."""
-    from streamlit.testing.v1 import AppTest
-
-    from midi_gen.style_prompting import mood_chip_packs
-
-    packs = mood_chip_packs()
-    pack = packs[0]
-    chip = pack.chips[0]
-    at = AppTest.from_file(str(_ROOT / "ui_app.py"), default_timeout=30)
-    at.run()
-    assert not at.exception, at.exception
-    at.button(key=f"mood_{pack.id}_0").click().run()
-    assert not at.exception, at.exception
-    assert at.session_state["vibe_text"] == chip
-
-
-def test_featured_card_sets_catalog_without_widget_exception():
-    from streamlit.testing.v1 import AppTest
-
-    from midi_gen.style_prompting import featured_style_cards
-
-    card = featured_style_cards()[0]
-    at = AppTest.from_file(str(_ROOT / "ui_app.py"), default_timeout=30)
-    at.run()
-    assert not at.exception, at.exception
-    at.button(key=f"feat_{card.id}").click().run()
-    assert not at.exception, at.exception
-    assert at.session_state["catalog_pick"] == card.name
-    assert at.session_state["vibe_text"] == ""
-
-
 def _apptest():
     from streamlit.testing.v1 import AppTest
 
@@ -139,8 +107,52 @@ def _apptest():
     return at
 
 
+def _open_takeover(at, key: str):
+    at.button(key=f"takeover_{key}").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["ui_takeover"] == key
+    return at
+
+
+def _takeover_is_closed(at) -> bool:
+    try:
+        return not at.session_state["ui_takeover"]
+    except KeyError:
+        return True
+
+
+def test_mood_chip_sets_vibe_text_without_widget_exception():
+    """Chip click must set vibe_text via on_click, not after the text_input binds."""
+    from midi_gen.style_prompting import mood_chip_packs
+
+    packs = mood_chip_packs()
+    pack = packs[0]
+    chip = pack.chips[0]
+    at = _apptest()
+    _open_takeover(at, "moods")
+    at.button(key=f"mood_{pack.id}_0").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["vibe_text"] == chip
+    # Chip returns to home (takeover closes).
+    assert _takeover_is_closed(at)
+
+
+def test_featured_card_sets_catalog_without_widget_exception():
+    from midi_gen.style_prompting import featured_style_cards
+
+    card = featured_style_cards()[0]
+    at = _apptest()
+    _open_takeover(at, "browse")
+    at.button(key=f"feat_{card.id}").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["catalog_pick"] == card.name
+    assert at.session_state["vibe_text"] == ""
+    assert _takeover_is_closed(at)
+
+
 def test_catalog_select_nils_frahm():
     at = _apptest()
+    _open_takeover(at, "browse")
     options = list(at.selectbox(key="catalog_pick").options)
     assert "Nils Frahm" in options
     at.selectbox(key="catalog_pick").select("Nils Frahm").run()
@@ -157,10 +169,13 @@ def test_catalog_select_nils_frahm():
 
 def test_featured_nils_frahm_sets_catalog():
     at = _apptest()
+    _open_takeover(at, "browse")
     at.button(key="feat_frahm_felt").click().run()
     assert not at.exception, at.exception
     assert at.session_state["catalog_pick"] == "Nils Frahm"
     assert at.session_state["vibe_text"] == ""
+    # Back on home after featured pick — reopen browse to assert chip state.
+    _open_takeover(at, "browse")
     frahm = next(b for b in at.button if b.key == "feat_frahm_felt")
     assert frahm.label.startswith("●")
 
@@ -171,8 +186,10 @@ def test_catalog_select_keeps_feel():
 
     pack = mood_chip_packs()[0]
     at = _apptest()
+    _open_takeover(at, "moods")
     at.button(key=f"mood_{pack.id}_0").click().run()
     assert at.session_state["vibe_text"] == pack.chips[0]
+    _open_takeover(at, "browse")
     at.selectbox(key="catalog_pick").select("Nils Frahm").run()
     assert not at.exception, at.exception
     assert at.session_state["catalog_pick"] == "Nils Frahm"
@@ -184,6 +201,7 @@ def test_catalog_select_keeps_feel():
 
 def test_half_double_bars_use_callbacks():
     at = _apptest()
+    _open_takeover(at, "length")
     assert at.session_state["bars"] == 8
     at.button(key="bars_double").click().run()
     assert not at.exception, at.exception
@@ -209,6 +227,7 @@ def test_ui_widget_mutations_use_callbacks():
 
 def test_arp_live_knobs_present_and_override_steps():
     at = _apptest()
+    _open_takeover(at, "length")
     keys = [s.key for s in at.selectbox]
     assert "arp_mode" in keys
     assert "arp_steps" in keys
@@ -216,6 +235,9 @@ def test_arp_live_knobs_present_and_override_steps():
     at.selectbox(key="arp_steps").select(16).run()
     assert not at.exception, at.exception
     assert at.session_state["arp_steps"] == 16
+    at.button(key="takeover_back").click().run()
+    _open_takeover(at, "advanced")
+    assert "sketch_bpm" in [n.key for n in at.number_input]
     # No sketch yet — knobs wait for Generate rather than auto-firing.
     src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
     assert "pending_replay" in src
@@ -236,3 +258,66 @@ def test_sdk_status_follows_toggle_and_key():
     assert "offline — catalog only" not in src
     assert "load_dotenv_if_present()" not in src
     assert "_load_repo_dotenv()" in src
+
+
+def test_one_page_chrome_takeovers_source_and_nav():
+    """PASS bar: Search+Generate+Play on main; takeovers only; stream ≠ region."""
+    src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
+    assert "TAKEOVER_LABELS" in src
+    assert 'f"takeover_{key}"' in src
+    assert 'key="takeover_back"' in src
+    # Chrome order / short PASS labels
+    assert '"Browse"' in src and '"Mood"' in src and '"Length"' in src
+    assert '"Effects"' in src and '"Capture"' in src
+    assert '"Advanced"' in src and '"Geek"' in src
+    assert list(
+        k
+        for k in ("browse", "moods", "length", "effects", "capture", "advanced", "geek")
+        if f'"{k}"' in src
+    ) == [
+        "browse",
+        "moods",
+        "length",
+        "effects",
+        "capture",
+        "advanced",
+        "geek",
+    ]
+    assert "st.navigation" not in src
+    assert "pages/" not in src
+    # Sacred home / Fun Now
+    assert '"Generate"' in src
+    assert '"Surprise me"' in src
+    assert '"Play into Logic"' in src
+    assert '"Download MIDI"' in src
+    assert '"Again"' in src
+    assert "Try instead" in src
+    assert "with_fun_now" in src
+    assert "Not finding a musician" in src or "ARTIST_REJECT_DRIP" in src
+    # Play honesty: live stream ≠ region; Capture is record path
+    assert "never writes a Logic region" in src
+    assert "Capture is the record path" in src
+    cap = src.index("def _render_capture_setup")
+    adv = src.index("def _render_advanced_takeover")
+    assert "AUDITION_CAPTURE_STRIP_HTML" in src[cap:adv]
+    play = src[src.index("def _render_play_hero") : src.index("def _render_download")]
+    assert "AUDITION_CAPTURE_STRIP_HTML" not in play
+
+    at = _apptest()
+    assert _takeover_is_closed(at)
+    home_keys = {b.key for b in at.button}
+    assert "takeover_browse" in home_keys
+    assert "takeover_capture" in home_keys
+    assert "takeover_geek" in home_keys
+    assert "feat_glass_minimal" not in home_keys  # featured buried in Browse
+    assert "bars_half" not in home_keys  # length knobs buried
+    # Chrome button labels match PASS short names
+    labels = {b.key: b.label for b in at.button if b.key and b.key.startswith("takeover_")}
+    assert labels["takeover_browse"] == "Browse"
+    assert labels["takeover_moods"] == "Mood"
+    assert labels["takeover_capture"] == "Capture"
+    assert labels["takeover_geek"] == "Geek"
+    _open_takeover(at, "capture")
+    assert "refresh_ports" in {b.key for b in at.button}
+    at.button(key="takeover_back").click().run()
+    assert _takeover_is_closed(at)
