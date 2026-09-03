@@ -29,7 +29,7 @@ if "midi_gen" not in sys.modules:
 import streamlit as st
 
 from midi_gen.audio_preview import describe_preview, render_midi_to_wav_bytes
-from midi_gen.artist_gate import ArtistRejected
+from midi_gen.artist_gate import ArtistGateReject, ArtistRejected
 from midi_gen.cursor_style_lookup import cursor_sdk_available, generate_midi_for_style
 from midi_gen.effects_presets import EFFECT_PARAM_HELP, explain_effects_config, list_presets
 from midi_gen.live_midi import (
@@ -42,6 +42,8 @@ from midi_gen.live_midi import (
 from midi_gen.musician_styles import list_musicians, list_styles
 from midi_gen.preview import events_to_roll_rows, format_summary_text, summarize_midi_file
 from midi_gen.style_prompting import (
+    ARTIST_REJECT_DRIP,
+    artist_reject_drip_copy,
     clamp_bars,
     double_bars,
     featured_style_cards,
@@ -51,7 +53,9 @@ from midi_gen.style_prompting import (
     mood_chip_packs,
     preview_recipe,
     related_from_lookup_result,
+    resolve_artist_gate_for_ui,
     resolve_happy_path_query,
+    session_clears_on_artist_reject,
     surprise_related_profile,
 )
 from midi_gen.ui_prefs import load_prefs, prefs_for_session, save_prefs
@@ -896,6 +900,31 @@ if effects_preset not in preset_ids:
     effects_preset = "tape_and_human"
     st.session_state["effects_preset"] = effects_preset
 
+# --- Pre-Generate artist drip (as user types / on lookup; not only on Generate) ---
+_gate = resolve_artist_gate_for_ui(
+    str(st.session_state.get("catalog_pick") or ""),
+    str(st.session_state.get("vibe_text") or ""),
+)
+_artist_rejected = isinstance(_gate, ArtistGateReject) or not getattr(_gate, "accepted", False)
+if _artist_rejected:
+    # Blank recipe / stale sketch; store reason for tests; plain drip for humans.
+    _had_last_run = bool(st.session_state.get("last_run"))
+    st.session_state["artist_reject_reason"] = getattr(_gate, "reason", None)
+    for _key in session_clears_on_artist_reject():
+        st.session_state.pop(_key, None)
+    st.session_state["generate_error"] = artist_reject_drip_copy(
+        st.session_state.get("artist_reject_reason")
+    )
+    st.session_state.pop("auto_generate", None)
+    st.session_state.pop("pending_replay", False)
+    if _had_last_run:
+        # Refresh featured / empty-state chrome after wiping last_run.
+        st.rerun()
+else:
+    st.session_state.pop("artist_reject_reason", None)
+    if st.session_state.get("generate_error") == ARTIST_REJECT_DRIP:
+        st.session_state.pop("generate_error", None)
+
 # --- Half / Double bars (real bars knob; no settings sprawl) ---
 st.session_state["bars"] = clamp_bars(int(st.session_state.get("bars", 8)))
 st.markdown('<div class="bars-chip-row">', unsafe_allow_html=True)
@@ -923,26 +952,38 @@ with double_col:
 st.markdown("</div>", unsafe_allow_html=True)
 
 # --- Recipe preview + plain-feel clarity (pre-Generate, no MIDI write) ---
+# Reject: blank panel / drip only — never a fake catalog "About to generate" recipe.
 recipe = preview_recipe(
     catalog_name=st.session_state["catalog_pick"],
-    vibe_text=st.session_state["vibe_text"],
+    vibe_text=st.session_state["vibe_text"] if not _artist_rejected else "",
     effects_preset=effects_preset,
 )
-path_note = (
-    "artist + feel (feel layers on)"
-    if recipe.path == "both"
-    else ("feel only" if recipe.path == "vibe" else "who path (named catalog)")
-)
-st.markdown(
-    f"""
-    <div class="recipe-preview">
-      <div class="label">About to generate · {path_note}</div>
-      <div class="line">{recipe.one_liner}</div>
-      <div class="feel">{recipe.plain_feel_line}</div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+if _artist_rejected:
+    st.markdown(
+        f"""
+        <div class="recipe-preview">
+          <div class="label">Artist gate</div>
+          <div class="line">{ARTIST_REJECT_DRIP}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+else:
+    path_note = (
+        "artist + feel (feel layers on)"
+        if recipe.path == "both"
+        else ("feel only" if recipe.path == "vibe" else "who path (named catalog)")
+    )
+    st.markdown(
+        f"""
+        <div class="recipe-preview">
+          <div class="label">About to generate · {path_note}</div>
+          <div class="line">{recipe.one_liner}</div>
+          <div class="feel">{recipe.plain_feel_line}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 _pending_knobs = st.session_state.pop("_pending_profile_knobs", None)
 if isinstance(_pending_knobs, dict):
@@ -954,7 +995,10 @@ _render_arp_live(recipe.profile)
 if "use_sdk" not in st.session_state:
     st.session_state["use_sdk"] = False
 with st.expander("Advanced", expanded=False):
-    st.caption(recipe.match_line)
+    if _artist_rejected:
+        st.caption("Matched: —")
+    else:
+        st.caption(recipe.match_line)
     st.slider(
         "Bars",
         2,
@@ -998,7 +1042,13 @@ bars = clamp_bars(int(st.session_state.get("bars", 8)))
 st.markdown('<div class="generate-wrap">', unsafe_allow_html=True)
 gen_col, surprise_col = st.columns([3, 1])
 with gen_col:
-    generate = st.button("Generate", type="primary", use_container_width=True)
+    generate = st.button(
+        "Generate",
+        type="primary",
+        use_container_width=True,
+        disabled=_artist_rejected,
+        help=ARTIST_REJECT_DRIP if _artist_rejected else None,
+    )
 with surprise_col:
     last_run_for_surprise = st.session_state.get("last_run")
     last_result = (
@@ -1006,24 +1056,28 @@ with surprise_col:
     )
     # Skip bouncing straight back to the last Surprise target when possible.
     previous_id = st.session_state.get("last_surprise_id")
-    surprise_pick = surprise_related_profile(
-        recipe.profile,
-        vibe_hint=query,
-        last_result=last_result,
-        previous_id=previous_id,
+    surprise_pick = (
+        None
+        if _artist_rejected
+        else surprise_related_profile(
+            recipe.profile,
+            vibe_hint=query,
+            last_result=last_result,
+            previous_id=previous_id,
+        )
     )
     st.button(
         "Surprise me",
         use_container_width=True,
         key="surprise_me",
-        disabled=surprise_pick is None,
+        disabled=surprise_pick is None or _artist_rejected,
         help="Dice into a related named style from the full catalog, then generate.",
         on_click=_apply_surprise if surprise_pick is not None else None,
         args=(surprise_pick.name, surprise_pick.id) if surprise_pick is not None else (),
     )
 st.markdown("</div>", unsafe_allow_html=True)
 if st.session_state.pop("auto_generate", False):
-    generate = True
+    generate = False if _artist_rejected else True
 
 player = get_shared_player()
 
@@ -1092,9 +1146,13 @@ if generate:
             # Refresh layout (collapse featured, show post-gen chrome)
             st.rerun()
         except ArtistRejected as exc:
-            # Sample Musician drip: typed reject reason (not_a_musician / …).
+            # Sample Musician drip: store reason for tests; plain copy only in UI.
             st.session_state["artist_reject_reason"] = exc.result.reason
-            st.session_state["generate_error"] = str(exc)
+            for _key in session_clears_on_artist_reject():
+                st.session_state.pop(_key, None)
+            st.session_state["generate_error"] = artist_reject_drip_copy(
+                exc.result.reason
+            )
             st.session_state.pop("pending_replay", False)
         except Exception as exc:
             st.session_state.pop("artist_reject_reason", None)
@@ -1103,11 +1161,11 @@ if generate:
 
 if st.session_state.get("generate_error"):
     _reject = st.session_state.get("artist_reject_reason")
-    st.error(
-        f"Rejected ({_reject}): {st.session_state['generate_error']}"
-        if _reject
-        else f"Generation failed: {st.session_state['generate_error']}"
-    )
+    if _reject or st.session_state["generate_error"] == ARTIST_REJECT_DRIP:
+        # Never show "Rejected (not_a_musician)" / raw enums — Sample's plain drip.
+        st.error(artist_reject_drip_copy(_reject))
+    else:
+        st.error(f"Generation failed: {st.session_state['generate_error']}")
 
 run = st.session_state.get("last_run")
 # Honor an explicit mid-session Refresh request before painting status.

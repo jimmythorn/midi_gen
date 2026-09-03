@@ -502,3 +502,61 @@ def resolve_happy_path_query(catalog_name: str, vibe_text: str = "") -> str:
             return vibe
         return f"{who} — {vibe}"
     return who or vibe
+
+
+# Sample Musician reject drip — plain copy only (never raw reason enums in UI).
+ARTIST_REJECT_DRIP = "Not finding a musician…"
+
+
+def artist_gate_query_for_ui(catalog_name: str, vibe_text: str = "") -> str:
+    """
+    Pre-Generate gate query for Sample Musician drip.
+
+    Typed vibe/feel is gated as the artist query (no catalog identity pin) so
+    Ted Bundy-class names reject instead of showing the pinned catalog recipe.
+    Empty vibe falls back to the selected catalog who.
+    """
+    vibe = (vibe_text or "").strip()
+    if vibe:
+        return vibe
+    return (catalog_name or "").strip()
+
+
+def resolve_artist_gate_for_ui(
+    catalog_name: str,
+    vibe_text: str = "",
+    *,
+    spotify_search=None,
+):
+    """
+    Run ``resolve_artist_query`` for pre-Generate drip.
+
+    When vibe is present, pass no identity pin (fail closed for non-artists).
+    When vibe is empty, pin the catalog who so curated picks stay instant.
+    """
+    from .artist_gate import resolve_artist_query
+
+    vibe = (vibe_text or "").strip()
+    who = (catalog_name or "").strip()
+    if vibe:
+        return resolve_artist_query(
+            vibe,
+            identity_name=None,
+            spotify_search=spotify_search,
+        )
+    return resolve_artist_query(
+        who,
+        identity_name=who or None,
+        spotify_search=spotify_search,
+    )
+
+
+def artist_reject_drip_copy(reason: str | None = None) -> str:
+    """Visible reject drip — always Sample's plain words; reason stays for tests."""
+    _ = reason  # session may store enum; UI never surfaces it
+    return ARTIST_REJECT_DRIP
+
+
+def session_clears_on_artist_reject() -> tuple[str, ...]:
+    """Session keys cleared when the gate rejects (no stale recipe / sketch)."""
+    return ("last_run", "match_line", "generate_error")
