@@ -35,6 +35,7 @@ from midi_gen.style_prompting import (
     related_from_lookup_result,
     related_profiles,
     resolve_happy_path_query,
+    resolve_lookup_inputs,
     surprise_related_profile,
     vibe_chips,
 )
@@ -117,6 +118,10 @@ def test_vibe_chips_are_examples_not_closed_set():
     assert resolve_happy_path_query("Philip Glass", "angular jazz") == "Philip Glass — angular jazz"
     assert resolve_happy_path_query("Philip Glass", "  ") == "Philip Glass"
     assert resolve_happy_path_query("", "ambient drone") == "ambient drone"
+    # Generate/lookup inputs: typed vibe is the query; no catalog_pick pin.
+    assert resolve_lookup_inputs("Philip Glass", "angular jazz") == ("angular jazz", None)
+    assert resolve_lookup_inputs("Philip Glass", "") == ("Philip Glass", "Philip Glass")
+    assert resolve_lookup_inputs("Philip Glass", "  ") == ("Philip Glass", "Philip Glass")
 
 
 def test_mood_chip_packs_span_catalog_examples():
@@ -188,23 +193,23 @@ def test_recipe_preview_and_match_line():
     assert who.plain_feel_line.startswith("Sounds like Erik Satie")
     assert " · " in who.plain_feel_line
 
+    # Typed vibe is the query — ambient drone binds Eno, not leftover Glass chip.
     feel = preview_recipe(
         catalog_name="Philip Glass",
         vibe_text="ambient drone",
         effects_preset="subtle_tape",
     )
-    assert feel.path == "both"
-    assert feel.profile.id == "glass_minimal"
-    assert "Philip Glass" in feel.query
-    assert "ambient drone" in feel.query
-    assert "feel ambient drone" in feel.plain_feel_line
+    assert feel.path in ("vibe", "both")
+    assert feel.profile.id == "eno_ambient"
+    assert feel.query == "ambient drone"
 
+    # Unknown vibe with who-chip: no catalog_pick pin → sparse/cousin, not Glass.
     generic = preview_recipe(
         catalog_name="Philip Glass",
         vibe_text="zzzzqwerty totally unknown vibe 999",
     )
-    assert generic.path == "both"
-    assert generic.profile.id == "glass_minimal"
+    assert generic.profile.id != "glass_minimal"
+    assert generic.query == "zzzzqwerty totally unknown vibe 999"
     line = format_recipe_one_liner(who.profile)
     assert "Erik Satie" in line
     assert "Matched:" in format_match_line(who.profile, match_type="catalog")

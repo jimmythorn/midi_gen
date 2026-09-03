@@ -15,14 +15,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .artist_gate import ArtistRejected, require_artist
+from .artist_gate import ArtistGateAccept, ArtistRejected, require_artist
 from .musician_styles import (
+    COUSIN_SCORE_FLOOR,
     MUSICIAN_STYLE_CATALOG,
     MusicianStyleProfile,
-    find_best_profile,
+    cousin_recipe_from_neighbors,
     find_profiles,
+    has_full_recipe_contract,
+    is_effects_only_overlay,
     list_styles,
     profile_from_dict,
+    score_profile,
+    sparse_unknown_profile,
 )
 from .effects_presets import build_effects_config, get_preset
 
@@ -217,6 +222,232 @@ def _catalog_identity(name: Optional[str]) -> Optional[MusicianStyleProfile]:
     return None
 
 
+def _name_token_overlap(query: str, profile: MusicianStyleProfile) -> bool:
+    """True when query shares a token with the musician name or id."""
+    def tokens(text: str) -> set:
+        return {t for t in re.split(r"[^a-z0-9]+", text.lower()) if t}
+
+    q_tokens = tokens(query)
+    if not q_tokens:
+        return False
+    name_tokens = tokens(profile.name) | tokens(profile.id.replace("_", " "))
+    return bool(q_tokens & name_tokens)
+
+
+def _strong_local_identity(
+    query: str,
+    profile: MusicianStyleProfile,
+) -> bool:
+    """
+    Catalog stick only on identity-strength hits (name / high score / alias).
+
+    Weak description-only keyword scores (e.g. \"jazz\" in a stranger name)
+    must not steal the recipe into Coltrane/Glass — those go cousin/sparse.
+    """
+    if score_profile(query, profile) >= 5.0:
+        return True
+    if _name_token_overlap(query, profile):
+        return True
+    return False
+
+
+def _spotify_genre_styles(gate: Optional[ArtistGateAccept]) -> List[str]:
+    if gate is None or gate.spotify_artist is None:
+        return []
+    return list(gate.spotify_artist.genres)
+
+
+def _cousin_seed_query(
+    query: str,
+    gate: Optional[ArtistGateAccept],
+) -> str:
+    """Build find_profiles seed from accepted-artist genres + name + query."""
+    parts: List[str] = []
+    if gate is not None and gate.spotify_artist is not None:
+        artist = gate.spotify_artist
+        parts.extend(artist.genres)
+        if artist.name:
+            parts.append(artist.name)
+    q = (query or "").strip()
+    if q:
+        parts.append(q)
+    return " ".join(parts).strip() or q
+
+
+def _nearest_cousins(
+    query: str,
+    gate: Optional[ArtistGateAccept],
+    *,
+    limit: int = 3,
+) -> List[MusicianStyleProfile]:
+    seed = _cousin_seed_query(query, gate)
+    if not seed:
+        return []
+    return find_profiles(seed, limit=limit)
+
+
+def _cousin_is_strong(
+    query: str,
+    cousin: MusicianStyleProfile,
+    gate: Optional[ArtistGateAccept],
+) -> bool:
+    seed = _cousin_seed_query(query, gate)
+    return score_profile(seed, cousin) >= COUSIN_SCORE_FLOOR
+
+
+def _style_notes_from_gate(gate: Optional[ArtistGateAccept]) -> str:
+    if gate is None or gate.spotify_artist is None:
+        return ""
+    artist = gate.spotify_artist
+    genres = ", ".join(artist.genres) if artist.genres else "(no genres)"
+    followers = artist.followers_total
+    return (
+        f"Spotify accept: {artist.name}; genres=[{genres}]; "
+        f"followers.total={followers}"
+    )
+
+
+def _enrich_sdk_with_cousin_contract(
+    sdk_profile: MusicianStyleProfile,
+    *,
+    query: str,
+    gate: Optional[ArtistGateAccept],
+) -> Optional[MusicianStyleProfile]:
+    """
+    Incomplete SDK recipe → cousin FULL contract + SDK soft steers in-band.
+
+    Soft steers may bend bpm/density/effects; must not discard SDK
+    generation_type / mode when set. Reject effects-only results.
+    """
+    cousins = _nearest_cousins(query, gate, limit=3)
+    genres = _spotify_genre_styles(gate)
+    notes = _style_notes_from_gate(gate)
+    followers = (
+        gate.spotify_artist.followers_total
+        if gate is not None and gate.spotify_artist is not None
+        else None
+    )
+    base_neighbors = cousins
+    if not base_neighbors or not _cousin_is_strong(query, base_neighbors[0], gate):
+        # No strong cousin — pad sparse FULL contract under SDK soft steers.
+        sparse = sparse_unknown_profile(
+            sdk_profile.name or query,
+            styles=genres or list(sdk_profile.styles) or None,
+            style_notes=notes or sdk_profile.style_notes,
+        )
+        base_neighbors = [sparse]
+
+    primary = base_neighbors[0]
+    data = primary.as_dict()
+    # FULL structural from cousin/sparse; overlay SDK soft + identity fields.
+    sdk_data = sdk_profile.as_dict()
+    for key in (
+        "name",
+        "styles",
+        "description",
+        "style_notes",
+        "generation_type",
+        "mode",
+        "mode_color",
+        "bpm",
+        "arp_steps",
+        "evolution_rate",
+        "repetition_factor",
+        "effects_preset",
+        "arp_mode",
+        "range_octaves",
+    ):
+        if sdk_data.get(key) is not None and sdk_data.get(key) != "":
+            data[key] = sdk_data[key]
+    # Prefer SDK development/progression when already FULL; else keep cousin.
+    if sdk_profile.development and sdk_profile.chord_progression:
+        data["development"] = sdk_data["development"]
+        data["chord_progression"] = sdk_data["chord_progression"]
+    elif cousins and _cousin_is_strong(query, cousins[0], gate):
+        for other in cousins:
+            if other.development and not data.get("development"):
+                data["development"] = dict(other.development)
+            if other.chord_progression and not data.get("chord_progression"):
+                data["chord_progression"] = list(other.chord_progression)
+    data["id"] = "custom_query"
+    data["source"] = "hybrid"
+    if followers is not None and "followers.total" not in (data.get("style_notes") or ""):
+        data["style_notes"] = (
+            f"{(data.get('style_notes') or '').strip()} followers.total={followers}"
+        ).strip()[:800]
+    profile = profile_from_dict(data, source="hybrid")
+    if not has_full_recipe_contract(profile):
+        return None
+    if is_effects_only_overlay(profile, sparse_unknown_profile(query)):
+        return None
+    return profile
+
+
+def _resolve_stranger_or_sparse(
+    query: str,
+    *,
+    gate: Optional[ArtistGateAccept],
+    candidates: List[MusicianStyleProfile],
+    raw_sdk: Optional[str],
+) -> StyleLookupResult:
+    """
+    No local catalog identity — cousin fingerprint or honest sparse unknown.
+
+    Never CATALOG[0] / eno_ambient wallpaper. Genres/followers from require_artist
+    drive the few-shot seed when present.
+    """
+    cousins = _nearest_cousins(query, gate, limit=3)
+    genres = _spotify_genre_styles(gate)
+    notes = _style_notes_from_gate(gate)
+    followers = (
+        gate.spotify_artist.followers_total
+        if gate is not None and gate.spotify_artist is not None
+        else None
+    )
+
+    if cousins and _cousin_is_strong(query, cousins[0], gate):
+        cousin_profile = cousin_recipe_from_neighbors(
+            (gate.spotify_artist.name if gate and gate.spotify_artist else query),
+            cousins,
+            styles=genres or None,
+            style_notes=notes,
+            followers_total=followers,
+        )
+        if (
+            cousin_profile is not None
+            and has_full_recipe_contract(cousin_profile)
+            and not is_effects_only_overlay(
+                cousin_profile,
+                sparse_unknown_profile(query),
+            )
+        ):
+            return StyleLookupResult(
+                profile=cousin_profile,
+                matched_locally=False,
+                used_cursor_sdk=False,
+                candidates=cousins,
+                raw_sdk_text=raw_sdk,
+                message=(
+                    f"Cousin fingerprint from {[c.name for c in cousins[:3]]} "
+                    f"for {cousin_profile.name}."
+                ),
+            )
+
+    sparse = sparse_unknown_profile(
+        (gate.spotify_artist.name if gate and gate.spotify_artist else query),
+        styles=genres or None,
+        style_notes=notes or "Honest sparse unknown — no strong local cousin.",
+    )
+    return StyleLookupResult(
+        profile=sparse,
+        matched_locally=False,
+        used_cursor_sdk=False,
+        candidates=cousins or candidates,
+        raw_sdk_text=raw_sdk,
+        message="No catalog match. Using honest sparse unknown (not catalog[0]).",
+    )
+
+
 def lookup_musician_style(
     query: str,
     *,
@@ -225,27 +456,37 @@ def lookup_musician_style(
     identity_name: Optional[str] = None,
     vibe_text: Optional[str] = None,
     skip_artist_gate: bool = False,
+    gate_accept: Optional[ArtistGateAccept] = None,
 ) -> StyleLookupResult:
     """
     Resolve a musician/style query into a MIDI generation profile.
 
     Resolution order:
     1. Artist gate (catalog/alias, else Spotify type=artist) — fail closed
-    2. Local catalog match
+    2. Local catalog match (identity pin or scored hit)
     3. Optional Cursor SDK enrichment when CURSOR_API_KEY is set
-    4. Fallback to best local match or a generic ambient sketch
+    4. Cousin few-shot from 2–3 nearest catalog recipes (genres/followers bind)
+    5. Honest sparse unknown — never CATALOG[0] / eno_ambient wallpaper
 
     ``identity_name`` pins the catalog artist so a feel cannot replace them.
+    Do not pass the UI who-chip when the typed vibe is the accepted artist.
     Raises ``ArtistRejected`` when the gate fails (no create_arp / SDK after).
     """
     query = (query or "").strip()
     feel = (vibe_text or "").strip() or None
+    gate: Optional[ArtistGateAccept] = gate_accept
     if not skip_artist_gate:
         # Reject before any Cursor SDK enrich or generic invent-a-sketch path.
-        require_artist(query, identity_name=identity_name)
+        gate = require_artist(query, identity_name=identity_name)
     identity = _catalog_identity(identity_name)
     candidates = find_profiles(query, limit=5) if query else []
-    local_best = identity or (candidates[0] if candidates else None)
+    if identity is not None:
+        local_best = identity
+    elif candidates and _strong_local_identity(query, candidates[0]):
+        local_best = candidates[0]
+    else:
+        # Weak keyword overlap only — keep candidates for cousin few-shot.
+        local_best = None
 
     sdk_profile = None
     raw_sdk = None
@@ -279,14 +520,38 @@ def lookup_musician_style(
                 raw_sdk_text=raw_sdk,
                 message=f"Researched params for {merged.name} (catalog name + Cursor SDK recipe).",
             )
-        return StyleLookupResult(
-            profile=sdk_profile,
-            matched_locally=local_best is not None,
-            used_cursor_sdk=True,
-            candidates=candidates,
-            raw_sdk_text=raw_sdk,
-            message=f"Cursor SDK profile for {sdk_profile.name}.",
+        # SDK stranger: FULL contract required. Effects-only → reject into few-shot.
+        if (
+            has_full_recipe_contract(sdk_profile)
+            and not is_effects_only_overlay(
+                sdk_profile, sparse_unknown_profile(query)
+            )
+        ):
+            return StyleLookupResult(
+                profile=sdk_profile,
+                matched_locally=local_best is not None,
+                used_cursor_sdk=True,
+                candidates=candidates,
+                raw_sdk_text=raw_sdk,
+                message=f"Cursor SDK profile for {sdk_profile.name}.",
+            )
+        # Incomplete SDK recipe: bind cousin FULL contract, keep SDK soft steers.
+        enriched = _enrich_sdk_with_cousin_contract(
+            sdk_profile,
+            query=query,
+            gate=gate,
         )
+        if enriched is not None:
+            return StyleLookupResult(
+                profile=enriched,
+                matched_locally=False,
+                used_cursor_sdk=True,
+                candidates=candidates,
+                raw_sdk_text=raw_sdk,
+                message=(
+                    f"Cursor SDK soft steers + cousin FULL contract for {enriched.name}."
+                ),
+            )
 
     if local_best is not None:
         return StyleLookupResult(
@@ -297,31 +562,19 @@ def lookup_musician_style(
             raw_sdk_text=raw_sdk,
             message=(
                 f"Local catalog match: {local_best.name}."
-                + (" Cursor SDK unavailable — set CURSOR_API_KEY to enrich." if use_cursor_sdk and not cursor_sdk_available() else "")
+                + (
+                    " Cursor SDK unavailable — set CURSOR_API_KEY to enrich."
+                    if use_cursor_sdk and not cursor_sdk_available()
+                    else ""
+                )
             ),
         )
 
-    # Last resort generic sketch from the query tokens
-    fallback = profile_from_dict(
-        {
-            "id": "custom_query",
-            "name": query or "Custom",
-            "styles": [t for t in re.split(r"[^a-z0-9]+", query.lower()) if t][:4] or ["ambient"],
-            "description": "Generic sketch derived from the query; refine with Cursor SDK or catalog picks.",
-            "generation_type": "drone" if "drone" in query.lower() or "ambient" in query.lower() else "arpeggio",
-            "mode": "minor",
-            "bpm": 100,
-            "effects_preset": "subtle_tape",
-        },
-        source="catalog",
-    )
-    return StyleLookupResult(
-        profile=fallback,
-        matched_locally=False,
-        used_cursor_sdk=False,
-        candidates=[],
-        raw_sdk_text=raw_sdk,
-        message="No catalog match. Using a generic sketch.",
+    return _resolve_stranger_or_sparse(
+        query,
+        gate=gate,
+        candidates=candidates,
+        raw_sdk=raw_sdk,
     )
 
 
@@ -346,7 +599,8 @@ def generate_midi_for_style(
     Returns (midi_path, lookup_result, options_used).
     """
     # Fail closed before create_arp / SDK — shared gate with lookup.
-    require_artist(query, identity_name=identity_name)
+    # Bind accept (genres / followers) into few-shot / sparse path.
+    gate = require_artist(query, identity_name=identity_name)
 
     from .arpeggio_generation import create_arp
 
@@ -356,6 +610,7 @@ def generate_midi_for_style(
         identity_name=identity_name,
         vibe_text=vibe_text,
         skip_artist_gate=True,  # already gated above
+        gate_accept=gate,
     )
     options = result.to_options()
     if overrides:

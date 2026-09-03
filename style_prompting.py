@@ -362,15 +362,19 @@ def preview_recipe(
     catalog_name: str,
     vibe_text: str = "",
     effects_preset: Optional[str] = None,
+    gate_accept: Any = None,
 ) -> RecipePreview:
     """
-    Offline lookup preview (no MIDI). Feel layers on the catalog artist.
+    Offline lookup preview (no MIDI).
+
+    Typed vibe is the query (matches artist gate); empty vibe sticks on catalog who.
+    Optional ``gate_accept`` binds Spotify genres/followers into cousin few-shot.
     """
     from .cursor_style_lookup import lookup_musician_style
 
     identity = (catalog_name or "").strip()
     vibe = (vibe_text or "").strip()
-    query = resolve_happy_path_query(identity, vibe)
+    query, identity_name = resolve_lookup_inputs(identity, vibe)
     if identity and vibe:
         path = "both"
     elif vibe:
@@ -380,7 +384,9 @@ def preview_recipe(
     result = lookup_musician_style(
         query,
         use_cursor_sdk=False,
-        identity_name=identity or None,
+        identity_name=identity_name,
+        skip_artist_gate=True,  # UI / caller already gated
+        gate_accept=gate_accept,
     )
     profile = result.profile
     mtype = _match_type_for_profile(
@@ -390,8 +396,12 @@ def preview_recipe(
     )
     if path == "vibe" and not result.matched_locally:
         mtype = "generic"
+    if path == "both" and not result.matched_locally:
+        # Stranger / sparse under a leftover who-chip — not catalog wallpaper.
+        mtype = "generic" if profile.id == "custom_query" else mtype
+        path = "vibe"
     plain = format_plain_feel_match(profile)
-    if identity and vibe:
+    if identity and vibe and result.matched_locally and identity_name:
         plain = f"{plain} · feel {vibe}"
     return RecipePreview(
         query=query,
@@ -494,7 +504,7 @@ def related_from_lookup_result(
 
 
 def resolve_happy_path_query(catalog_name: str, vibe_text: str = "") -> str:
-    """Catalog artist plus optional feel. Feel layers on; it does not replace who."""
+    """Catalog artist plus optional feel. Prefer ``resolve_lookup_inputs`` for generate."""
     who = (catalog_name or "").strip()
     vibe = (vibe_text or "").strip()
     if who and vibe:
@@ -502,6 +512,24 @@ def resolve_happy_path_query(catalog_name: str, vibe_text: str = "") -> str:
             return vibe
         return f"{who} — {vibe}"
     return who or vibe
+
+
+def resolve_lookup_inputs(
+    catalog_name: str,
+    vibe_text: str = "",
+) -> tuple[str, Optional[str]]:
+    """
+    Query + identity_name for lookup / Generate.
+
+    Empty vibe → catalog who is the identity (catalog stick).
+    Typed vibe → vibe is the artist/query being accepted; do **not** pin the
+    UI who-chip (kills identity_name=catalog_pick wallpaper for strangers).
+    """
+    vibe = (vibe_text or "").strip()
+    who = (catalog_name or "").strip()
+    if vibe:
+        return vibe, None
+    return who, (who or None)
 
 
 # Sample Musician reject drip — plain copy only (never raw reason enums in UI).
