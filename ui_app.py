@@ -105,7 +105,7 @@ def _persist_live_prefs() -> None:
     """Write transport prefs (count-in / loop / soft-click / port) to disk."""
     updates = {
         "live_count_in": bool(st.session_state.get("live_count_in", False)),
-        "live_loop": bool(st.session_state.get("live_loop", False)),
+        "live_loop": bool(st.session_state.get("live_loop", True)),
         "live_soft_click": bool(st.session_state.get("live_soft_click", False)),
         "live_sync_logic": bool(st.session_state.get("live_sync_logic", True)),
     }
@@ -124,7 +124,7 @@ def _seed_transport_bool_prefs() -> None:
     if "live_count_in" not in st.session_state:
         st.session_state["live_count_in"] = bool(prefs.get("live_count_in", False))
     if "live_loop" not in st.session_state:
-        st.session_state["live_loop"] = bool(prefs.get("live_loop", False))
+        st.session_state["live_loop"] = bool(prefs.get("live_loop", True))
     if "live_soft_click" not in st.session_state:
         st.session_state["live_soft_click"] = bool(prefs.get("live_soft_click", False))
     if "live_sync_logic" not in st.session_state:
@@ -366,7 +366,7 @@ def _replay_into_logic(player: Any, run: dict, ports: list[str]) -> None:
             count_in_bars=0.0,
             bpm=float(opts.get("bpm") or 120),
             bars=float(opts.get("bars") or 8),
-            loop=bool(st.session_state.get("live_loop", False)),
+            loop=bool(st.session_state.get("live_loop", True)),
             click=False,
             sync="follow" if st.session_state.get("live_sync_logic", True) else "internal",
             send_clock=False,
@@ -710,7 +710,7 @@ AUDITION_CAPTURE_STRIP_HTML = """
   <div class="pair">
     <div class="lane">
       <p class="title">Play (live)</p>
-      <p class="sub">Hear the sketch in Logic — stream only, nothing written.</p>
+      <p class="sub">Hear the sketch in Logic — loops until Stop; stream only, nothing written.</p>
     </div>
     <div class="lane">
       <p class="title">Record in Logic</p>
@@ -1290,7 +1290,7 @@ else:
         if "live_count_in" not in st.session_state:
             st.session_state["live_count_in"] = False
         if "live_loop" not in st.session_state:
-            st.session_state["live_loop"] = False
+            st.session_state["live_loop"] = True
         if "live_sync_logic" not in st.session_state:
             st.session_state["live_sync_logic"] = True
         st.markdown(AUDITION_CAPTURE_STRIP_HTML, unsafe_allow_html=True)
@@ -1309,7 +1309,7 @@ else:
                 try:
                     sketch_bpm = float(options.get("bpm") or 120)
                     count_in = bool(st.session_state.get("live_count_in", False))
-                    loop_play = bool(st.session_state.get("live_loop", False))
+                    loop_play = bool(st.session_state.get("live_loop", True))
                     # Soft click only from Advanced (Off by default → silent count-in).
                     use_click = bool(st.session_state.get("live_soft_click", False))
                     lock_logic = bool(st.session_state.get("live_sync_logic", True))
@@ -1334,7 +1334,7 @@ else:
                             else "1-bar count-in"
                         )
                     if loop_play:
-                        bits.append("looping")
+                        bits.append("loops until Stop")
                     st.session_state["live_message"] = " · ".join(bits) + "."
                     st.session_state["live_was_playing"] = True
                     st.session_state["iac_tip_dismissed"] = True
@@ -1394,7 +1394,7 @@ else:
                         return
                     st.session_state["live_was_playing"] = True
                     label = player.transport_caption()
-                    loop_tag = " · looping" if player.looping else ""
+                    loop_tag = " · loops until Stop" if player.looping else ""
                     st.caption(f"{label} → **{player.port_name}**{loop_tag}")
                     return
                 if st.session_state.pop("live_was_playing", False):
@@ -1439,7 +1439,7 @@ else:
                     "Loop sketch",
                     key="live_loop",
                     disabled=_transport_busy,
-                    help="Repeat until Stop — useful if you miss the first pass.",
+                    help="On by default — loops until Stop. Turn off for a one-shot pass.",
                 )
             if st.session_state.get("live_soft_click"):
                 st.caption(

@@ -418,7 +418,7 @@ class LiveMidiPlayer:
         bpm: Optional[float] = None,
         beats_per_bar: int = 4,
         bars: Optional[float] = None,
-        loop: bool = False,
+        loop: bool = True,
         click: bool = False,
         send_clock: bool = False,
         sync: str = "internal",
@@ -430,7 +430,7 @@ class LiveMidiPlayer:
         count_in_bars: silent (default) or click bars before notes — app-side
         only, so Logic Record can already be rolling before the sketch starts.
         bars: sketch length used for loop wrap and clock span (beat-aligned).
-        loop: repeat the sketch until Stop (no gap; no panic between passes).
+        loop: repeat the sketch until Stop (default True; no gap; no panic between passes).
         click: when True, emit a soft metronome note each beat of the count-in
         (same port — will be captured if Logic is recording; off by default).
         send_clock: MIDI Start/Clock/Stop at sketch BPM (Logic as slave).

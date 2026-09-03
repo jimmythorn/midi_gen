@@ -518,6 +518,31 @@ def test_ui_count_in_default_is_false():
     assert 'st.session_state["live_count_in"] = True' not in src
 
 
+def test_play_file_loop_default_is_true():
+    """Play / IAC path: play_file loops until Stop unless loop=False."""
+    import inspect
+
+    from midi_gen.live_midi import LiveMidiPlayer
+
+    sig = inspect.signature(LiveMidiPlayer.play_file)
+    assert sig.parameters["loop"].default is True
+
+
+def test_ui_loop_default_is_true():
+    """Play into Logic: live_loop session / prefs default On; copy says loops until Stop."""
+    src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
+    assert 'st.session_state["live_loop"] = True' in src
+    assert 'bool(prefs.get("live_loop", True))' in src
+    assert 'st.session_state.get("live_loop", True)' in src
+    # Must not hard-default loop Off on the Play path.
+    assert 'st.session_state["live_loop"] = False' not in src
+    assert "loops until Stop" in src
+    from midi_gen.ui_prefs import DEFAULT_PREFS
+
+    assert DEFAULT_PREFS["live_loop"] is True
+    assert DEFAULT_PREFS["live_count_in"] is False
+
+
 def test_ui_crisp_audit_extras_a_through_e():
     """Source-level guards for transport freeze, Generate stop, count-in honesty."""
     src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")

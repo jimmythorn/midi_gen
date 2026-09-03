@@ -13,10 +13,10 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-# Sensible first-run defaults (instant silent audition).
+# Sensible first-run defaults: instant silent audition, sketch loops until Stop.
 DEFAULT_PREFS: Dict[str, Any] = {
     "live_count_in": False,
-    "live_loop": False,
+    "live_loop": True,
     "live_soft_click": False,
     "live_sync_logic": True,
     "live_port": None,
