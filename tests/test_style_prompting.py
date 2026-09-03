@@ -118,10 +118,18 @@ def test_vibe_chips_are_examples_not_closed_set():
     assert resolve_happy_path_query("Philip Glass", "angular jazz") == "Philip Glass — angular jazz"
     assert resolve_happy_path_query("Philip Glass", "  ") == "Philip Glass"
     assert resolve_happy_path_query("", "ambient drone") == "ambient drone"
-    # Generate/lookup inputs: typed vibe is the query; no catalog_pick pin.
-    assert resolve_lookup_inputs("Philip Glass", "angular jazz") == ("angular jazz", None)
+    # Feel layers on who; only a different artist unpins.
+    assert resolve_lookup_inputs("Philip Glass", "angular jazz") == (
+        "Philip Glass — angular jazz",
+        "Philip Glass",
+    )
+    assert resolve_lookup_inputs("Philip Glass", "ambient drone") == (
+        "Philip Glass — ambient drone",
+        "Philip Glass",
+    )
     assert resolve_lookup_inputs("Philip Glass", "") == ("Philip Glass", "Philip Glass")
     assert resolve_lookup_inputs("Philip Glass", "  ") == ("Philip Glass", "Philip Glass")
+    assert resolve_lookup_inputs("Philip Glass", "Erik Satie") == ("Erik Satie", None)
 
 
 def test_mood_chip_packs_span_catalog_examples():
@@ -193,23 +201,25 @@ def test_recipe_preview_and_match_line():
     assert who.plain_feel_line.startswith("Sounds like Erik Satie")
     assert " · " in who.plain_feel_line
 
-    # Typed vibe is the query — ambient drone binds Eno, not leftover Glass chip.
+    # Feel layers on who — ambient drone must stay Glass, not become Eno.
     feel = preview_recipe(
         catalog_name="Philip Glass",
         vibe_text="ambient drone",
         effects_preset="subtle_tape",
     )
-    assert feel.path in ("vibe", "both")
-    assert feel.profile.id == "eno_ambient"
-    assert feel.query == "ambient drone"
+    assert feel.path == "both"
+    assert feel.profile.id == "glass_minimal"
+    assert "Philip Glass" in feel.query
+    assert "ambient drone" in feel.query
+    assert "feel ambient drone" in feel.plain_feel_line
 
-    # Unknown vibe with who-chip: no catalog_pick pin → sparse/cousin, not Glass.
+    # Unknown feel text + who-chip → still Glass (feel layered), not sparse swap.
     generic = preview_recipe(
         catalog_name="Philip Glass",
         vibe_text="zzzzqwerty totally unknown vibe 999",
     )
-    assert generic.profile.id != "glass_minimal"
-    assert generic.query == "zzzzqwerty totally unknown vibe 999"
+    assert generic.profile.id == "glass_minimal"
+    assert "Philip Glass" in generic.query
     line = format_recipe_one_liner(who.profile)
     assert "Erik Satie" in line
     assert "Matched:" in format_match_line(who.profile, match_type="catalog")

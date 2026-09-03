@@ -367,15 +367,21 @@ def preview_recipe(
     """
     Offline lookup preview (no MIDI).
 
-    Typed vibe is the query (matches artist gate); empty vibe sticks on catalog who.
+    Feel language layers on catalog who. Different artist identity (other catalog
+    musician or Spotify stranger ≠ who) unpins the who-chip. Empty vibe sticks.
     Optional ``gate_accept`` binds Spotify genres/followers into cousin few-shot.
     """
     from .cursor_style_lookup import lookup_musician_style
 
     identity = (catalog_name or "").strip()
     vibe = (vibe_text or "").strip()
-    query, identity_name = resolve_lookup_inputs(identity, vibe)
-    if identity and vibe:
+    query, identity_name = resolve_lookup_inputs(
+        identity, vibe, gate_accept=gate_accept
+    )
+    different_artist = vibe_is_different_artist_identity(
+        identity, vibe, gate_accept=gate_accept
+    )
+    if identity and vibe and not different_artist:
         path = "both"
     elif vibe:
         path = "vibe"
@@ -386,7 +392,7 @@ def preview_recipe(
         use_cursor_sdk=False,
         identity_name=identity_name,
         skip_artist_gate=True,  # UI / caller already gated
-        gate_accept=gate_accept,
+        gate_accept=gate_accept if different_artist else None,
     )
     profile = result.profile
     mtype = _match_type_for_profile(
@@ -396,12 +402,8 @@ def preview_recipe(
     )
     if path == "vibe" and not result.matched_locally:
         mtype = "generic"
-    if path == "both" and not result.matched_locally:
-        # Stranger / sparse under a leftover who-chip — not catalog wallpaper.
-        mtype = "generic" if profile.id == "custom_query" else mtype
-        path = "vibe"
     plain = format_plain_feel_match(profile)
-    if identity and vibe and result.matched_locally and identity_name:
+    if path == "both" and vibe:
         plain = f"{plain} · feel {vibe}"
     return RecipePreview(
         query=query,
@@ -504,7 +506,7 @@ def related_from_lookup_result(
 
 
 def resolve_happy_path_query(catalog_name: str, vibe_text: str = "") -> str:
-    """Catalog artist plus optional feel. Prefer ``resolve_lookup_inputs`` for generate."""
+    """Catalog artist plus optional feel. Feel layers on; it does not replace who."""
     who = (catalog_name or "").strip()
     vibe = (vibe_text or "").strip()
     if who and vibe:
@@ -514,22 +516,137 @@ def resolve_happy_path_query(catalog_name: str, vibe_text: str = "") -> str:
     return who or vibe
 
 
+def _catalog_musician_named(vibe: str, *, excluding: str = "") -> Optional[str]:
+    """
+    Return catalog musician name when vibe names that identity (not style/alias).
+
+    Excludes the selected who. Style aliases like \"ambient drone\" do not count.
+    """
+    from .musician_styles import (
+        MUSICIAN_STYLE_CATALOG,
+        alias_target_ids,
+        score_profile,
+    )
+
+    v = (vibe or "").strip()
+    if not v:
+        return None
+    # Feel aliases / mood language are never a musician-name swap.
+    if alias_target_ids(v):
+        return None
+    excl = (excluding or "").strip().lower()
+    v_lower = v.lower()
+    for profile in MUSICIAN_STYLE_CATALOG:
+        if profile.name.lower() == excl:
+            continue
+        if profile.name.lower() == v_lower:
+            return profile.name
+        # Strong name identity: all name tokens present + high score.
+        name_toks = {t for t in profile.name.lower().split() if t}
+        vibe_toks = {t for t in v_lower.replace("-", " ").split() if t}
+        if name_toks and name_toks.issubset(vibe_toks) and score_profile(v, profile) >= 5.0:
+            return profile.name
+    return None
+
+
+def _vibe_is_feel_language(vibe: str) -> bool:
+    """Alias keys, vibe chips, mood-pack chips — layer on who, never replace."""
+    from .musician_styles import alias_target_ids
+
+    v = (vibe or "").strip()
+    if not v:
+        return False
+    if alias_target_ids(v):
+        return True
+    v_lower = v.lower()
+    if v_lower in {c.lower() for c in VIBE_CHIPS}:
+        return True
+    for pack in MOOD_CHIP_PACKS:
+        for chip in pack.get("chips") or ():
+            if str(chip).lower() == v_lower:
+                return True
+    return False
+
+
+def _names_refer_to_same_artist(typed: str, artist_name: str) -> bool:
+    """Typed query refers to this artist name (not a loose genre overlap)."""
+    t = (typed or "").strip().lower()
+    a = (artist_name or "").strip().lower()
+    if not t or not a:
+        return False
+    if t == a:
+        return True
+    # Allow minor extra words only when all artist-name tokens appear in typed.
+    a_toks = {x for x in a.replace("-", " ").split() if x}
+    t_toks = {x for x in t.replace("-", " ").split() if x}
+    return bool(a_toks) and a_toks.issubset(t_toks)
+
+
+def vibe_is_different_artist_identity(
+    catalog_name: str,
+    vibe_text: str,
+    *,
+    gate_accept: Any = None,
+) -> bool:
+    """
+    True when typed vibe is a *different artist identity* than the who-chip.
+
+    Different artist =
+      - catalog musician *name* hit that is not the who-chip, or
+      - Spotify type=artist accept whose returned name matches the typed string
+        and is not the who-chip.
+
+    Style aliases / mood chips / style-keyword scores are feel — never unpin.
+    """
+    who = (catalog_name or "").strip()
+    vibe = (vibe_text or "").strip()
+    if not vibe:
+        return False
+    if who and vibe.lower() == who.lower():
+        return False
+    # Mood / feel language (aliases, vibe chips, mood packs) stays pinned.
+    if _vibe_is_feel_language(vibe):
+        return False
+    other = _catalog_musician_named(vibe, excluding=who)
+    if other is not None:
+        return True
+    # Spotify stranger: returned name must match typed string and ≠ who-chip.
+    if gate_accept is not None and getattr(gate_accept, "accepted", False):
+        if getattr(gate_accept, "source", None) == "spotify":
+            artist = getattr(gate_accept, "spotify_artist", None)
+            if artist is not None and (artist.type or "") == "artist":
+                artist_name = (artist.name or "").strip()
+                if (
+                    artist_name
+                    and artist_name.lower() != who.lower()
+                    and _names_refer_to_same_artist(vibe, artist_name)
+                ):
+                    return True
+    return False
+
+
 def resolve_lookup_inputs(
     catalog_name: str,
     vibe_text: str = "",
+    *,
+    gate_accept: Any = None,
 ) -> tuple[str, Optional[str]]:
     """
     Query + identity_name for lookup / Generate.
 
-    Empty vibe → catalog who is the identity (catalog stick).
-    Typed vibe → vibe is the artist/query being accepted; do **not** pin the
-    UI who-chip (kills identity_name=catalog_pick wallpaper for strangers).
+    Empty vibe → catalog who (catalog stick).
+    Feel language / unknown feel → who+feel query, identity stays (Fun Now).
+    Different artist identity (other catalog musician or Spotify stranger ≠ who)
+    → vibe is the query, identity unpinned (no Glass wallpaper).
     """
     vibe = (vibe_text or "").strip()
     who = (catalog_name or "").strip()
-    if vibe:
+    if not vibe:
+        return who, (who or None)
+    if vibe_is_different_artist_identity(who, vibe, gate_accept=gate_accept):
         return vibe, None
-    return who, (who or None)
+    # Feel layers on selected artist.
+    return resolve_happy_path_query(who, vibe), (who or None)
 
 
 # Sample Musician reject drip — plain copy only (never raw reason enums in UI).

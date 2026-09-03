@@ -1,12 +1,10 @@
-"""Interesting-returns B: kill wallpaper leaks (custom_query→Eno, catalog_pick pin, unused gate)."""
+"""Interesting-returns B: kill wallpaper leaks; feel still layers on who-chip."""
 
 from __future__ import annotations
 
 import sys
 import types
 from pathlib import Path
-
-import pytest
 
 _ROOT = Path(__file__).resolve().parents[1]
 if "midi_gen" not in sys.modules:
@@ -45,7 +43,6 @@ def test_custom_query_not_eno_ambient_fingerprint():
     assert recipe_structure_fingerprint(sparse) != _glass_fp()
     assert has_full_recipe_contract(sparse)
 
-    # profile_from_dict blank overlay must not start from CATALOG[0]
     blank = profile_from_dict(
         {
             "id": "custom_query",
@@ -58,11 +55,8 @@ def test_custom_query_not_eno_ambient_fingerprint():
         },
         source="sparse",
     )
-    assert blank.generation_type != "drone" or blank.development != get_profile_by_id(
-        "eno_ambient"
-    ).development
     assert recipe_structure_fingerprint(blank) != _eno_fp()
-    assert MUSICIAN_STYLE_CATALOG[0].id == "eno_ambient"  # still first, but unused as blank
+    assert MUSICIAN_STYLE_CATALOG[0].id == "eno_ambient"
 
 
 def test_lookup_unknown_not_wallpaper_eno(monkeypatch):
@@ -92,7 +86,7 @@ def test_lookup_unknown_not_wallpaper_eno(monkeypatch):
     assert has_full_recipe_contract(result.profile)
 
 
-def test_spotify_stranger_not_glass_from_catalog_pick(monkeypatch):
+def test_spotify_stranger_not_glass_from_catalog_pick():
     """Leak (b): stranger must not emit glass_minimal just because who-chip is Glass."""
     artist = SpotifyArtist(
         id="richter1",
@@ -107,8 +101,9 @@ def test_spotify_stranger_not_glass_from_catalog_pick(monkeypatch):
         spotify_artist=artist,
         message="spotify accept",
     )
-    # Simulate UI: vibe accepted, identity_name NOT pinned to Philip Glass
-    query, identity_name = resolve_lookup_inputs("Philip Glass", "Max Richter")
+    query, identity_name = resolve_lookup_inputs(
+        "Philip Glass", "Max Richter", gate_accept=gate
+    )
     assert query == "Max Richter"
     assert identity_name is None
 
@@ -123,12 +118,11 @@ def test_spotify_stranger_not_glass_from_catalog_pick(monkeypatch):
     assert result.profile.id != "eno_ambient"
     assert result.profile.name == "Max Richter"
     assert has_full_recipe_contract(result.profile)
-    # Genres / followers bound into recipe path
     assert "followers.total" in (result.profile.style_notes or "")
     assert result.profile.source in ("cousin", "sparse", "hybrid")
 
 
-def test_require_artist_genres_drive_cousin_few_shot(monkeypatch):
+def test_require_artist_genres_drive_cousin_few_shot():
     """Leak (c): genres from gate accept must drive cousin selection."""
     artist = SpotifyArtist(
         id="monk-like",
@@ -151,19 +145,66 @@ def test_require_artist_genres_drive_cousin_few_shot(monkeypatch):
     )
     assert result.profile.id == "custom_query"
     assert has_full_recipe_contract(result.profile)
+    assert result.profile.source == "cousin"
     assert result.profile.development is not None
     assert result.profile.chord_progression
-    # Cousin of jazz/angular should not be effects-only sparse wallpaper
-    assert result.profile.source == "cousin"
-    assert "jazz" in " ".join(result.profile.styles) or "Monk" in result.message or True
-    # Structural fields present (FULL contract) — not effects-only
+    # Jazz/angular genres → Monk cousin fingerprint (not tautology).
+    monk = get_profile_by_id("monk_angles")
+    assert any(s in result.profile.styles for s in ("jazz", "bebop", "hard bop", "angular"))
+    assert "Monk" in result.message or result.candidates[0].id == "monk_angles"
+    assert result.profile.generation_type == monk.generation_type
+    assert result.profile.mode == monk.mode
+    assert result.profile.development.get("mutate_ops") == monk.development.get("mutate_ops")
     opts = result.profile.to_options()
     assert "development" in opts
     assert "chord_progression" in opts
 
 
+def test_empty_vibe_catalog_stick():
+    q, ident = resolve_lookup_inputs("Philip Glass", "")
+    assert q == "Philip Glass"
+    assert ident == "Philip Glass"
+    who = lookup_musician_style(q, use_cursor_sdk=False, identity_name=ident)
+    assert who.profile.id == "glass_minimal"
+
+
+def test_feel_layers_on_who_not_eno():
+    """Mood/feel stays pinned to who — ambient drone must NOT become eno_ambient."""
+    q, ident = resolve_lookup_inputs("Philip Glass", "ambient drone")
+    assert ident == "Philip Glass"
+    assert "Philip Glass" in q
+    assert "ambient drone" in q
+    result = lookup_musician_style(q, use_cursor_sdk=False, identity_name=ident)
+    assert result.profile.id == "glass_minimal"
+    assert result.profile.id != "eno_ambient"
+
+    q2, ident2 = resolve_lookup_inputs("Philip Glass", "angular jazz")
+    assert ident2 == "Philip Glass"
+    assert lookup_musician_style(
+        q2, use_cursor_sdk=False, identity_name=ident2
+    ).profile.id == "glass_minimal"
+
+
+def test_unknown_feel_still_layers_on_who():
+    """Unknown feel text + Glass → still Glass identity, feel layered."""
+    q, ident = resolve_lookup_inputs(
+        "Philip Glass", "zzzzqwerty totally unknown vibe 999"
+    )
+    assert ident == "Philip Glass"
+    assert "Philip Glass" in q
+    result = lookup_musician_style(q, use_cursor_sdk=False, identity_name=ident)
+    assert result.profile.id == "glass_minimal"
+
+
+def test_other_catalog_musician_unpins():
+    q, ident = resolve_lookup_inputs("Philip Glass", "Erik Satie")
+    assert q == "Erik Satie"
+    assert ident is None
+    result = lookup_musician_style(q, use_cursor_sdk=False, identity_name=ident)
+    assert result.profile.id == "satie_neoclassical"
+
+
 def test_catalog_identity_still_binds():
-    """Known catalog identity still sticks (Glass / Eno / A six)."""
     glass = lookup_musician_style(
         "Philip Glass",
         use_cursor_sdk=False,
@@ -181,24 +222,19 @@ def test_catalog_identity_still_binds():
     )
     assert satie.profile.id == "satie_neoclassical"
 
-    # Empty vibe + who-chip → catalog stick
-    q, ident = resolve_lookup_inputs("Philip Glass", "")
-    assert q == "Philip Glass"
-    assert ident == "Philip Glass"
-    who = lookup_musician_style(q, use_cursor_sdk=False, identity_name=ident)
-    assert who.profile.id == "glass_minimal"
 
+def test_preview_feel_vs_stranger():
+    feel = preview_recipe(
+        catalog_name="Philip Glass",
+        vibe_text="ambient drone",
+        effects_preset="subtle_tape",
+    )
+    assert feel.path == "both"
+    assert feel.profile.id == "glass_minimal"
+    assert "Philip Glass" in feel.query
+    assert "ambient drone" in feel.query
+    assert "feel ambient drone" in feel.plain_feel_line
 
-def test_typed_vibe_alias_binds_catalog_not_who_chip():
-    """Typed vibe is the query — ambient drone → Eno, not leftover Glass chip."""
-    q, ident = resolve_lookup_inputs("Philip Glass", "ambient drone")
-    assert q == "ambient drone"
-    assert ident is None
-    result = lookup_musician_style(q, use_cursor_sdk=False, identity_name=ident)
-    assert result.profile.id == "eno_ambient"
-
-
-def test_preview_stranger_not_glass():
     artist = SpotifyArtist(
         id="x",
         name="Nils Frahm Cousin",
@@ -225,11 +261,9 @@ def test_few_shot_rejects_effects_only():
     from midi_gen.musician_styles import (
         cousin_recipe_from_neighbors,
         is_effects_only_overlay,
-        sparse_unknown_profile,
     )
 
     sparse = sparse_unknown_profile("X")
-    # Hand-build an effects-only overlay relative to sparse
     effects_only = profile_from_dict(
         {
             **sparse.as_dict(),

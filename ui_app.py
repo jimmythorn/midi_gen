@@ -997,10 +997,6 @@ if takeover not in TAKEOVER_LABELS:
     st.session_state.pop("ui_takeover", None)
 
 # --- Shared recipe / gate (session state; no widgets yet) ---
-query, identity_name = resolve_lookup_inputs(
-    st.session_state["catalog_pick"],
-    st.session_state["vibe_text"],
-)
 effects_preset = st.session_state.get("effects_preset") or "tape_and_human"
 if effects_preset not in preset_ids:
     effects_preset = "tape_and_human"
@@ -1027,6 +1023,13 @@ else:
     st.session_state.pop("artist_reject_reason", None)
     if st.session_state.get("generate_error") == ARTIST_REJECT_DRIP:
         st.session_state.pop("generate_error", None)
+
+# Identity pin: feel layers on who; only Spotify/other-catalog artists unpin.
+query, identity_name = resolve_lookup_inputs(
+    st.session_state["catalog_pick"],
+    st.session_state["vibe_text"],
+    gate_accept=None if _artist_rejected else _gate,
+)
 
 st.session_state["bars"] = clamp_bars(int(st.session_state.get("bars", 8)))
 
@@ -1076,9 +1079,9 @@ def _render_recipe_panel() -> None:
         )
         return
     path_note = (
-        "search / feel (typed vibe is the query)"
-        if recipe.path in ("vibe", "both")
-        else "who path (named catalog)"
+        "artist + feel (feel layers on)"
+        if recipe.path == "both"
+        else ("feel only" if recipe.path == "vibe" else "who path (named catalog)")
     )
     st.markdown(
         f"""
@@ -1101,7 +1104,8 @@ def _render_search_feel() -> None:
         "Vibe (feel)",
         placeholder="e.g. ambient drone, gymnopédie, sheets of sound, anything…",
         help=(
-            "Typed vibe is the artist/query. Empty → selected catalog who. "
+            "Layers on the selected artist. Does not replace them — "
+            "unless you type a different musician. "
             "Browse for who; Mood for example chips."
         ),
         key="vibe_text",
