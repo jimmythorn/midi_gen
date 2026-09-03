@@ -66,8 +66,18 @@ def test_token_and_search_urls_via_opener(monkeypatch):
             {
                 "artists": {
                     "items": [
-                        {"id": "a1", "name": "Miles Davis", "type": "artist"},
-                        {"id": "x1", "name": "Nope", "type": "show"},
+                        {
+                            "id": "a1",
+                            "name": "Miles Davis",
+                            "type": "artist",
+                            "followers": {"total": 1_500_000},
+                        },
+                        {
+                            "id": "x1",
+                            "name": "Nope",
+                            "type": "show",
+                            "followers": {"total": 50},
+                        },
                     ]
                 }
             }
@@ -78,9 +88,40 @@ def test_token_and_search_urls_via_opener(monkeypatch):
     artists = search_artists("Miles Davis", access_token=token, opener=opener)
     assert [a.name for a in artists] == ["Miles Davis", "Nope"]
     assert artists[0].type == "artist"
+    assert artists[0].followers_total == 1_500_000
     assert artists[1].type == "show"
+    assert artists[1].followers_total == 50
     assert seen[0][0] == TOKEN_URL
     assert seen[1][0].startswith(SEARCH_URL)
+
+
+def test_parse_followers_total_missing_is_none():
+    artists = search_artists(
+        "Someone",
+        access_token="tok",
+        opener=lambda req, timeout=20: _FakeResp(
+            {
+                "artists": {
+                    "items": [
+                        {"id": "a1", "name": "No Followers Field", "type": "artist"},
+                        {
+                            "id": "a2",
+                            "name": "Malformed",
+                            "type": "artist",
+                            "followers": "nope",
+                        },
+                        {
+                            "id": "a3",
+                            "name": "Null Total",
+                            "type": "artist",
+                            "followers": {"total": None},
+                        },
+                    ]
+                }
+            }
+        ),
+    )
+    assert [a.followers_total for a in artists] == [None, None, None]
 
 
 def test_search_with_credentials_missing_raises(monkeypatch):

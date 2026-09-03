@@ -36,8 +36,11 @@ def test_plain_drip_copy_never_surfaces_reason_enums():
     assert artist_reject_drip_copy() == "Not finding a musician…"
     assert artist_reject_drip_copy("not_a_musician") == ARTIST_REJECT_DRIP
     assert artist_reject_drip_copy("missing_credentials") == ARTIST_REJECT_DRIP
+    assert artist_reject_drip_copy("too_small") == ARTIST_REJECT_DRIP
     assert "Rejected" not in artist_reject_drip_copy("not_a_musician")
     assert "not_a_musician" not in artist_reject_drip_copy("not_a_musician")
+    assert "too_small" not in artist_reject_drip_copy("too_small")
+    assert artist_reject_drip_copy("too_small") == "Not finding a musician…"
 
 
 def test_session_clears_include_last_run_and_match_line():

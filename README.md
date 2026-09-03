@@ -39,7 +39,7 @@ python3 -m midi_gen
 
 Optional Cursor SDK enrichment: `export CURSOR_API_KEY=crsr_...` before `./run_ui.sh`.
 
-Artist gate (reject-before-generate): local catalog / alias hits skip Spotify. Unknown names require Spotify Artist Search via Client Credentials (`SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` — never commit secrets). Non-artists fail closed before `create_arp` / SDK enrich.
+Artist gate (reject-before-generate): local catalog / alias hits skip Spotify. Unknown names require Spotify Artist Search via Client Credentials (`SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` — never commit secrets). Accept only `type=artist` with `followers.total >= 10000` (Spotify has no monthly-listeners field; popularity is not the threshold). Below that / missing followers / non-artists fail closed before `create_arp` / SDK enrich. Sample Musician drip copy stays plain ("Not finding a musician…").
 
 ## Play into Logic Pro (IAC)
 

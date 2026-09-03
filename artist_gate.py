@@ -3,8 +3,12 @@ Reject-before-generate artist gate.
 
 Product lock:
   1. Local catalog / alias hit → accept (never call Spotify).
-  2. Else Spotify Artist Search (Client Credentials) → accept only if type=artist.
+  2. Else Spotify Artist Search (Client Credentials) → accept only if
+     type=artist AND followers.total >= MIN_SPOTIFY_FOLLOWERS (10_000).
   3. Else drip-reject (no create_arp / Cursor SDK / generate).
+
+Spotify has no monthly-listeners field; followers.total is the floor proxy.
+Popularity is not the threshold. Catalog/alias never hit this floor.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from .musician_styles import (
     score_profile,
 )
 from .spotify_client import (
+    MIN_SPOTIFY_FOLLOWERS,
     MissingSpotifyCredentials,
     SpotifyArtist,
     SpotifyClientError,
@@ -27,6 +32,7 @@ from .spotify_client import (
 
 RejectReason = Literal[
     "not_a_musician",
+    "too_small",
     "missing_credentials",
     "no_match",
     "empty_query",
@@ -179,12 +185,35 @@ def resolve_artist_query(
             message=f"Spotify returned no type=artist results for {search_q!r}.",
         )
 
-    hit = typed[0]
+    # followers.total >= 10000 floor (missing followers → fail-closed).
+    qualifying = [
+        a
+        for a in typed
+        if a.followers_total is not None and a.followers_total >= MIN_SPOTIFY_FOLLOWERS
+    ]
+    if not qualifying:
+        # Prefer too_small when we saw typed artists under the floor; missing
+        # followers also fail-closed (same drip copy either way).
+        had_known_small = any(
+            a.followers_total is not None and a.followers_total < MIN_SPOTIFY_FOLLOWERS
+            for a in typed
+        )
+        reason: RejectReason = "too_small" if had_known_small else "not_a_musician"
+        return ArtistGateReject(
+            query=search_q,
+            reason=reason,
+            message=(
+                f"Spotify artist(s) for {search_q!r} below "
+                f"followers.total >= {MIN_SPOTIFY_FOLLOWERS} floor."
+            ),
+        )
+
+    hit = qualifying[0]
     return ArtistGateAccept(
         query=search_q,
         source="spotify",
         spotify_artist=hit,
-        message=f"Spotify artist match: {hit.name}.",
+        message=f"Spotify artist match: {hit.name} ({hit.followers_total} followers).",
     )
 
 
