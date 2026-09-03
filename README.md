@@ -39,6 +39,8 @@ python3 -m midi_gen
 
 Optional Cursor SDK enrichment: `export CURSOR_API_KEY=crsr_...` before `./run_ui.sh`.
 
+Artist gate (reject-before-generate): local catalog / alias hits skip Spotify. Unknown names require Spotify Artist Search via Client Credentials (`SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` — never commit secrets). Non-artists fail closed before `create_arp` / SDK enrich.
+
 ## Play into Logic Pro (IAC)
 
 1. **Audio MIDI Setup** → MIDI Studio → **IAC Driver** → enable **Device is online**.

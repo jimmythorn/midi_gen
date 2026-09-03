@@ -172,6 +172,7 @@ def test_sdk_research_prompt_asks_for_style_notes():
 
 def test_sdk_recipe_wins_over_widget_overrides(monkeypatch, tmp_path):
     """Researched params must reach MIDI options; bars/seed still apply."""
+    from midi_gen.artist_gate import ArtistGateAccept
     from midi_gen.cursor_style_lookup import generate_midi_for_style
     from midi_gen.musician_styles import profile_from_dict
 
@@ -189,6 +190,14 @@ def test_sdk_recipe_wins_over_widget_overrides(monkeypatch, tmp_path):
         source="cursor_sdk",
     )
 
+    monkeypatch.setattr(
+        "midi_gen.cursor_style_lookup.require_artist",
+        lambda query, identity_name=None, **_kwargs: ArtistGateAccept(
+            query=query,
+            source="spotify",
+            message="test accept",
+        ),
+    )
     monkeypatch.setattr(
         "midi_gen.cursor_style_lookup.cursor_sdk_available",
         lambda: True,
