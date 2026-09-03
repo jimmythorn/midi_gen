@@ -645,9 +645,247 @@ def find_best_profile(query: str) -> Optional[MusicianStyleProfile]:
     return matches[0] if matches else None
 
 
+# Honest sparse blank — NEVER MUSICIAN_STYLE_CATALOG[0] (eno_ambient).
+# Wallpaper leak: custom_query / SDK normalize used to overlay onto Eno.
+NEUTRAL_SPARSE_DEFAULTS: Dict[str, Any] = {
+    "id": "sparse_unknown",
+    "name": "Unknown",
+    "styles": [],
+    "description": "Honest sparse unknown — not a catalog identity.",
+    "generation_type": "arpeggio",
+    "mode": "minor",
+    "bpm": 100,
+    "bars": 8,
+    "root_notes": ["E3", "A3", "D3", "G3"],
+    "min_octave": 3,
+    "max_octave": 5,
+    "use_chord_tones": True,
+    "mode_color": True,  # triad-clean — not Eno accent dict, not Glass additive
+    "arp_mode": "up_down",
+    "arp_steps": 8,
+    "range_octaves": 2,
+    "evolution_rate": 0.1,
+    "repetition_factor": 6,
+    "repeat_pattern": False,
+    "embellish": False,
+    "rhythmic_variation": False,
+    "chord_progression": ["E3", "B2", "A3", "E3"],
+    "development": {
+        "enabled": True,
+        "seed_bars": 2,
+        "mutate_every_n": 2,
+        "mutate_ops": ["invert", "thin"],
+        "phase_creep": False,
+        "additive_only": False,
+        "max_phase": 2,
+    },
+    "effects_preset": "human_feel",
+    "drone_base_velocity": 72,
+    "drone_variation_interval_bars": 2,
+    "drone_min_notes_held": 2,
+    "drone_octave_doubling_chance": 0.2,
+    "drone_allow_octave_shifts": True,
+    "drone_enable_walkdowns": True,
+    "drone_walkdown_num_steps": 2,
+    "drone_walkdown_step_ticks": 240,
+    "source": "sparse",
+    "style_notes": "",
+}
+
+# Structural contract for cousin few-shot (create_arp already binds these).
+# Soft steers (bpm / density / effects) may bend in-band; these must not be
+# effects-only overlays onto a blank catalog fallback.
+FULL_RECIPE_CONTRACT_KEYS: tuple[str, ...] = (
+    "generation_type",
+    "mode",
+    "mode_color",
+    "development",
+    "chord_progression",
+    "embellish",
+    "rhythmic_variation",
+    "arp_mode",
+    "arp_steps",
+    "range_octaves",
+    "evolution_rate",
+    "repetition_factor",
+    "use_chord_tones",
+    "root_notes",
+    "min_octave",
+    "max_octave",
+)
+
+# Soft-steer band keys — Composer may bend these inside a cousin style band.
+SOFT_STEER_KEYS: tuple[str, ...] = (
+    "bpm",
+    "arp_steps",
+    "evolution_rate",
+    "repetition_factor",
+    "effects_preset",
+)
+
+# Minimum score_profile hit to treat a catalog neighbor as a real cousin.
+COUSIN_SCORE_FLOOR = 2.0
+
+
+def recipe_structure_fingerprint(profile: MusicianStyleProfile) -> tuple:
+    """Fingerprint of bound knobs (not effects-only). Used to reject wallpaper."""
+    prog = tuple(profile.chord_progression) if profile.chord_progression else None
+    dev = profile.development
+    if isinstance(dev, dict):
+        dev_fp = (
+            int(dev.get("seed_bars", 1)),
+            int(dev.get("mutate_every_n", 1)),
+            tuple(dev.get("mutate_ops") or ()),
+            bool(dev.get("phase_creep", False)),
+            bool(dev.get("additive_only", False)),
+        )
+    else:
+        dev_fp = None
+    mc = profile.mode_color
+    if isinstance(mc, dict):
+        intervals = mc.get("intervals")
+        mc_fp = (
+            "dict",
+            bool(mc.get("enabled", True)),
+            tuple(int(x) for x in intervals) if intervals is not None else None,
+            int(mc.get("accent_every", 4)),
+        )
+    else:
+        mc_fp = ("bool", bool(mc))
+    return (
+        profile.generation_type,
+        profile.mode,
+        mc_fp,
+        dev_fp,
+        bool(profile.embellish),
+        bool(profile.rhythmic_variation),
+        prog,
+        int(profile.arp_steps),
+        float(profile.evolution_rate),
+        int(profile.repetition_factor),
+    )
+
+
+def is_effects_only_overlay(
+    profile: MusicianStyleProfile,
+    reference: MusicianStyleProfile,
+) -> bool:
+    """True when only soft-steer fields differ — reject as incomplete few-shot."""
+    return recipe_structure_fingerprint(profile) == recipe_structure_fingerprint(reference)
+
+
+def has_full_recipe_contract(profile: MusicianStyleProfile) -> bool:
+    """FULL contract: development + progression present and enabled."""
+    if not profile.chord_progression:
+        return False
+    dev = profile.development
+    if not isinstance(dev, dict):
+        return False
+    if dev.get("enabled") is False:
+        return False
+    if not dev.get("mutate_ops"):
+        return False
+    return True
+
+
+def sparse_unknown_profile(
+    query: str,
+    *,
+    styles: Optional[List[str]] = None,
+    style_notes: str = "",
+) -> MusicianStyleProfile:
+    """Honest sparse unknown — never CATALOG[0] / eno_ambient / glass_minimal."""
+    q = (query or "").strip() or "Unknown"
+    tokens = [t for t in re.split(r"[^a-z0-9]+", q.lower()) if t][:6]
+    data = dict(NEUTRAL_SPARSE_DEFAULTS)
+    data["id"] = "custom_query"
+    data["name"] = q
+    data["styles"] = [s.lower() for s in (styles or tokens or ["sparse"])]
+    data["description"] = (
+        f"Honest sparse unknown for {q!r} — no catalog identity fallback."
+    )
+    data["style_notes"] = (style_notes or "").strip()[:800]
+    data["source"] = "sparse"
+    # Ambient/drone query token may soft-pick drone generation_type only —
+    # still not Eno's development / mode_color fingerprint.
+    joined = " ".join(data["styles"])
+    if "drone" in joined or "ambient" in joined:
+        data["generation_type"] = "drone"
+    return profile_from_dict(data, source="sparse")
+
+
+def cousin_recipe_from_neighbors(
+    query: str,
+    neighbors: List[MusicianStyleProfile],
+    *,
+    styles: Optional[List[str]] = None,
+    style_notes: str = "",
+    followers_total: Optional[int] = None,
+) -> Optional[MusicianStyleProfile]:
+    """
+    Few-shot FULL contract from 2–3 nearest local catalog recipes.
+
+    Primary cousin supplies generation_type / mode_color / development /
+    progression / embellish / RV / density. Soft steers (bpm / effects /
+    density) may bend from secondary cousins in-band. Effects-only overlay
+    is rejected (returns None → caller uses sparse unknown).
+    """
+    if not neighbors:
+        return None
+    primary = neighbors[0]
+    data = primary.as_dict()
+
+    # Guarantee development + progression from the neighbor set (FULL contract).
+    if not data.get("development"):
+        for other in neighbors[1:]:
+            if other.development:
+                data["development"] = dict(other.development)
+                break
+    if not data.get("chord_progression"):
+        for other in neighbors[1:]:
+            if other.chord_progression:
+                data["chord_progression"] = list(other.chord_progression)
+                break
+
+    # Soft steers from secondary cousins (in-band bends only).
+    if len(neighbors) > 1:
+        bpms = [n.bpm for n in neighbors[:3]]
+        data["bpm"] = int(round(sum(bpms) / len(bpms)))
+        # Prefer a non-primary effects preset only when second cousin differs.
+        if neighbors[1].effects_preset and neighbors[1].effects_preset != primary.effects_preset:
+            # Keep primary effects unless follower mass suggests tape warmth.
+            if followers_total is not None and followers_total >= 100_000:
+                data["effects_preset"] = neighbors[1].effects_preset
+
+    q = (query or "").strip() or primary.name
+    tokens = [t for t in re.split(r"[^a-z0-9]+", q.lower()) if t][:6]
+    data["id"] = "custom_query"
+    data["name"] = q
+    data["styles"] = [s.lower() for s in (styles or tokens or list(primary.styles[:4]))]
+    cousin_names = ", ".join(n.name for n in neighbors[:3])
+    data["description"] = (
+        f"Cousin fingerprint from local recipes ({cousin_names}) for {q!r}."
+    )
+    notes = (style_notes or "").strip()
+    if followers_total is not None:
+        notes = (notes + f" followers.total={followers_total}").strip()
+    data["style_notes"] = notes[:800]
+    data["source"] = "cousin"
+
+    profile = profile_from_dict(data, source="cousin")
+    if not has_full_recipe_contract(profile):
+        return None
+    # Reject effects-only relative to neutral sparse (incomplete few-shot).
+    neutral = profile_from_dict(dict(NEUTRAL_SPARSE_DEFAULTS), source="sparse")
+    if is_effects_only_overlay(profile, neutral):
+        return None
+    return profile
+
+
 def profile_from_dict(data: Dict[str, Any], source: str = "cursor_sdk") -> MusicianStyleProfile:
     """Normalize arbitrary dict (e.g. SDK JSON) into a valid profile."""
-    base = MUSICIAN_STYLE_CATALOG[0].as_dict()
+    # Neutral sparse blank — never CATALOG[0] (eno_ambient wallpaper).
+    base = dict(NEUTRAL_SPARSE_DEFAULTS)
     # Prefer matching catalog musician when name is known
     name = str(data.get("name") or data.get("musician") or "").strip()
     if name:

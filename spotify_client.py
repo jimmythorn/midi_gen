@@ -36,6 +36,19 @@ class SpotifyArtist:
     followers_total: Optional[int]
     raw: Dict[str, Any]
 
+    @property
+    def genres(self) -> List[str]:
+        """Spotify artist genres from the search payload (may be empty)."""
+        raw_genres = self.raw.get("genres") if isinstance(self.raw, dict) else None
+        if not isinstance(raw_genres, list):
+            return []
+        out: List[str] = []
+        for g in raw_genres:
+            s = str(g).strip()
+            if s:
+                out.append(s)
+        return out
+
 
 def _parse_followers_total(item: Dict[str, Any]) -> Optional[int]:
     """

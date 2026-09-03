@@ -54,7 +54,7 @@ from midi_gen.style_prompting import (
     preview_recipe,
     related_from_lookup_result,
     resolve_artist_gate_for_ui,
-    resolve_happy_path_query,
+    resolve_lookup_inputs,
     session_clears_on_artist_reject,
     surprise_related_profile,
 )
@@ -997,7 +997,6 @@ if takeover not in TAKEOVER_LABELS:
     st.session_state.pop("ui_takeover", None)
 
 # --- Shared recipe / gate (session state; no widgets yet) ---
-query = resolve_happy_path_query(st.session_state["catalog_pick"], st.session_state["vibe_text"])
 effects_preset = st.session_state.get("effects_preset") or "tape_and_human"
 if effects_preset not in preset_ids:
     effects_preset = "tape_and_human"
@@ -1025,12 +1024,20 @@ else:
     if st.session_state.get("generate_error") == ARTIST_REJECT_DRIP:
         st.session_state.pop("generate_error", None)
 
+# Identity pin: feel layers on who; only Spotify/other-catalog artists unpin.
+query, identity_name = resolve_lookup_inputs(
+    st.session_state["catalog_pick"],
+    st.session_state["vibe_text"],
+    gate_accept=None if _artist_rejected else _gate,
+)
+
 st.session_state["bars"] = clamp_bars(int(st.session_state.get("bars", 8)))
 
 recipe = preview_recipe(
     catalog_name=st.session_state["catalog_pick"],
     vibe_text=st.session_state["vibe_text"] if not _artist_rejected else "",
     effects_preset=effects_preset,
+    gate_accept=None if _artist_rejected else _gate,
 )
 
 _pending_knobs = st.session_state.pop("_pending_profile_knobs", None)
@@ -1097,7 +1104,8 @@ def _render_search_feel() -> None:
         "Vibe (feel)",
         placeholder="e.g. ambient drone, gymnopédie, sheets of sound, anything…",
         help=(
-            "Layers on the selected artist. Does not replace them. "
+            "Layers on the selected artist. Does not replace them — "
+            "unless you type a different musician. "
             "Browse for who; Mood for example chips."
         ),
         key="vibe_text",
@@ -1712,7 +1720,7 @@ if generate:
                 use_cursor_sdk=use_sdk,
                 overrides=overrides,
                 live_tweak=live_tweak,
-                identity_name=str(st.session_state.get("catalog_pick") or "").strip() or None,
+                identity_name=identity_name,
                 vibe_text=str(st.session_state.get("vibe_text") or "").strip() or None,
             )
             summary = summarize_midi_file(path)
