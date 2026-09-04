@@ -9,10 +9,11 @@ closed allow-list, and not limited to any fixed shortlist of musicians.
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from .effects_presets import get_preset
+from .effects_presets import get_preset, list_presets
 from .musician_styles import (
     MUSICIAN_STYLE_CATALOG,
     MusicianStyleProfile,
@@ -243,6 +244,65 @@ def surprise_related_profile(
     if pick.id == profile.id:
         return related[1] if len(related) > 1 else None
     return pick
+
+
+def surprise_effects_preset(
+    *,
+    avoid: str = "",
+    rng: Optional[random.Random] = None,
+) -> str:
+    """Pick an effects preset; skip the current one when others exist."""
+    ids = [str(p["id"]) for p in list_presets() if p.get("id")]
+    if not ids:
+        return "tape_and_human"
+    pool = [i for i in ids if i != (avoid or "").strip()] or ids
+    picker = rng if rng is not None else random
+    return picker.choice(pool)
+
+
+def surprise_catalog_profile(
+    *,
+    previous_id: Optional[str] = None,
+    rng: Optional[random.Random] = None,
+) -> Optional[MusicianStyleProfile]:
+    """Random catalog artist, skipping the last Surprise pick when possible."""
+    catalog = list(MUSICIAN_STYLE_CATALOG)
+    if not catalog:
+        return None
+    skip = (previous_id or "").strip()
+    pool = [p for p in catalog if p.id != skip] or catalog
+    picker = rng if rng is not None else random
+    return picker.choice(pool)
+
+
+def surprise_roll(
+    *,
+    current: Optional[MusicianStyleProfile] = None,
+    last_result: Any = None,
+    previous_id: Optional[str] = None,
+    vibe_hint: str = "",
+    avoid_effects: str = "",
+    rng: Optional[random.Random] = None,
+) -> Optional[Tuple[MusicianStyleProfile, str]]:
+    """
+    Surprise me: populate a named artist plus a varied effects preset.
+
+    Empty start → random catalog artist. After a pick → related identity jump.
+    Effects always re-roll away from the current preset when possible.
+    """
+    profile: Optional[MusicianStyleProfile] = None
+    if current is not None:
+        profile = surprise_related_profile(
+            current,
+            vibe_hint=vibe_hint,
+            last_result=last_result,
+            previous_id=previous_id,
+        )
+    if profile is None:
+        profile = surprise_catalog_profile(previous_id=previous_id, rng=rng)
+    if profile is None:
+        return None
+    return profile, surprise_effects_preset(avoid=avoid_effects, rng=rng)
 
 
 def _fallback_blurb(profile: MusicianStyleProfile) -> str:

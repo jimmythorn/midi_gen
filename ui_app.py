@@ -11,6 +11,7 @@ Launch:
 
 from __future__ import annotations
 
+import importlib
 import os
 import random
 import sys
@@ -41,6 +42,9 @@ from midi_gen.live_midi import (
 )
 from midi_gen.musician_styles import list_musicians, list_styles
 from midi_gen.preview import events_to_roll_rows, format_summary_text, summarize_midi_file
+from midi_gen import style_prompting as _style_prompting
+
+importlib.reload(_style_prompting)
 from midi_gen.style_prompting import (
     ARTIST_REJECT_DRIP,
     artist_reject_drip_copy,
@@ -56,7 +60,7 @@ from midi_gen.style_prompting import (
     resolve_artist_gate_for_ui,
     resolve_lookup_inputs,
     session_clears_on_artist_reject,
-    surprise_related_profile,
+    surprise_roll,
 )
 from midi_gen.ui_prefs import load_prefs, prefs_for_session, save_prefs
 
@@ -171,21 +175,18 @@ def _on_catalog_pick_change() -> None:
 
 
 def _render_catalog_selectbox(names: list[str]) -> None:
-    if st.session_state["catalog_pick"] not in names:
-        st.session_state["catalog_pick"] = names[0]
+    if st.session_state.get("catalog_pick") not in names:
+        st.session_state["catalog_pick"] = None
     st.selectbox(
         "Style (catalog — who)",
         options=names,
+        index=None,
+        placeholder="Select an artist…",
         help="Named musician/style profiles from the full curated catalog.",
         key="catalog_pick",
         on_change=_on_catalog_pick_change,
     )
-    pick = st.session_state["catalog_pick"]
-    vibe = str(st.session_state.get("vibe_text") or "").strip()
-    if vibe:
-        st.caption(f"Selected · **{pick}** + **{vibe}**")
-    else:
-        st.caption(f"Selected · **{pick}**")
+    _render_who_caption()
 
 
 def _apply_half_bars() -> None:
@@ -249,12 +250,14 @@ def _persist_widget_keys() -> None:
 
 
 def _render_who_caption() -> None:
-    pick = st.session_state.get("catalog_pick") or ""
+    pick = str(st.session_state.get("catalog_pick") or "").strip()
     vibe = str(st.session_state.get("vibe_text") or "").strip()
-    if vibe:
+    if pick and vibe:
         st.caption(f"Selected · **{pick}** + **{vibe}**")
-    else:
+    elif pick:
         st.caption(f"Selected · **{pick}**")
+    elif vibe:
+        st.caption(f"Selected · **{vibe}**")
 
 
 def _render_takeover_header(title: str) -> None:
@@ -303,9 +306,10 @@ def _apply_related(name: str) -> None:
     _reset_arp_knobs()
 
 
-def _apply_surprise(name: str, profile_id: str) -> None:
+def _apply_surprise(name: str, profile_id: str, effects_preset: str) -> None:
     st.session_state["last_surprise_id"] = profile_id
     st.session_state["pending_related_name"] = name
+    st.session_state["effects_preset"] = effects_preset
     _reset_arp_knobs()
 
 
@@ -810,6 +814,18 @@ st.markdown(
         color: var(--text);
         margin: 0.35rem 0 0.35rem 0;
       }
+      div.st-key-vibe_text [data-testid="stTextInputRootElement"] {
+        height: auto !important;
+        overflow: visible !important;
+        width: 100% !important;
+      }
+      div.st-key-vibe_text [data-testid="stTextInputField"] {
+        width: 100% !important;
+        box-sizing: border-box !important;
+        font-size: 1.35rem !important;
+        line-height: 1.4 !important;
+        padding: 32px !important;
+      }
       .mood-pack-label {
         color: var(--accent);
         font-size: 0.78rem;
@@ -957,11 +973,9 @@ def _apply_refreshed_ports(ports: list[str]) -> None:
 
 # --- Session defaults + pending actions (before chrome) ---
 _persist_widget_keys()
-if "catalog_pick" not in st.session_state or not st.session_state["catalog_pick"]:
-    st.session_state["catalog_pick"] = (
-        "Philip Glass" if "Philip Glass" in musician_names else musician_names[0]
-    )
-    st.session_state["_persist_catalog_pick"] = st.session_state["catalog_pick"]
+if "catalog_pick" not in st.session_state:
+    st.session_state["catalog_pick"] = None
+    st.session_state["_persist_catalog_pick"] = None
 if "vibe_text" not in st.session_state:
     st.session_state["vibe_text"] = ""
 if "bars" not in st.session_state:
@@ -1002,11 +1016,18 @@ if effects_preset not in preset_ids:
     effects_preset = "tape_and_human"
     st.session_state["effects_preset"] = effects_preset
 
-_gate = resolve_artist_gate_for_ui(
-    str(st.session_state.get("catalog_pick") or ""),
-    str(st.session_state.get("vibe_text") or ""),
+_catalog_who = str(st.session_state.get("catalog_pick") or "").strip()
+_vibe_now = str(st.session_state.get("vibe_text") or "").strip()
+_has_style_intent = bool(_catalog_who or _vibe_now)
+_gate = (
+    resolve_artist_gate_for_ui(_catalog_who, _vibe_now) if _has_style_intent else None
 )
-_artist_rejected = isinstance(_gate, ArtistGateReject) or not getattr(_gate, "accepted", False)
+_artist_rejected = bool(
+    _has_style_intent
+    and (
+        isinstance(_gate, ArtistGateReject) or not getattr(_gate, "accepted", False)
+    )
+)
 if _artist_rejected:
     _had_last_run = bool(st.session_state.get("last_run"))
     st.session_state["artist_reject_reason"] = getattr(_gate, "reason", None)
@@ -1025,25 +1046,32 @@ else:
         st.session_state.pop("generate_error", None)
 
 # Identity pin: feel layers on who; only Spotify/other-catalog artists unpin.
-query, identity_name = resolve_lookup_inputs(
-    st.session_state["catalog_pick"],
-    st.session_state["vibe_text"],
-    gate_accept=None if _artist_rejected else _gate,
-)
+if _has_style_intent:
+    query, identity_name = resolve_lookup_inputs(
+        st.session_state.get("catalog_pick") or "",
+        st.session_state.get("vibe_text") or "",
+        gate_accept=None if _artist_rejected else _gate,
+    )
+else:
+    query, identity_name = "", None
 
 st.session_state["bars"] = clamp_bars(int(st.session_state.get("bars", 8)))
 
-recipe = preview_recipe(
-    catalog_name=st.session_state["catalog_pick"],
-    vibe_text=st.session_state["vibe_text"] if not _artist_rejected else "",
-    effects_preset=effects_preset,
-    gate_accept=None if _artist_rejected else _gate,
+recipe = (
+    preview_recipe(
+        catalog_name=st.session_state.get("catalog_pick") or "",
+        vibe_text=st.session_state.get("vibe_text") or "" if not _artist_rejected else "",
+        effects_preset=effects_preset,
+        gate_accept=None if _artist_rejected else _gate,
+    )
+    if _has_style_intent and not _artist_rejected
+    else None
 )
 
 _pending_knobs = st.session_state.pop("_pending_profile_knobs", None)
 if isinstance(_pending_knobs, dict):
     st.session_state.update(_pending_knobs)
-_seed_arp_knobs(recipe.profile)
+_seed_arp_knobs(recipe.profile if recipe else None)
 
 player = get_shared_player()
 _force_refresh = st.session_state.pop("refresh_midi_ports", False)
@@ -1067,6 +1095,18 @@ generate = False
 
 
 def _render_recipe_panel() -> None:
+    if not _has_style_intent:
+        st.markdown(
+            """
+            <div class="recipe-preview">
+              <div class="label">About to generate</div>
+              <div class="line">Search a feel or pick an artist.</div>
+              <div class="feel">Nothing is selected yet.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
     if _artist_rejected:
         st.markdown(
             f"""
@@ -1104,12 +1144,12 @@ def _render_search_feel() -> None:
         "Vibe (feel)",
         placeholder="e.g. ambient drone, gymnopédie, sheets of sound, anything…",
         help=(
-            "Layers on the selected artist. Does not replace them — "
-            "unless you type a different musician. "
-            "Browse for who; Mood for example chips."
+            "Search a feel or musician. Browse to pin an artist; "
+            "feel then layers on them instead of replacing them."
         ),
         key="vibe_text",
         label_visibility="collapsed",
+        width="stretch",
     )
     _render_who_caption()
 
@@ -1122,8 +1162,16 @@ def _render_generate_row() -> bool:
             "Generate",
             type="primary",
             use_container_width=True,
-            disabled=_artist_rejected,
-            help=ARTIST_REJECT_DRIP if _artist_rejected else None,
+            disabled=_artist_rejected or not _has_style_intent,
+            help=(
+                ARTIST_REJECT_DRIP
+                if _artist_rejected
+                else (
+                    "Search a feel or pick an artist first."
+                    if not _has_style_intent
+                    else None
+                )
+            ),
         )
     with surprise_col:
         last_run_for_surprise = st.session_state.get("last_run")
@@ -1131,24 +1179,27 @@ def _render_generate_row() -> bool:
             last_run_for_surprise.get("result") if last_run_for_surprise else None
         )
         previous_id = st.session_state.get("last_surprise_id")
-        surprise_pick = (
-            None
-            if _artist_rejected
-            else surprise_related_profile(
-                recipe.profile,
-                vibe_hint=query,
-                last_result=last_result,
-                previous_id=previous_id,
-            )
+        surprise_roll_pick = surprise_roll(
+            current=recipe.profile if recipe else None,
+            vibe_hint=query,
+            last_result=last_result,
+            previous_id=previous_id,
+            avoid_effects=effects_preset,
         )
+        surprise_pick = surprise_roll_pick[0] if surprise_roll_pick else None
+        surprise_fx = surprise_roll_pick[1] if surprise_roll_pick else ""
         st.button(
             "Surprise me",
             use_container_width=True,
             key="surprise_me",
-            disabled=surprise_pick is None or _artist_rejected,
-            help="Dice into a related named style from the full catalog, then generate.",
+            disabled=surprise_pick is None,
+            help="Pick a catalog artist and a different effects preset, then generate.",
             on_click=_apply_surprise if surprise_pick is not None else None,
-            args=(surprise_pick.name, surprise_pick.id) if surprise_pick is not None else (),
+            args=(
+                (surprise_pick.name, surprise_pick.id, surprise_fx)
+                if surprise_pick is not None
+                else ()
+            ),
         )
     st.markdown("</div>", unsafe_allow_html=True)
     return bool(clicked)
@@ -1479,7 +1530,7 @@ def _render_capture_setup() -> None:
 
 
 def _render_advanced_takeover() -> None:
-    if _artist_rejected:
+    if _artist_rejected or recipe is None:
         st.caption("Matched: —")
     else:
         st.caption(recipe.match_line)
@@ -1625,7 +1676,7 @@ if takeover:
         _render_mood_packs(key_prefix="mood")
     elif takeover == "length":
         _render_bars_knobs()
-        _render_arp_live(recipe.profile)
+        _render_arp_live(recipe.profile if recipe else None)
     elif takeover == "effects":
         _render_effects_takeover()
     elif takeover == "capture":
@@ -1644,13 +1695,12 @@ else:
         <div class="hero">
           <div class="brand-mark">MIDI Style Lab</div>
           <h1>Pick a style. Generate a sketch. Play it into Logic.</h1>
-          <p>Named catalog (who) plus optional feel — then Generate, audition in Logic, download.</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    _render_chrome_row(has_sketch=bool(run))
     _render_search_feel()
+    _render_chrome_row(has_sketch=bool(run))
     _render_recipe_panel()
     generate = _render_generate_row()
 
@@ -1684,7 +1734,7 @@ else:
 
 # Auto-generate from Again / Surprise / live tweaks / effects chips
 if st.session_state.pop("auto_generate", False):
-    generate = False if _artist_rejected else True
+    generate = False if _artist_rejected or not _has_style_intent else True
 
 bars = clamp_bars(int(st.session_state.get("bars", 8)))
 use_sdk = bool(st.session_state.get("use_sdk", False))

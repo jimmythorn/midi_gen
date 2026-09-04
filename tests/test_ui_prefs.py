@@ -137,6 +137,48 @@ def test_mood_chip_sets_vibe_text_without_widget_exception():
     assert _takeover_is_closed(at)
 
 
+def test_no_artist_preselected_until_search_or_pick():
+    at = _apptest()
+    try:
+        pick = at.session_state["catalog_pick"]
+    except KeyError:
+        pick = None
+    assert not pick
+    assert at.session_state["vibe_text"] in ("", None)
+    gen = next(b for b in at.button if b.label == "Generate")
+    surprise = next(b for b in at.button if b.key == "surprise_me")
+    assert gen.disabled
+    assert not surprise.disabled
+    captions = " ".join(c.value for c in at.caption)
+    assert "Philip Glass" not in captions
+    assert "Aphex Twin" not in captions
+    markdown = " ".join(getattr(m, "value", "") or "" for m in at.markdown)
+    assert "Nothing is selected yet" in markdown
+    at.text_input(key="vibe_text").set_value("ambient drone").run()
+    assert not at.exception, at.exception
+    assert at.session_state["vibe_text"] == "ambient drone"
+    gen = next(b for b in at.button if b.label == "Generate")
+    assert not gen.disabled
+
+
+def test_surprise_me_populates_artist_and_effects():
+    from midi_gen.effects_presets import list_presets
+    from midi_gen.musician_styles import MUSICIAN_STYLE_CATALOG
+
+    names = {m.name for m in MUSICIAN_STYLE_CATALOG}
+    preset_ids = {p["id"] for p in list_presets()}
+    at = _apptest()
+    at.button(key="surprise_me").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["catalog_pick"] in names
+    assert at.session_state["effects_preset"] in preset_ids
+    try:
+        last_run = at.session_state["last_run"]
+    except KeyError:
+        last_run = None
+    assert last_run
+
+
 def test_featured_card_sets_catalog_without_widget_exception():
     from midi_gen.style_prompting import featured_style_cards
 
@@ -220,6 +262,8 @@ def test_ui_widget_mutations_use_callbacks():
     assert "on_click=_apply_again" in src
     assert "on_click=_apply_related" in src
     assert "on_click=_apply_surprise" in src
+    assert "surprise_roll(" in src
+    assert 'st.session_state["effects_preset"] = effects_preset' in src
     assert "on_click=_apply_effects_preset" in src
     after_vibe_widget = src.split('key="vibe_text"', 1)[1]
     assert 'st.session_state["vibe_text"] = chip' not in after_vibe_widget
@@ -285,7 +329,11 @@ def test_one_page_chrome_takeovers_source_and_nav():
     ]
     assert "st.navigation" not in src
     assert "pages/" not in src
-    # Sacred home / Fun Now
+    # Sacred home / Fun Now — search sits above chrome, then Generate
+    home_src = src[src.index("# --- HOME") :]
+    assert home_src.index("_render_search_feel") < home_src.index("_render_chrome_row")
+    assert '"Philip Glass" if "Philip Glass" in musician_names' not in src
+    assert 'placeholder="Select an artist…"' in src
     assert '"Generate"' in src
     assert '"Surprise me"' in src
     assert '"Play into Logic"' in src

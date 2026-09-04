@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import sys
 import types
 from pathlib import Path
@@ -36,7 +37,10 @@ from midi_gen.style_prompting import (
     related_profiles,
     resolve_happy_path_query,
     resolve_lookup_inputs,
+    surprise_catalog_profile,
+    surprise_effects_preset,
     surprise_related_profile,
+    surprise_roll,
     vibe_chips,
 )
 
@@ -189,6 +193,36 @@ def test_plain_feel_match_and_surprise_related():
         )
         assert skipped is not None
         assert skipped.id == related2[1].id
+
+
+def test_surprise_roll_picks_artist_and_varied_effects():
+    from midi_gen.effects_presets import list_presets
+
+    preset_ids = {p["id"] for p in list_presets()}
+    rng = random.Random(0)
+    empty = surprise_roll(rng=rng)
+    assert empty is not None
+    artist, fx = empty
+    assert artist.id in {p.id for p in MUSICIAN_STYLE_CATALOG}
+    assert fx in preset_ids
+
+    again = surprise_roll(previous_id=artist.id, avoid_effects=fx, rng=rng)
+    assert again is not None
+    next_artist, next_fx = again
+    assert next_artist.id != artist.id
+    assert next_fx != fx
+    assert next_fx in preset_ids
+
+    eno = get_profile_by_id("eno_ambient")
+    related = surprise_related_profile(eno, vibe_hint="ambient")
+    rolled = surprise_roll(current=eno, vibe_hint="ambient", rng=rng)
+    assert rolled is not None
+    assert rolled[0].id == related.id
+
+    skipped = surprise_catalog_profile(previous_id="eno_ambient", rng=random.Random(1))
+    assert skipped is not None
+    assert skipped.id != "eno_ambient"
+    assert surprise_effects_preset(avoid="clean", rng=random.Random(2)) != "clean"
 
 
 def test_recipe_preview_and_match_line():
