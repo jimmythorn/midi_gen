@@ -275,6 +275,7 @@ def test_sdk_schema_includes_section_fields():
     assert "Glass/Eno wallpaper" in STYLE_PROFILE_JSON_SCHEMA
     assert "drone_held" in STYLE_PROFILE_JSON_SCHEMA
     assert "extend_factor" in STYLE_PROFILE_JSON_SCHEMA
+    assert "timing_factor" in STYLE_PROFILE_JSON_SCHEMA
 
 
 def test_few_shot_helper_picks_progression_bearing_neighbors():

@@ -120,7 +120,10 @@ class MusicianStyleProfile:
     # Wash/ambient pad recipes must set False so progression does not flip them held.
     drone_held: Optional[bool] = None
     # Optional Engine stretch (1–4); omit → create_arp default 1.
+    # Prefer timing_factor; extend_factor is a legacy alias (no 0.5 / Double).
     extend_factor: Optional[int] = None
+    # Optional Engine timing: 0.5 Double | 1 | 2 Half | 4 Quarter.
+    timing_factor: Optional[float] = None
     # Active section after resolve (verse|chorus|bridge|intro|outro|pre-chorus);
     # None = top-level recipe.
     section_role: Optional[str] = None
@@ -185,6 +188,13 @@ class MusicianStyleProfile:
         }
         if self.drone_held is not None:
             opts["drone_held"] = bool(self.drone_held)
+        if self.timing_factor is not None:
+            try:
+                from .arpeggio_generation import resolve_timing_factor
+
+                opts["timing_factor"] = resolve_timing_factor(self.timing_factor)
+            except (TypeError, ValueError):
+                opts["timing_factor"] = 1.0
         if self.extend_factor is not None:
             try:
                 opts["extend_factor"] = max(1, min(4, int(self.extend_factor)))
@@ -1129,6 +1139,7 @@ NEUTRAL_SPARSE_DEFAULTS: Dict[str, Any] = {
     "drone_walkdown_step_ticks": 240,
     "drone_held": None,
     "extend_factor": None,
+    "timing_factor": None,
     "section_role": None,
     "sections": None,
     "source": "sparse",
@@ -1582,6 +1593,16 @@ def profile_from_dict(data: Dict[str, Any], source: str = "cursor_sdk") -> Music
             base["extend_factor"] = max(1, min(4, int(base.get("extend_factor"))))
         except (TypeError, ValueError):
             base["extend_factor"] = None
+
+    if base.get("timing_factor") is None:
+        base["timing_factor"] = None
+    else:
+        try:
+            from .arpeggio_generation import resolve_timing_factor
+
+            base["timing_factor"] = resolve_timing_factor(base.get("timing_factor"))
+        except (TypeError, ValueError):
+            base["timing_factor"] = None
 
     base["section_role"] = normalize_section_role(base.get("section_role"))
     # Prefer explicit sections from incoming; keep catalog sections when name-matched
