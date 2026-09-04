@@ -118,6 +118,11 @@ def _load_repo_dotenv() -> None:
 _load_repo_dotenv()
 
 
+def _cursor_api_key_present() -> bool:
+    """True when CURSOR_API_KEY is set (dotenv already loaded)."""
+    return bool(os.environ.get("CURSOR_API_KEY", "").strip())
+
+
 def _persist_live_prefs() -> None:
     """Write transport prefs (count-in / loop / soft-click / port) to disk."""
     updates = {
@@ -270,7 +275,7 @@ def _persist_widget_keys() -> None:
         ("section_role", None),
         ("extend_factor", 1),
         ("effects_preset", "tape_and_human"),
-        ("use_sdk", False),
+        ("use_sdk", _cursor_api_key_present()),
         ("sketch_bpm", None),
         ("arp_mode", None),
         ("arp_steps", None),
@@ -710,7 +715,7 @@ def _replay_into_logic(player: Any, run: dict, ports: list[str]) -> None:
             loop=bool(st.session_state.get("live_loop", True)),
             click=False,
             sync="follow" if st.session_state.get("live_sync_logic", False) else "internal",
-            send_clock=False,
+            send_clock=not bool(st.session_state.get("live_sync_logic", False)),
         )
         st.session_state["live_was_playing"] = True
         st.session_state["live_message"] = f"Streaming to {player.port_name}."
@@ -876,7 +881,7 @@ st.markdown(
       }
       .audition-capture .order strong { color: var(--text); }
 
-      /* Play is the hero CTA; Stop + compact Panic sit beside it */
+      /* Play is the hero CTA; Clear IAC sits beside it */
       .play-hero-row {
         max-width: 40rem;
         margin: 0 0 0.25rem 0;
@@ -1168,7 +1173,7 @@ if "generation_type" not in st.session_state:
 if "effects_preset" not in st.session_state:
     st.session_state["effects_preset"] = "tape_and_human"
 if "use_sdk" not in st.session_state:
-    st.session_state["use_sdk"] = False
+    st.session_state["use_sdk"] = _cursor_api_key_present()
 
 # Transport prefs (count-in / loop / soft-click) before widgets bind.
 _seed_transport_bool_prefs()
@@ -1458,7 +1463,7 @@ def _render_listen(run_data: dict) -> None:
 
 
 def _render_play_hero(run_data: dict, *, with_fun_now: bool = False) -> None:
-    """Sacred Play / Stop / Panic — stays on home (and sticky if playing in a takeover)."""
+    """Sacred Play / Clear IAC — stays on home (and sticky if playing in a takeover)."""
     result = run_data["result"]
     options = run_data["options"]
     path = run_data["path"]
@@ -1478,8 +1483,9 @@ def _render_play_hero(run_data: dict, *, with_fun_now: bool = False) -> None:
     st.markdown("### Play into Logic")
     # Honest: live stream ≠ region. Capture takeover is the record path (not a second page).
     st.caption(
-        "Live stream only — never writes a Logic region. "
-        "Capture is the record path (Arm → Record in Logic → Play here)."
+        "Play sends MMC Record + MIDI Start. One click starts the take. "
+        "Logic must Listen to MMC Input and MIDI Clock on this IAC bus. "
+        "Arm the track. Re-Play restarts from the top."
     )
     if not live.available:
         st.warning(
@@ -1492,13 +1498,12 @@ def _render_play_hero(run_data: dict, *, with_fun_now: bool = False) -> None:
             st.caption(f"Port · **{port_now}**")
 
         st.markdown('<div class="play-hero-row">', unsafe_allow_html=True)
-        play_col, stop_col, panic_col = st.columns([4, 1, 1])
+        play_col, stop_col = st.columns([4, 1])
         with play_col:
             if st.button(
-                "Play into Logic",
+                "Re-Play" if player.phase == "playing" else "Play into Logic",
                 type="primary",
                 use_container_width=True,
-                disabled=player.phase == "playing",
                 key="play_logic",
             ):
                 try:
@@ -1516,17 +1521,19 @@ def _render_play_hero(run_data: dict, *, with_fun_now: bool = False) -> None:
                         loop=loop_play,
                         click=False if lock_logic else (use_click if count_in else False),
                         sync="follow" if lock_logic else "internal",
-                        send_clock=False,
+                        send_clock=not lock_logic,
                     )
                     bits = [f"Streaming to {player.port_name}"]
                     if lock_logic:
                         bits.append("waiting for Logic Play")
-                    elif count_in:
-                        bits.append(
-                            "1-bar count-in + soft click"
-                            if use_click
-                            else "1-bar count-in"
-                        )
+                    else:
+                        bits.append("MIDI Start + clock")
+                        if count_in:
+                            bits.append(
+                                "1-bar count-in + soft click"
+                                if use_click
+                                else "1-bar count-in"
+                            )
                     if loop_play:
                         bits.append("loops until Stop")
                     st.session_state["live_message"] = " · ".join(bits) + "."
@@ -1538,32 +1545,19 @@ def _render_play_hero(run_data: dict, *, with_fun_now: bool = False) -> None:
                     st.session_state["live_message"] = f"Live MIDI failed: {exc}"
                     st.session_state["live_was_playing"] = bool(player.playing)
         with stop_col:
-            stop_enabled = player.playing or bool(
-                st.session_state.get("live_was_playing")
-            )
+            clear_port = st.session_state.get("live_port") or player.port_name
             if st.button(
-                "Stop",
+                "Clear IAC",
                 use_container_width=True,
-                disabled=not stop_enabled,
+                disabled=not bool(clear_port),
                 key="stop_logic",
+                help="Stop the stream, flush hanging notes, and stop Logic "
+                "(MMC Stop + MIDI Stop). Works while Playing or idle.",
             ):
-                player.stop(wait=True)
+                player.stop(wait=True, port_name=clear_port)
                 st.session_state["live_was_playing"] = False
-                st.session_state["live_message"] = "Stopped."
-                st.rerun()
-        with panic_col:
-            panic_port = st.session_state.get("live_port") or player.port_name
-            if st.button(
-                "Panic",
-                use_container_width=True,
-                disabled=not bool(panic_port),
-                key="panic_logic",
-                help="All notes off (CC123) on the selected port. "
-                "Works while Playing or idle. Does not Stop.",
-            ):
-                player.panic(panic_port)
                 st.session_state["live_message"] = (
-                    f"All notes off (CC123) on {panic_port}."
+                    f"Cleared IAC · Logic stopped ({clear_port})."
                 )
                 st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
@@ -1772,7 +1766,7 @@ def _render_advanced_takeover() -> None:
         key="use_sdk",
         help="Research the artist and write a short home blurb: why this sketch sounds like them. Requires CURSOR_API_KEY.",
     )
-    use_sdk = bool(st.session_state.get("use_sdk", False))
+    use_sdk = bool(st.session_state.get("use_sdk", _cursor_api_key_present()))
     if not use_sdk:
         sdk_line = "SDK: off — catalog only"
     elif cursor_sdk_available():
@@ -1882,7 +1876,7 @@ def _render_effects_takeover() -> None:
 # --- Takeover OR home (single Streamlit page; no multipage routes) ---
 if takeover:
     _render_takeover_header(TAKEOVER_LABELS[takeover])
-    # Keep Stop/Panic reachable if a stream is active while buried in a takeover.
+    # Keep Clear IAC reachable if a stream is active while buried in a takeover.
     if run and (player.playing or st.session_state.get("live_was_playing")):
         _render_play_hero(run)
     if takeover == "browse":
@@ -1969,7 +1963,7 @@ chord_count = clamp_chord_count(st.session_state.get("chord_count", DEFAULT_CHOR
 generation_type = clamp_generation_type(
     st.session_state.get("generation_type", DEFAULT_GENERATION_TYPE)
 )
-use_sdk = bool(st.session_state.get("use_sdk", False))
+use_sdk = bool(st.session_state.get("use_sdk", _cursor_api_key_present()))
 section_role = st.session_state.get("section_role")
 if section_role is not None and not str(section_role).strip():
     section_role = None

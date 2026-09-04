@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -171,6 +172,7 @@ def test_surprise_me_populates_artist_and_effects():
     names = {m.name for m in MUSICIAN_STYLE_CATALOG}
     preset_ids = {p["id"] for p in list_presets()}
     at = _apptest()
+    at.session_state["use_sdk"] = False
     at.button(key="surprise_me").click().run()
     assert not at.exception, at.exception
     assert at.session_state["catalog_pick"] in names
@@ -306,6 +308,19 @@ def test_sdk_status_follows_toggle_and_key():
     assert "offline — catalog only" not in src
     assert "load_dotenv_if_present()" not in src
     assert "_load_repo_dotenv()" in src
+    assert "def _cursor_api_key_present()" in src
+    assert 'st.session_state["use_sdk"] = _cursor_api_key_present()' in src
+    assert '("use_sdk", _cursor_api_key_present())' in src
+
+
+def test_use_sdk_defaults_on_when_cursor_key_present():
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file(str(_ROOT / "ui_app.py"), default_timeout=30)
+    at.run()
+    assert not at.exception, at.exception
+    expected = bool(os.environ.get("CURSOR_API_KEY", "").strip())
+    assert at.session_state["use_sdk"] is expected
 
 
 def test_one_page_chrome_takeovers_source_and_nav():
@@ -350,9 +365,9 @@ def test_one_page_chrome_takeovers_source_and_nav():
     assert "Try instead" in src
     assert "with_fun_now" in src
     assert "Not finding a musician" in src or "ARTIST_REJECT_DRIP" in src
-    # Play honesty: live stream ≠ region; Capture is record path
-    assert "never writes a Logic region" in src
-    assert "Capture is the record path" in src
+    # Play honesty: one click MMC Record + Start; Re-Play restarts the take
+    assert "MMC Record" in src
+    assert "Re-Play" in src
     cap = src.index("def _render_capture_setup")
     adv = src.index("def _render_advanced_takeover")
     assert "AUDITION_CAPTURE_STRIP_HTML" in src[cap:adv]

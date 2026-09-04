@@ -29,6 +29,7 @@ from midi_gen.live_midi import (
     bar_duration_sec,
     clock_period_sec,
     has_iac_port,
+    logic_stop_flush,
     midi_file_bpm,
     panic_flush,
     pass_duration_sec,
@@ -190,6 +191,19 @@ def test_all_notes_off_sends_cc123_on_fake_port():
     assert {(m.channel, m.note) for m in offs} == {
         (ch, n) for ch in range(16) for n in range(128)
     }
+
+
+def test_logic_stop_flush_sends_mmc_stop_then_midi_stop():
+    """Clear IAC must stop Logic before note-off flood."""
+    port = FakeMidiPort()
+    logic_stop_flush(port)
+    assert port.sent[0].type == "sysex"
+    assert tuple(port.sent[0].data) == (0x7F, 0x7F, 0x06, 0x01)
+    assert port.sent[1].type == "stop"
+    cc123 = [
+        m for m in port.sent if m.type == "control_change" and m.control == 123
+    ]
+    assert len(cc123) == 16
 
 
 def test_all_notes_off_alias_matches_panic():
@@ -559,6 +573,8 @@ def test_ui_crisp_audit_extras_a_through_e():
     # D — Logic lock (follow MIDI Start); denser opts collapsed
     assert "Lock to Logic clock" in src
     assert "waiting for Logic Play" in src
+    assert "send_clock=not lock_logic" in src
+    assert "MIDI Start + clock" in src
     assert 'key="live_sync_logic"' in src
     assert "not synced to Logic" not in src
     assert "Sketch tempo" in src
@@ -579,18 +595,21 @@ def test_ui_crisp_audit_extras_a_through_e():
     # Natural end always sets Finished (no Streaming-prefix requirement).
     assert 'st.session_state["live_message"] = "Finished."' in src
     assert 'msg.startswith("Streaming")' not in src
-    # Sample Musician bar — Play hero; compact Panic; caption-only countdown; prefs
-    assert 'key="panic_logic"' in src
-    assert '"Panic"' in src
-    assert "All notes off (CC123)" in src
-    assert "player.panic(" in src
+    # Sample Musician bar — Play hero; Clear IAC stops Logic + flushes
+    assert 'key="stop_logic"' in src
+    assert '"Clear IAC"' in src
+    assert "player.stop(" in src
+    assert 'port_name=clear_port' in src
+    assert "MMC Stop" in src
     assert "transport_caption()" in src
     assert "_persist_live_prefs" in src
-    assert "st.columns([4, 1, 1])" in src  # Play dominates Stop/Panic
+    assert "st.columns([4, 1])" in src
+    assert "panic_col" not in src
+    assert 'key="panic_logic"' not in src
 
 
-def test_player_panic_flushes_cc123_without_stopping(tmp_path):
-    """Panic() must CC123-flush via named port and leave playback running."""
+def test_player_panic_stops_logic_and_playback(tmp_path):
+    """panic() is Clear IAC: stop worker, MMC Stop, MIDI Stop, note flush."""
     fake = FakeMidiPort()
     player = LiveMidiPlayer()
     path = tmp_path / "tiny.mid"
@@ -599,7 +618,6 @@ def test_player_panic_flushes_cc123_without_stopping(tmp_path):
 
     class SlowPort(FakeMidiPort):
         def send(self, msg: mido.Message) -> None:
-            # Stall first note so Panic can fire mid-play.
             if msg.type == "note_on" and not hang.is_set():
                 hang.wait(timeout=2.0)
             super().send(msg)
@@ -609,7 +627,6 @@ def test_player_panic_flushes_cc123_without_stopping(tmp_path):
 
     def _open(name: str):
         opened.append(name)
-        # First open = play worker; later opens = panic_flush_named.
         if opened.count(name) == 1:
             return slow
         return fake
@@ -623,13 +640,14 @@ def test_player_panic_flushes_cc123_without_stopping(tmp_path):
             time.sleep(0.01)
         assert player.playing
         player.panic("Fake Bus")
-        # Panic must not clear Playing (Stop does that).
-        assert player.playing
         hang.set()
-        player.stop(wait=True)
 
+    assert not player.playing
+    assert player.phase == "idle"
+    assert fake.sent[0].type == "sysex"
+    assert tuple(fake.sent[0].data) == (0x7F, 0x7F, 0x06, 0x01)
+    assert fake.sent[1].type == "stop"
     cc123 = [m for m in fake.sent if m.type == "control_change" and m.control == 123]
-    # Panic alone sends 16; Stop afterward may add another set via the same open path.
     assert len(cc123) >= 16
     assert set(range(16)).issubset({m.channel for m in cc123})
     offs = [m for m in fake.sent if m.type == "note_off"]
@@ -748,9 +766,13 @@ def test_play_sends_midi_start_clock_stop(tmp_path):
         player.stop(wait=True)
 
     types = [m.type for m in fake.sent]
+    assert "sysex" in types
     assert "start" in types
     assert "clock" in types
     assert "stop" in types
+    mmc = next(m for m in fake.sent if m.type == "sysex")
+    assert tuple(mmc.data) == (0x7F, 0x7F, 0x06, 0x06)
+    assert types.index("sysex") < types.index("start")
     assert types.index("start") < types.index("clock")
     assert types.index("note_on") < types.index("clock")
 

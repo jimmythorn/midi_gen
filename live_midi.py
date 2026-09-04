@@ -125,6 +125,15 @@ def refresh_output_ports() -> List[str]:
 
 PORT_LOST_MESSAGE = "MIDI port lost — Refresh ports."
 
+# MIDI Machine Control (universal device 0x7F). Logic listens when
+# Project Settings → Synchronization → MIDI → Listen to MMC Input.
+_MMC_STOP = (0x7F, 0x7F, 0x06, 0x01)
+_MMC_RECORD_STROBE = (0x7F, 0x7F, 0x06, 0x06)
+
+
+def mmc_sysex(command: Sequence[int]) -> mido.Message:
+    return mido.Message("sysex", data=list(command))
+
 
 def _all_notes_off(port, channels: range = range(16)) -> None:
     """
@@ -156,8 +165,8 @@ def panic_flush_named(port_name: Optional[str]) -> None:
     Open ``port_name`` briefly and send a full note-kill flush
     (sustain off, CC120, CC123, explicit note_off × 128).
 
-    Used when Stop must flush hanging notes even if the play worker is stuck,
-    and when Re-Play abandons a prior thread that did not join in time.
+    Used when Re-Play abandons a prior thread that did not join in time.
+    Clear IAC / Stop uses ``logic_stop_flush_named`` (MMC + MIDI Stop first).
     """
     if not port_name:
         return
@@ -165,6 +174,42 @@ def panic_flush_named(port_name: Optional[str]) -> None:
     try:
         port = mido.open_output(port_name)
         panic_flush(port)
+    except Exception:
+        pass
+    finally:
+        if port is not None:
+            try:
+                port.close()
+            except Exception:
+                pass
+
+
+def logic_stop_flush(port) -> None:
+    """Stop Logic (MMC Stop + MIDI Stop), then flush hanging notes."""
+    try:
+        port.send(mmc_sysex(_MMC_STOP))
+    except Exception:
+        pass
+    try:
+        port.send(mido.Message("stop"))
+    except Exception:
+        pass
+    panic_flush(port)
+
+
+def logic_stop_flush_named(port_name: Optional[str]) -> None:
+    """
+    Open ``port_name`` and stop Logic, then flush the bus.
+
+    Always sends MMC Stop and MIDI Stop so Record/Play drop even when the
+    play worker already exited or never owned the port.
+    """
+    if not port_name:
+        return
+    port = None
+    try:
+        port = mido.open_output(port_name)
+        logic_stop_flush(port)
     except Exception:
         pass
     finally:
@@ -421,6 +466,7 @@ class LiveMidiPlayer:
         loop: bool = True,
         click: bool = False,
         send_clock: bool = False,
+        send_mmc: Optional[bool] = None,
         sync: str = "internal",
         on_finished: Optional[Callable[[], None]] = None,
     ) -> None:
@@ -434,6 +480,8 @@ class LiveMidiPlayer:
         click: when True, emit a soft metronome note each beat of the count-in
         (same port — will be captured if Logic is recording; off by default).
         send_clock: MIDI Start/Clock/Stop at sketch BPM (Logic as slave).
+        send_mmc: MMC Record Strobe before Start so Logic can punch Record
+        (default on when send_clock is on). Logic must Listen to MMC Input.
         sync: ``internal`` wall-clock, or ``follow`` wait for Logic MIDI Start
         then chase incoming clock so notes hit Logic's beat.
         """
@@ -465,6 +513,7 @@ class LiveMidiPlayer:
         play_bpm = float(bpm) if bpm and bpm > 0 else midi_file_bpm(str(midi_path))
         follow = str(sync or "internal").lower() == "follow"
         use_clock_out = bool(send_clock) and not follow
+        use_mmc = bool(use_clock_out if send_mmc is None else send_mmc) and not follow
         count_bars = 0.0 if follow else max(0.0, float(count_in_bars or 0.0))
         count_in_sec = bar_duration_sec(play_bpm, beats_per_bar) * count_bars
         beat_sec = 60.0 / max(1.0, play_bpm)
@@ -585,6 +634,11 @@ class LiveMidiPlayer:
             with self._lock:
                 self._phase = "playing"
                 self._count_in_end = None
+            if use_mmc:
+                try:
+                    _send(port, mmc_sysex(_MMC_RECORD_STROBE))
+                except Exception:
+                    pass
             if use_clock_out:
                 try:
                     _send(port, mido.Message("songpos", pos=0))
@@ -717,6 +771,7 @@ class LiveMidiPlayer:
             port = None
             sync_in = None
             sent_start = False
+            sent_mmc = False
             try:
                 try:
                     port = mido.open_output(target)
@@ -734,6 +789,7 @@ class LiveMidiPlayer:
                 if _run_count_in(port):
                     return
                 sent_start = bool(use_clock_out)
+                sent_mmc = bool(use_mmc)
                 _run_timed(port)
             except Exception as exc:
                 with self._lock:
@@ -751,6 +807,11 @@ class LiveMidiPlayer:
                         pass
                 if port is not None:
                     try:
+                        if sent_mmc:
+                            try:
+                                port.send(mmc_sysex(_MMC_STOP))
+                            except Exception:
+                                pass
                         if sent_start:
                             try:
                                 port.send(mido.Message("stop"))
@@ -779,24 +840,26 @@ class LiveMidiPlayer:
             self._thread = thread
         thread.start()
 
-    def stop(self, wait: bool = True, timeout: float = 2.0) -> None:
+    def stop(
+        self,
+        wait: bool = True,
+        timeout: float = 2.0,
+        port_name: Optional[str] = None,
+    ) -> None:
         """
-        Hard Stop: request worker exit, panic-flush, clear Playing.
+        Clear IAC: stop the worker, stop Logic, flush hanging notes.
 
-        Default wait=True so the UI does not linger on Playing. Always flushes
-        hanging notes on the active port (explicit note_off + CC120/123) even
-        when the worker is slow or stuck — Logic ignores CC123 alone.
+        Sends MMC Stop + MIDI Stop + note-off even if the worker already
+        exited or never started — so a stuck Logic Record/Play still drops.
         """
         with self._lock:
             self._stop.set()
             self._looping = False
             thread = self._thread
-            port_name = self._port_name
+            target = port_name or self._port_name
         if wait and thread is not None and thread.is_alive():
             thread.join(timeout=timeout)
-        # Panic flush regardless — worker finally also flushes when it can;
-        # this covers hang / race so Stop never leaves notes stuck.
-        panic_flush_named(port_name)
+        logic_stop_flush_named(target)
         with self._lock:
             self._playing = False
             self._phase = "idle"
@@ -804,15 +867,8 @@ class LiveMidiPlayer:
             self._count_in_end = None
 
     def panic(self, port_name: Optional[str] = None) -> None:
-        """
-        Manual all-notes-off (CC123) on the selected/open port.
-
-        Does not stop playback — Panic is an explicit extra control beside Stop.
-        Uses the same ``panic_flush_named`` path as Hard Stop.
-        """
-        with self._lock:
-            target = port_name or self._port_name
-        panic_flush_named(target)
+        """Same as stop — one control clears the bus and stops Logic."""
+        self.stop(wait=True, port_name=port_name)
 
 
 _SHARED_PLAYER: Optional[LiveMidiPlayer] = None

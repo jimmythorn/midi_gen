@@ -46,7 +46,7 @@ Artist gate (reject-before-generate): typed Search / feel always hits Spotify Ar
 1. **Audio MIDI Setup** → MIDI Studio → **IAC Driver** → enable **Device is online**.
 2. In Logic, set a Software Instrument track’s **MIDI In** to that IAC bus (must match the port Style Lab plays to when you have more than one).
 3. Generate a sketch → **Arm → Record in Logic → Play here** (live stream alone does not write a region).
-4. Optional **Before Record / Capture** (collapsed): **Count-in (1 silent bar)** Off by default for instant audition; **Loop sketch** On by default (loops until Stop). Soft click is under **Advanced** (off by default — click MIDI is captured if Logic is recording). Compact **Panic** beside Stop sends CC123 without stopping.
+4. Optional **Before Record / Capture** (collapsed): **Count-in (1 silent bar)** Off by default for instant audition; **Loop sketch** On by default (loops until Clear IAC). Soft click is under **Advanced** (off by default — click MIDI is captured if Logic is recording). **Clear IAC** beside Play stops the stream, flushes notes, and sends MMC Stop + MIDI Stop to Logic.
 5. If you enabled IAC mid-session, hit **Refresh ports** — no relaunch needed.
 
 Requires `python-rtmidi` (installed with the package). Silence checklist under Play covers MIDI In match / track hears input / instrument loaded.
