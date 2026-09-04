@@ -23,7 +23,7 @@ def test_load_prefs_defaults_when_missing(tmp_path):
     assert prefs["live_count_in"] is False
     assert prefs["live_loop"] is True
     assert prefs["live_soft_click"] is False
-    assert prefs["live_sync_logic"] is True
+    assert prefs["live_sync_logic"] is False
     assert prefs["live_port"] is None
     assert prefs == DEFAULT_PREFS
 

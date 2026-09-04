@@ -116,13 +116,29 @@ def _persist_live_prefs() -> None:
         "live_count_in": bool(st.session_state.get("live_count_in", False)),
         "live_loop": bool(st.session_state.get("live_loop", True)),
         "live_soft_click": bool(st.session_state.get("live_soft_click", False)),
-        "live_sync_logic": bool(st.session_state.get("live_sync_logic", True)),
+        "live_sync_logic": bool(st.session_state.get("live_sync_logic", False)),
     }
     # Only write port once session has one — avoid wiping a remembered bus
     # before ports are enumerated on first paint.
     if "live_port" in st.session_state:
         updates["live_port"] = st.session_state.get("live_port")
     save_prefs(updates)
+
+
+def _clear_stuck_logic_lock() -> None:
+    """Old default waited for MIDI Start and disabled Play. Unlock once."""
+    if st.session_state.get("_logic_lock_off_v1"):
+        return
+    st.session_state["live_sync_logic"] = False
+    st.session_state["_logic_lock_off_v1"] = True
+    player = get_shared_player()
+    if player.playing or player.phase in ("syncing", "count_in", "playing"):
+        player.stop(wait=True)
+        st.session_state["live_was_playing"] = False
+        st.session_state["live_message"] = (
+            "Play streams notes now. Record in Logic is a separate button."
+        )
+    _persist_live_prefs()
 
 
 def _seed_transport_bool_prefs() -> None:
@@ -137,7 +153,7 @@ def _seed_transport_bool_prefs() -> None:
     if "live_soft_click" not in st.session_state:
         st.session_state["live_soft_click"] = bool(prefs.get("live_soft_click", False))
     if "live_sync_logic" not in st.session_state:
-        st.session_state["live_sync_logic"] = bool(prefs.get("live_sync_logic", True))
+        st.session_state["live_sync_logic"] = bool(prefs.get("live_sync_logic", False))
     st.session_state["_live_bool_prefs_seeded"] = True
 
 
@@ -254,7 +270,7 @@ def _persist_widget_keys() -> None:
         ("live_count_in", False),
         ("live_loop", True),
         ("live_soft_click", False),
-        ("live_sync_logic", True),
+        ("live_sync_logic", False),
         ("live_port", None),
     )
     for key, default in pairs:
@@ -648,7 +664,7 @@ def _replay_into_logic(player: Any, run: dict, ports: list[str]) -> None:
             bars=float(opts.get("bars") or 8),
             loop=bool(st.session_state.get("live_loop", True)),
             click=False,
-            sync="follow" if st.session_state.get("live_sync_logic", True) else "internal",
+            sync="follow" if st.session_state.get("live_sync_logic", False) else "internal",
             send_clock=False,
         )
         st.session_state["live_was_playing"] = True
@@ -1208,6 +1224,7 @@ if isinstance(_pending_knobs, dict):
 _seed_arp_knobs(recipe.profile if recipe else None)
 
 player = get_shared_player()
+_clear_stuck_logic_lock()
 _force_refresh = st.session_state.pop("refresh_midi_ports", False)
 if _force_refresh and player.playing:
     _force_refresh = False
@@ -1392,7 +1409,7 @@ def _render_play_hero(run_data: dict, *, with_fun_now: bool = False) -> None:
     if "live_loop" not in st.session_state:
         st.session_state["live_loop"] = True
     if "live_sync_logic" not in st.session_state:
-        st.session_state["live_sync_logic"] = True
+        st.session_state["live_sync_logic"] = False
 
     # Fun Now (Again / Try instead) sits with Play on main — not buried in a takeover.
     if with_fun_now:
@@ -1421,7 +1438,7 @@ def _render_play_hero(run_data: dict, *, with_fun_now: bool = False) -> None:
                 "Play into Logic",
                 type="primary",
                 use_container_width=True,
-                disabled=player.playing,
+                disabled=player.phase == "playing",
                 key="play_logic",
             ):
                 try:
@@ -1429,7 +1446,7 @@ def _render_play_hero(run_data: dict, *, with_fun_now: bool = False) -> None:
                     count_in = bool(st.session_state.get("live_count_in", False))
                     loop_play = bool(st.session_state.get("live_loop", True))
                     use_click = bool(st.session_state.get("live_soft_click", False))
-                    lock_logic = bool(st.session_state.get("live_sync_logic", True))
+                    lock_logic = bool(st.session_state.get("live_sync_logic", False))
                     player.play_file(
                         path,
                         st.session_state.get("live_port"),

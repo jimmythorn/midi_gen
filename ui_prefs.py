@@ -18,7 +18,7 @@ DEFAULT_PREFS: Dict[str, Any] = {
     "live_count_in": False,
     "live_loop": True,
     "live_soft_click": False,
-    "live_sync_logic": True,
+    "live_sync_logic": False,
     "live_port": None,
 }
 
