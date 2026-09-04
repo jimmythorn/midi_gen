@@ -26,11 +26,21 @@ from .musician_styles import (
 )
 
 # Home section chips — default off (None) = full sketch as today.
-SECTION_CHIP_ROLES: tuple[str, ...] = ("verse", "chorus", "bridge")
+SECTION_CHIP_ROLES: tuple[str, ...] = (
+    "verse",
+    "chorus",
+    "bridge",
+    "intro",
+    "outro",
+    "pre-chorus",
+)
 SECTION_CHIP_LABELS: tuple[tuple[str, str], ...] = (
     ("verse", "Verse"),
     ("chorus", "Chorus"),
     ("bridge", "Bridge"),
+    ("intro", "Intro"),
+    ("outro", "Outro"),
+    ("pre-chorus", "Pre-chorus"),
 )
 # Extend stretch factors shown next to Half/Double (1 = off).
 EXTEND_CHIP_FACTORS: tuple[int, ...] = (2, 4)

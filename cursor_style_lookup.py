@@ -75,16 +75,19 @@ Then return ONLY a single JSON object (no markdown) with these keys:
   "embellish": true/false,
   "rhythmic_variation": true/false,
   "chord_progression": ["D3", "A3", "G3", "D3"] or null,
-  "section_role": "bridge"|"chorus"|"verse"|null,
+  "section_role": "bridge"|"chorus"|"verse"|"intro"|"outro"|"pre-chorus"|null,
   "section": {
-    "role": "bridge"|"chorus"|"verse",
+    "role": "bridge"|"chorus"|"verse"|"intro"|"outro"|"pre-chorus",
     "chord_progression": ["D3", "A3", "G3", "D3"],
     "mode": "dorian",
     "bars": 8
   } or null,
   "sections": [
     {"role": "chorus", "chord_progression": ["D3", "A3", "G3", "D3"], "mode": "dorian", "bars": 8},
-    {"role": "bridge", "chord_progression": ["E3", "B3", "A3", "E3"], "mode": "dorian", "bars": 8}
+    {"role": "bridge", "chord_progression": ["E3", "B3", "A3", "E3"], "mode": "dorian", "bars": 8},
+    {"role": "intro", "chord_progression": ["D3", "A3", "D3", "A3"], "mode": "dorian", "bars": 4},
+    {"role": "outro", "chord_progression": ["A3", "G3", "D3", "A3"], "mode": "dorian", "bars": 8},
+    {"role": "pre-chorus", "chord_progression": ["G3", "D3", "A3", "G3"], "mode": "dorian", "bars": 4}
   ] or null,
   "drone_held": true/false/null,
   "extend_factor": 1-4 or null,
@@ -649,8 +652,8 @@ def generate_midi_for_style(
     When the Cursor SDK returns a recipe, widget overrides are ignored except
     loop length / seed / debug — unless ``live_tweak`` (user moved a live knob).
 
-    Optional ``section_role`` (or free-text bridge/chorus/verse in the query)
-    resolves catalog ``sections[]`` into flat Engine chord_progression before
+    Optional ``section_role`` (or free-text intro/verse/pre-chorus/chorus/bridge/outro
+    in the query) resolves catalog ``sections[]`` into flat Engine chord_progression before
     ``create_arp``.
 
     Returns (midi_path, lookup_result, options_used).

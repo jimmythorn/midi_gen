@@ -45,7 +45,82 @@ def test_parse_section_role_from_text():
     assert parse_section_role_from_text("Philip Glass bridge") == "bridge"
     assert parse_section_role_from_text("chorus feel") == "chorus"
     assert parse_section_role_from_text("quiet verse pad") == "verse"
+    assert parse_section_role_from_text("soft intro pad") == "intro"
+    assert parse_section_role_from_text("fade outro") == "outro"
+    assert parse_section_role_from_text("Glass pre-chorus") == "pre-chorus"
+    assert parse_section_role_from_text("lift pre chorus") == "pre-chorus"
+    assert parse_section_role_from_text("prechorus tension") == "pre-chorus"
     assert parse_section_role_from_text("no section cue") is None
+
+
+def test_resolve_intro_outro_prechorus_distinct_from_chorus():
+    glass = get_profile_by_id("glass_minimal")
+    assert glass is not None
+    chorus = resolve_section_recipe(glass, "chorus")
+    for role in ("intro", "outro", "pre-chorus"):
+        resolved = resolve_section_recipe(glass, role)
+        assert resolved.section_role == role
+        assert resolved.chord_progression == _section_prog(glass, role)
+        assert resolved.chord_progression != chorus.chord_progression
+        assert progression_pitch_classes(
+            resolved.chord_progression
+        ) != progression_pitch_classes(chorus.chord_progression)
+
+    intro = resolve_section_recipe(glass, "intro")
+    outro = resolve_section_recipe(glass, "outro")
+    pre = resolve_section_recipe(glass, "pre-chorus")
+    assert intro.bars == 4
+    assert pre.bars == 4
+    assert outro.bars == 8
+    assert intro.chord_progression != outro.chord_progression
+    assert pre.chord_progression != intro.chord_progression
+
+
+def test_missing_new_role_falls_back_like_verse():
+    """Absent catalog section stamps role and keeps top-level progression."""
+    reich = get_profile_by_id("reich_phase")
+    assert reich is not None
+    # Reich has intro now; use a synthetic profile without intro.
+    thin = profile_from_dict(
+        {
+            "name": "Thin Sections",
+            "styles": ["modal"],
+            "chord_progression": ["D3", "A3", "G3", "D3"],
+            "sections": [
+                {
+                    "role": "chorus",
+                    "chord_progression": ["D3", "A3", "G3", "D3"],
+                    "mode": "dorian",
+                    "bars": 8,
+                },
+            ],
+        },
+        source="sparse",
+    )
+    missing = resolve_section_recipe(thin, "intro")
+    assert missing.section_role == "intro"
+    assert missing.chord_progression == thin.chord_progression
+    assert missing.bars == thin.bars
+
+
+def test_catalog_new_roles_distinct_on_sectioned_profiles():
+    for profile in MUSICIAN_STYLE_CATALOG:
+        if not profile.sections:
+            continue
+        roles = {s["role"]: s for s in profile.sections}
+        assert "intro" in roles and "outro" in roles and "pre-chorus" in roles, profile.id
+        chorus_pcs = progression_pitch_classes(roles["chorus"]["chord_progression"])
+        pre_pcs = progression_pitch_classes(roles["pre-chorus"]["chord_progression"])
+        intro_pcs = progression_pitch_classes(roles["intro"]["chord_progression"])
+        outro_pcs = progression_pitch_classes(roles["outro"]["chord_progression"])
+        assert pre_pcs != chorus_pcs, f"{profile.id} pre-chorus must differ from chorus"
+        assert intro_pcs != chorus_pcs, f"{profile.id} intro must differ from chorus"
+        assert outro_pcs != chorus_pcs, f"{profile.id} outro must differ from chorus"
+        # Density: intro/pre-chorus stay shorter than chorus when bars set.
+        assert int(roles["intro"].get("bars", 8)) <= int(roles["chorus"].get("bars", 8))
+        assert int(roles["pre-chorus"].get("bars", 8)) <= int(
+            roles["chorus"].get("bars", 8)
+        )
 
 
 def test_schema_round_trip_section_block_to_options():

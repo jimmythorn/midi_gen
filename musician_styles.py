@@ -15,12 +15,28 @@ from .scale import FULL_SCALE_INTERVALS
 from .notes import note_str_to_midi
 
 
-SECTION_ROLES = frozenset({"bridge", "chorus", "verse"})
-_SECTION_CUE_RE = re.compile(r"\b(bridge|chorus|verse)\b", re.IGNORECASE)
+SECTION_ROLES = frozenset(
+    {"bridge", "chorus", "verse", "intro", "outro", "pre-chorus"}
+)
+# pre-chorus / prechorus before chorus so "pre-chorus" does not match chorus.
+_SECTION_CUE_RE = re.compile(
+    r"\b(pre[-\s]?chorus|prechorus|bridge|chorus|verse|intro|outro)\b",
+    re.IGNORECASE,
+)
+
+
+def _canonical_section_token(token: str) -> Optional[str]:
+    """Map a matched cue token onto a SECTION_ROLES value."""
+    text = str(token or "").strip().lower().replace("_", "-").replace(" ", "-")
+    if text in ("prechorus", "pre-chorus"):
+        return "pre-chorus"
+    if text in SECTION_ROLES:
+        return text
+    return None
 
 
 def normalize_section_role(raw: Optional[Any]) -> Optional[str]:
-    """Clamp free-text / option values to bridge|chorus|verse."""
+    """Clamp free-text / option values to known section roles."""
     if raw is None:
         return None
     if isinstance(raw, dict):
@@ -28,18 +44,23 @@ def normalize_section_role(raw: Optional[Any]) -> Optional[str]:
     text = str(raw or "").strip().lower()
     if not text:
         return None
-    if text in SECTION_ROLES:
-        return text
+    exact = _canonical_section_token(text)
+    if exact is not None:
+        return exact
     match = _SECTION_CUE_RE.search(text)
-    return match.group(1).lower() if match else None
+    if not match:
+        return None
+    return _canonical_section_token(match.group(1))
 
 
 def parse_section_role_from_text(text: Optional[str]) -> Optional[str]:
-    """Light free-text cue parse — first bridge|chorus|verse token wins."""
+    """Light free-text cue parse — first known section token wins."""
     if not text:
         return None
     match = _SECTION_CUE_RE.search(str(text))
-    return match.group(1).lower() if match else None
+    if not match:
+        return None
+    return _canonical_section_token(match.group(1))
 
 
 def progression_pitch_classes(prog: Optional[List[str]]) -> Optional[tuple]:
@@ -100,7 +121,8 @@ class MusicianStyleProfile:
     drone_held: Optional[bool] = None
     # Optional Engine stretch (1–4); omit → create_arp default 1.
     extend_factor: Optional[int] = None
-    # Active section after resolve (bridge|chorus|verse); None = top-level recipe.
+    # Active section after resolve (verse|chorus|bridge|intro|outro|pre-chorus);
+    # None = top-level recipe.
     section_role: Optional[str] = None
     # Catalog fingerprints: [{role, chord_progression, mode?, bars?, generation_type?}, ...]
     sections: Optional[List[Dict[str, Any]]] = None
@@ -222,6 +244,27 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
                 "mode": "lydian",
                 "bars": 8,
             },
+            {
+                # Soft pad open — shorter bed, not chorus wallpaper.
+                "role": "intro",
+                "chord_progression": ["C3", "G2", "C3", "G2"],
+                "mode": "lydian",
+                "bars": 4,
+            },
+            {
+                # Fade settle — different roots from intro/chorus/bridge.
+                "role": "outro",
+                "chord_progression": ["D3", "F3", "G2", "C3"],
+                "mode": "lydian",
+                "bars": 8,
+            },
+            {
+                # Lift into chorus wash — not a chorus clone.
+                "role": "pre-chorus",
+                "chord_progression": ["G2", "D3", "F3", "C3"],
+                "mode": "lydian",
+                "bars": 4,
+            },
         ],
         # Slow sparse voicing drift (no phase). Drone path maps mutate_every_n
         # onto variation interval; not an arp cell tile. seed_bars=4 holds the
@@ -281,6 +324,27 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
                 "mode": "minor",
                 "bars": 8,
             },
+            {
+                # Sparse cell open — shorter than verse/chorus.
+                "role": "intro",
+                "chord_progression": ["A3", "E3", "A3", "A3"],
+                "mode": "minor",
+                "bars": 4,
+            },
+            {
+                # Resolve settle — not verse or chorus wallpaper.
+                "role": "outro",
+                "chord_progression": ["E3", "A3", "E3", "A3"],
+                "mode": "minor",
+                "bars": 8,
+            },
+            {
+                # Lift toward sticky Am chorus — different roots + short bars.
+                "role": "pre-chorus",
+                "chord_progression": ["E3", "C3", "G3", "E3"],
+                "mode": "minor",
+                "bars": 4,
+            },
         ],
         # Additive-only: grow attacks only — cell is the event; no phase.
         development={
@@ -330,6 +394,24 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
                 "chord_progression": ["E3", "B3", "A3", "E3"],
                 "mode": "dorian",
                 "bars": 8,
+            },
+            {
+                "role": "intro",
+                "chord_progression": ["D3", "A3", "D3", "A3"],
+                "mode": "dorian",
+                "bars": 4,
+            },
+            {
+                "role": "outro",
+                "chord_progression": ["A3", "G3", "D3", "A3"],
+                "mode": "dorian",
+                "bars": 8,
+            },
+            {
+                "role": "pre-chorus",
+                "chord_progression": ["G3", "D3", "A3", "G3"],
+                "mode": "dorian",
+                "bars": 4,
             },
         ],
         effects_preset="clean",
@@ -382,6 +464,24 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
                 "chord_progression": ["Gb3", "Db3", "Ab3", "Eb3"],
                 "mode": "lydian",
                 "bars": 8,
+            },
+            {
+                "role": "intro",
+                "chord_progression": ["Db3", "Ab3", "Db3", "Ab3"],
+                "mode": "lydian",
+                "bars": 4,
+            },
+            {
+                "role": "outro",
+                "chord_progression": ["Ab3", "Eb3", "Db3", "Ab3"],
+                "mode": "lydian",
+                "bars": 8,
+            },
+            {
+                "role": "pre-chorus",
+                "chord_progression": ["Eb3", "Ab3", "Gb3", "Db3"],
+                "mode": "lydian",
+                "bars": 4,
             },
         ],
         effects_preset="subtle_tape",
@@ -437,6 +537,24 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
                 "mode": "dorian",
                 "bars": 8,
             },
+            {
+                "role": "intro",
+                "chord_progression": ["D3", "G3", "D3", "G3"],
+                "mode": "dorian",
+                "bars": 4,
+            },
+            {
+                "role": "outro",
+                "chord_progression": ["C3", "D3", "G3", "D3"],
+                "mode": "dorian",
+                "bars": 8,
+            },
+            {
+                "role": "pre-chorus",
+                "chord_progression": ["G3", "C3", "D3", "A3"],
+                "mode": "dorian",
+                "bars": 4,
+            },
         ],
         effects_preset="human_feel",
         development={
@@ -486,6 +604,24 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
                 "chord_progression": ["Eb3", "Ab3", "Bb3", "F3"],
                 "mode": "major",
                 "bars": 8,
+            },
+            {
+                "role": "intro",
+                "chord_progression": ["Bb3", "F3", "Bb3", "F3"],
+                "mode": "major",
+                "bars": 4,
+            },
+            {
+                "role": "outro",
+                "chord_progression": ["F3", "Bb3", "Eb3", "Bb3"],
+                "mode": "major",
+                "bars": 8,
+            },
+            {
+                "role": "pre-chorus",
+                "chord_progression": ["Eb3", "F3", "Bb3", "Ab3"],
+                "mode": "major",
+                "bars": 4,
             },
         ],
         effects_preset="human_feel",
@@ -538,6 +674,24 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
                 "mode": "phrygian",
                 "bars": 8,
             },
+            {
+                "role": "intro",
+                "chord_progression": ["E2", "B2", "E2", "B2"],
+                "mode": "phrygian",
+                "bars": 4,
+            },
+            {
+                "role": "outro",
+                "chord_progression": ["B2", "A2", "E3", "B2"],
+                "mode": "phrygian",
+                "bars": 8,
+            },
+            {
+                "role": "pre-chorus",
+                "chord_progression": ["B2", "A2", "F2", "E2"],
+                "mode": "phrygian",
+                "bars": 4,
+            },
         ],
         effects_preset="worn_tape",
         # Jittery every-bar mutate — not a clean sequence, not Reich phase.
@@ -588,6 +742,24 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
                 "chord_progression": ["D3", "G3", "A3", "E3"],
                 "mode": "minor",
                 "bars": 8,
+            },
+            {
+                "role": "intro",
+                "chord_progression": ["A3", "E3", "A3", "E3"],
+                "mode": "minor",
+                "bars": 4,
+            },
+            {
+                "role": "outro",
+                "chord_progression": ["E3", "A3", "D3", "A3"],
+                "mode": "minor",
+                "bars": 8,
+            },
+            {
+                "role": "pre-chorus",
+                "chord_progression": ["D3", "E3", "A3", "G3"],
+                "mode": "minor",
+                "bars": 4,
             },
         ],
         effects_preset="clean",
@@ -640,6 +812,24 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
                 "mode": "major",
                 "bars": 8,
             },
+            {
+                "role": "intro",
+                "chord_progression": ["G3", "D3", "G3", "D3"],
+                "mode": "major",
+                "bars": 4,
+            },
+            {
+                "role": "outro",
+                "chord_progression": ["D3", "C3", "G3", "D3"],
+                "mode": "major",
+                "bars": 8,
+            },
+            {
+                "role": "pre-chorus",
+                "chord_progression": ["C3", "D3", "G3", "A3"],
+                "mode": "major",
+                "bars": 4,
+            },
         ],
         effects_preset="human_feel",
         # Almost-static: long seed, rare mutate — not Glass additive cells.
@@ -690,6 +880,24 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
                 "chord_progression": ["G3", "D3", "C4", "A3"],
                 "mode": "dorian",
                 "bars": 8,
+            },
+            {
+                "role": "intro",
+                "chord_progression": ["D3", "A3", "D3", "A3"],
+                "mode": "dorian",
+                "bars": 4,
+            },
+            {
+                "role": "outro",
+                "chord_progression": ["A3", "G3", "D3", "C4"],
+                "mode": "dorian",
+                "bars": 8,
+            },
+            {
+                "role": "pre-chorus",
+                "chord_progression": ["A3", "G3", "C4", "D3"],
+                "mode": "dorian",
+                "bars": 4,
             },
         ],
         effects_preset="tape_and_human",
