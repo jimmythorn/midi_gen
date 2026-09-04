@@ -36,8 +36,16 @@ def _resolve_chord_progression(
     return out or None
 
 
+# timing_factor discrete set: Double / 1× / Half / Quarter time.
+_TIMING_FACTORS = (0.5, 1.0, 2.0, 4.0)
+
+
 def resolve_extend_factor(raw: Any) -> int:
-    """Clamp extend multiplier to 1–4 (identity when unset / invalid)."""
+    """Clamp legacy extend multiplier to 1–4 (identity when unset / invalid).
+
+    ``extend_factor`` cannot express Double time (0.5). Prefer ``timing_factor``.
+    Mapping when only extend is set: 1→1, 2→2, 3→3, 4→4.
+    """
     if raw is None:
         return 1
     try:
@@ -47,21 +55,125 @@ def resolve_extend_factor(raw: Any) -> int:
     return max(1, min(4, value))
 
 
-def apply_extend_factor(options: Dict, factor: Optional[Any] = None) -> Dict:
-    """
-    Return a copy of ``options`` with ``bars`` multiplied by extend_factor (1–4).
+def resolve_timing_factor(raw: Any) -> float:
+    """Clamp timing_factor to {0.5, 1, 2, 4}; identity 1.0 when unset / invalid.
 
-    Stretch duration of each held chord / segment; does not add chord changes.
-    Safe to call from UI or generate paths before ``create_arp``.
+    Semantics (multiply bars-per-chord; chord count unchanged):
+      0.5 Double  — faster (shorter bars-per-chord)
+      1   identity
+      2   Half    — 1 bar/chord → 2
+      4   Quarter — 1 bar/chord → 4
+    """
+    if raw is None:
+        return 1.0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 1.0
+    for allowed in _TIMING_FACTORS:
+        if abs(value - allowed) < 1e-9:
+            return allowed
+    return 1.0
+
+
+def _segment_count_for_timing(options: Dict) -> int:
+    """Chord / root segment count for bars-per-chord stretch math."""
+    prog = options.get("chord_progression")
+    if isinstance(prog, (list, tuple)) and len(prog) > 0:
+        return len(prog)
+    roots = options.get("root_notes")
+    if isinstance(roots, (list, tuple)) and len(roots) > 0:
+        return len(roots)
+    return 1
+
+
+def _effective_timing_factor(options: Dict, factor: Optional[Any] = None) -> float:
+    """Prefer timing_factor; fall back to extend_factor (1–4 only, no 0.5)."""
+    if factor is not None:
+        # Explicit kwarg: accept timing set, else legacy extend int (incl. 3).
+        as_timing = resolve_timing_factor(factor)
+        try:
+            raw_f = float(factor)
+        except (TypeError, ValueError):
+            return as_timing
+        if any(abs(raw_f - a) < 1e-9 for a in _TIMING_FACTORS):
+            return as_timing
+        return float(resolve_extend_factor(factor))
+    if options.get("timing_factor") is not None:
+        return resolve_timing_factor(options.get("timing_factor"))
+    # Legacy alias: extend_factor 1→1, 2→2, 4→4 (and 3→3); no Double via extend.
+    return float(resolve_extend_factor(options.get("extend_factor", 1)))
+
+
+def apply_timing_factor(options: Dict, factor: Optional[Any] = None) -> Dict:
+    """
+    Return a copy of ``options`` with ``bars`` scaled by timing_factor.
+
+    Multiplies bars-per-chord (total ``bars`` proportionally). Chord count /
+    progression length unchanged.
+
+    Double (0.5) floors at ½ bar per chord — never below 0.5 bars/chord after
+    stretch; ``bars`` rounded to an integer ≥ 1.
+
+    Prefer ``timing_factor``. If only ``extend_factor`` is set, map 1→1, 2→2,
+    4→4 (no 0.5 via extend). Safe before ``create_arp``.
     """
     opts = dict(options)
-    resolved = resolve_extend_factor(
-        factor if factor is not None else opts.get("extend_factor", 1)
-    )
-    opts["extend_factor"] = resolved
-    if resolved > 1:
+    resolved = _effective_timing_factor(opts, factor)
+    opts["timing_factor"] = resolved
+    # Keep extend_factor readable for legacy callers when expressible as 1–4.
+    if resolved in (1.0, 2.0, 3.0, 4.0) and float(resolved) == int(resolved):
+        opts["extend_factor"] = int(resolved)
+    else:
+        # Double time is timing-only; legacy extend stays identity.
+        opts["extend_factor"] = 1
+
+    if abs(resolved - 1.0) > 1e-9:
         base_bars = int(opts.get("bars", 16))
-        opts["bars"] = base_bars * resolved
+        n = _segment_count_for_timing(opts)
+        base_bpc = base_bars / float(n)
+        new_bpc = max(0.5, base_bpc * resolved)
+        opts["bars"] = max(1, int(round(new_bpc * n)))
+    return opts
+
+
+def apply_extend_factor(options: Dict, factor: Optional[Any] = None) -> Dict:
+    """
+    Thin alias of ``apply_timing_factor``.
+
+    Legacy ``extend_factor`` is 1–4 only (no Double / 0.5). Prefer
+    ``timing_factor`` / ``apply_timing_factor`` for new callers.
+    """
+    return apply_timing_factor(options, factor=factor)
+
+
+def apply_generation_mode(
+    options: Dict,
+    mode: Optional[str],
+) -> Dict:
+    """
+    Home Pattern | Progression override on a flat options dict.
+
+    ``pattern`` → ``generation_type=arpeggio`` (leave ``drone_held`` alone).
+    ``progression`` → ``generation_type=drone`` and ``drone_held=True`` unless
+    options already have explicit ``drone_held=False`` (Eno wash opt-out wins).
+    ``None`` / unknown → copy unchanged.
+
+    Does not rewrite ``chord_progression``, ``development``, or fingerprint
+    fields. Recipe/who default still comes from the profile; this is a UI
+    toggle override only.
+    """
+    opts = dict(options)
+    if mode is None:
+        return opts
+    key = str(mode).strip().lower()
+    if key == "pattern":
+        opts["generation_type"] = "arpeggio"
+    elif key == "progression":
+        opts["generation_type"] = "drone"
+        # Explicit False (wash) must still win.
+        if opts.get("drone_held") is not False:
+            opts["drone_held"] = True
     return opts
 
 
@@ -106,7 +218,7 @@ def create_arp(options: Dict):
     """
     Main function to generate MIDI data based on given options.
     """
-    options = apply_extend_factor(dict(options))  # avoid mutating caller; stretch bars
+    options = apply_timing_factor(dict(options))  # avoid mutating caller; stretch bars
     debug = options.get('debug', False)
     root = options.get('root', 0)
     root_notes_str_param = options.get('root_notes', None)
@@ -117,7 +229,10 @@ def create_arp(options: Dict):
     if debug:
         print(f"[DEBUG] Generation Type: {generation_type}")
         print(f"[DEBUG] root_notes_str_param from options: {root_notes_str_param}")
-        if options.get("extend_factor", 1) > 1:
+        tf = options.get("timing_factor", 1)
+        if tf != 1 and tf != 1.0:
+            print(f"[DEBUG] timing_factor={tf} → bars={options.get('bars')}")
+        elif options.get("extend_factor", 1) > 1:
             print(f"[DEBUG] extend_factor={options['extend_factor']} → bars={options.get('bars')}")
 
     processed_root_notes_midi: List[int] = []

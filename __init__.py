@@ -2,9 +2,12 @@
 
 from .arpeggio_generation import (
     apply_extend_factor,
+    apply_generation_mode,
+    apply_timing_factor,
     create_arp,
     resolve_drone_held,
     resolve_extend_factor,
+    resolve_timing_factor,
 )
 from .artist_gate import ArtistGateReject, ArtistRejected, resolve_artist_query
 from .cursor_style_lookup import generate_midi_for_style, lookup_musician_style
@@ -18,6 +21,8 @@ __all__ = [
     "ArtistGateReject",
     "ArtistRejected",
     "apply_extend_factor",
+    "apply_generation_mode",
+    "apply_timing_factor",
     "create_arp",
     "generate_midi_for_style",
     "lookup_musician_style",
@@ -27,4 +32,5 @@ __all__ = [
     "resolve_drone_held",
     "resolve_extend_factor",
     "resolve_section_recipe",
+    "resolve_timing_factor",
 ]

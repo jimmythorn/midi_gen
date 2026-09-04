@@ -92,6 +92,7 @@ Then return ONLY a single JSON object (no markdown) with these keys:
   ] or null,
   "drone_held": true/false/null,
   "extend_factor": 1-4 or null,
+  "timing_factor": 0.5|1|2|4 or null,
   "development": null OR {
     "enabled": true,
     "seed_bars": 1|2|3|4,
@@ -117,6 +118,7 @@ LOOKUP_STICKY_OVERRIDE_KEYS = frozenset(
         "debug",
         "filename",
         "extend_factor",
+        "timing_factor",
         "section_role",
         "generation_type",
         "drone_held",
