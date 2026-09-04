@@ -10,6 +10,7 @@ Style Lab API so Sketch UX can populate home-search combo-box match lists from S
 - [x] Fail closed when genre has no usable artists
 - [x] Unit tests (no network)
 - [x] Document Sketch UX call path
+- [x] PR opened (#34)
 
 ## In Progress Tasks
 
