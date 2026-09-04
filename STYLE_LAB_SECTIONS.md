@@ -11,6 +11,7 @@ Section-aware who+section → progression + mode + bars, stacked on Engine held+
 - [x] SDK schema honesty B + progression-bearing few-shot neighbors
 - [x] Wire section cue into generate_midi_for_style
 - [x] Tests for resolve / bridge≠chorus / schema / few-shot
+- [x] PR #30 open targeting main (stacked on Engine #29)
 
 ## In Progress Tasks
 
