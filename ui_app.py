@@ -1246,6 +1246,19 @@ def _render_again_try(run_data: dict) -> None:
                 )
 
 
+def _render_listen(run_data: dict) -> None:
+    """In-browser sine preview — home, not Geek."""
+    st.markdown("### Listen")
+    st.caption(
+        "Sine preview in this page. Play into Logic for a real instrument. "
+        + (run_data.get("preview_caption") or "")
+    )
+    if run_data.get("wav_bytes"):
+        st.audio(run_data["wav_bytes"], format="audio/wav")
+    else:
+        st.caption("No preview audio for this sketch.")
+
+
 def _render_play_hero(run_data: dict, *, with_fun_now: bool = False) -> None:
     """Sacred Play / Stop / Panic — stays on home (and sticky if playing in a takeover)."""
     result = run_data["result"]
@@ -1635,14 +1648,6 @@ def _render_geek_takeover(run_data: dict) -> None:
     st.markdown("**Raw generator options**")
     st.json(options)
 
-    st.markdown("### Listen")
-    st.caption(
-        "Quick sine preview — Play into Logic for real feel. "
-        + (run_data.get("preview_caption") or "")
-    )
-    if run_data.get("wav_bytes"):
-        st.audio(run_data["wav_bytes"], format="audio/wav")
-
     st.caption("Style tags: " + ", ".join(list_styles()))
     st.caption("CLI (`python -m midi_gen`) remains available for power/dev use.")
     _ = path
@@ -1740,6 +1745,7 @@ else:
         notes = str(getattr(profile, "style_notes", "") or "").strip()
         if notes:
             st.caption(notes)
+        _render_listen(run)
         # Again + Try instead with Play (Fun Now sacred on main).
         _render_play_hero(run, with_fun_now=True)
         _render_download(run)

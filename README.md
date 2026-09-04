@@ -17,7 +17,7 @@ The Streamlit Style Lab is the primary surface. The CLI (`python -m midi_gen`) r
 - **Recipe preview + match line** before Generate; **Try instead** related styles after.
 - **Play into Logic (IAC)** — Audition→Capture strip; Refresh ports; Count-in / Loop (app-side); All notes off (CC123); Record in Logic to keep a region.
 - **Transport prefs** — count-in / loop / soft-click / last MIDI port persist locally across Streamlit restarts (defaults Off / On / Off — Play loops until Stop).
-- **Bend-aware Listen preview** — sine WAV honors pitch-bend so tape wow/flutter is audible.
+- **Listen on home** — sine preview plays in the page after Generate (pitch-bend / tape wow audible). Play into Logic for a real instrument.
 - **Mode color** — characteristic tones (#4 Lydian, nat6/9 Dorian, b7 Mixolydian, …) on weak beats so modes aren’t triad wallpaper.
 - **Effects presets** — Clean / Human feel / Subtle tape / Worn tape / Tape + human.
 - **Cursor SDK hook** — optional; Advanced toggle in the UI (enrich-this-vibe).

@@ -180,6 +180,7 @@ def test_surprise_me_populates_artist_and_effects():
     except KeyError:
         last_run = None
     assert last_run
+    assert last_run.get("wav_bytes")
 
 
 def test_featured_card_sets_catalog_without_widget_exception():
@@ -335,6 +336,10 @@ def test_one_page_chrome_takeovers_source_and_nav():
     # Sacred home / Fun Now — search sits above chrome, then Generate
     home_src = src[src.index("# --- HOME") :]
     assert home_src.index("_render_search_feel") < home_src.index("_render_chrome_row")
+    assert home_src.index("_render_listen") < home_src.index("_render_play_hero")
+    geek = src[src.index("def _render_geek_takeover") : src.index("def _render_effects_takeover")]
+    assert "st.audio" not in geek
+    assert "def _render_listen" in src
     assert '"Philip Glass" if "Philip Glass" in musician_names' not in src
     assert 'placeholder="Select an artist…"' in src
     assert '"Generate"' in src

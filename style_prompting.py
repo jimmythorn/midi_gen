@@ -628,20 +628,6 @@ def _vibe_is_feel_language(vibe: str) -> bool:
     return False
 
 
-def _names_refer_to_same_artist(typed: str, artist_name: str) -> bool:
-    """Typed query refers to this artist name (not a loose genre overlap)."""
-    t = (typed or "").strip().lower()
-    a = (artist_name or "").strip().lower()
-    if not t or not a:
-        return False
-    if t == a:
-        return True
-    # Allow minor extra words only when all artist-name tokens appear in typed.
-    a_toks = {x for x in a.replace("-", " ").split() if x}
-    t_toks = {x for x in t.replace("-", " ").split() if x}
-    return bool(a_toks) and a_toks.issubset(t_toks)
-
-
 def vibe_is_different_artist_identity(
     catalog_name: str,
     vibe_text: str,
