@@ -22,6 +22,7 @@ from midi_gen.cursor_style_lookup import (
 from midi_gen.musician_styles import get_profile_by_id, resolve_section_recipe
 from midi_gen.style_prompting import (
     EXTEND_CHIP_FACTORS,
+    SECTION_CHIP_LABELS,
     SECTION_CHIP_ROLES,
     clamp_extend_factor,
     format_recipe_one_liner,
@@ -37,7 +38,20 @@ def test_section_chip_toggle_default_off_and_mutual_exclusive():
     assert toggle_section_chip("verse", "bridge") == "bridge"
     assert toggle_section_chip(None, "chorus") == "chorus"
     assert toggle_section_chip("chorus", "not-a-section") == "chorus"
-    assert set(SECTION_CHIP_ROLES) == {"verse", "chorus", "bridge"}
+    assert toggle_section_chip(None, "intro") == "intro"
+    assert toggle_section_chip("intro", "outro") == "outro"
+    assert toggle_section_chip("outro", "outro") is None
+    assert toggle_section_chip(None, "pre-chorus") == "pre-chorus"
+    assert toggle_section_chip("pre-chorus", "pre-chorus") is None
+    assert set(SECTION_CHIP_ROLES) == {
+        "verse",
+        "chorus",
+        "bridge",
+        "intro",
+        "outro",
+        "pre-chorus",
+    }
+    assert [role for role, _label in SECTION_CHIP_LABELS] == list(SECTION_CHIP_ROLES)
 
 
 def test_extend_chip_toggle_sets_factor_2_and_4():
@@ -83,6 +97,21 @@ def test_preview_recipe_section_chip_resolves_role():
     ).chord_progression
     assert "bridge" in bridged.one_liner
     assert "held progression" in bridged.one_liner
+
+
+def test_preview_recipe_intro_outro_prechorus_resolve():
+    glass = get_profile_by_id("glass_minimal")
+    for role in ("intro", "outro", "pre-chorus"):
+        previewed = preview_recipe(catalog_name="Philip Glass", section_role=role)
+        assert previewed.profile.section_role == role
+        assert previewed.profile.chord_progression == resolve_section_recipe(
+            glass, role
+        ).chord_progression
+        assert role in previewed.one_liner
+        # Distinct from chorus wallpaper.
+        assert previewed.profile.chord_progression != resolve_section_recipe(
+            glass, "chorus"
+        ).chord_progression
 
 
 def test_generate_overrides_wire_section_role_and_extend_factor(tmp_path):

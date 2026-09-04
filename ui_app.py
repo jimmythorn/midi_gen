@@ -537,7 +537,7 @@ def _render_bars_knobs() -> None:
 
 
 def _render_section_chips(*, key_prefix: str = "section") -> None:
-    """Verse / Chorus / Bridge — default off = full sketch as today."""
+    """Verse / Chorus / Bridge / Intro / Outro / Pre-chorus — default off."""
     current = st.session_state.get("section_role")
     st.markdown(
         '<p class="feel-path-label">Section (optional)</p>',
@@ -968,7 +968,10 @@ st.markdown(
         max-width: 40rem;
         margin: 0.25rem 0 0.75rem 0;
       }
-      .section-chip-row,
+      .section-chip-row {
+        max-width: 42rem;
+        margin: 0.15rem 0 0.65rem 0;
+      }
       .extend-chip-row {
         max-width: 28rem;
         margin: 0.15rem 0 0.65rem 0;
