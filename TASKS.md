@@ -9,10 +9,11 @@ Beat writer's block: drone path becomes a held chord progression (one triad per 
 - [x] Drive drone segments from `chord_progression` when set
 - [x] `extend_factor` (1–4) multiplies bars / bars-per-chord
 - [x] Tests: held boundaries, extend 2×/4×, non-held wash, seed determinism
+- [x] PR open against main (#29)
 
 ## In Progress Tasks
 
-- [ ] PR review / CI green
+- [ ] Engine review: held-not-wash + Extend stretches bars-per-chord
 
 ## Future Tasks
 
