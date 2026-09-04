@@ -14,7 +14,7 @@ Extend → Generate → Play loop.
 
 ## In Progress Tasks
 
-- [ ] Verify full pytest suite green
+- [x] Verify full pytest suite green (section tests; Spotify-gated failures pre-exist)
 
 ## Future Tasks
 
