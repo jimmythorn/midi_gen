@@ -13,13 +13,27 @@ import random
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from .arpeggio_generation import resolve_extend_factor
 from .effects_presets import get_preset, list_presets
 from .musician_styles import (
     MUSICIAN_STYLE_CATALOG,
     MusicianStyleProfile,
+    SECTION_ROLES,
     find_profiles,
     get_profile_by_id,
+    normalize_section_role,
+    resolve_section_recipe,
 )
+
+# Home section chips — default off (None) = full sketch as today.
+SECTION_CHIP_ROLES: tuple[str, ...] = ("verse", "chorus", "bridge")
+SECTION_CHIP_LABELS: tuple[tuple[str, str], ...] = (
+    ("verse", "Verse"),
+    ("chorus", "Chorus"),
+    ("bridge", "Bridge"),
+)
+# Extend stretch factors shown next to Half/Double (1 = off).
+EXTEND_CHIP_FACTORS: tuple[int, ...] = (2, 4)
 
 
 # Curated subset spanning the FULL catalog (not only recently enriched profiles).
@@ -203,6 +217,33 @@ def double_bars(bars: int) -> int:
     return clamp_bars(int(bars) * 2)
 
 
+def clamp_extend_factor(raw: Any) -> int:
+    """UI/session extend_factor — 1 (off) through 4."""
+    return resolve_extend_factor(raw)
+
+
+def toggle_section_chip(current: Optional[str], clicked: str) -> Optional[str]:
+    """
+    Section chip toggle: click active chip → off; else select that role.
+
+    Default off (None) leaves full-sketch behavior as today.
+    """
+    role = normalize_section_role(clicked)
+    if role is None or role not in SECTION_ROLES:
+        return normalize_section_role(current)
+    cur = normalize_section_role(current)
+    return None if cur == role else role
+
+
+def toggle_extend_factor(current: Any, clicked: int) -> int:
+    """Extend chip toggle: click active factor → 1 (off); else set 2 or 4."""
+    factor = clamp_extend_factor(clicked)
+    if factor not in EXTEND_CHIP_FACTORS:
+        return clamp_extend_factor(current)
+    cur = clamp_extend_factor(current)
+    return 1 if cur == factor else factor
+
+
 def surprise_related_profile(
     profile: MusicianStyleProfile,
     *,
@@ -330,16 +371,34 @@ def _match_type_for_profile(
     return "catalog"
 
 
+def _section_drip_shape(profile: MusicianStyleProfile) -> str:
+    """Section sketch shape — held progression unless wash opts out."""
+    if profile.drone_held is False:
+        return "drone" if profile.generation_type == "drone" else "arp"
+    if profile.chord_progression or profile.drone_held is True:
+        return "held progression"
+    return "drone" if profile.generation_type == "drone" else "arp"
+
+
 def format_recipe_one_liner(
     profile: MusicianStyleProfile,
     *,
     effects_preset: Optional[str] = None,
+    section_role: Optional[str] = None,
 ) -> str:
     """
     feel + mode/BPM/arp-vs-drone + effects default.
 
     Example: "Brian Eno · drone · lydian · 72 BPM · Subtle tape"
+
+    When ``section_role`` is set (chip or resolved profile), name the section
+    so the drip is not an ambient wash: e.g. ``Philip Glass · bridge · held progression``.
     """
+    role = normalize_section_role(section_role) or normalize_section_role(
+        getattr(profile, "section_role", None)
+    )
+    if role:
+        return f"{profile.name} · {role} · {_section_drip_shape(profile)}"
     preset_id = effects_preset or profile.effects_preset
     try:
         preset_label = get_preset(preset_id)["label"]
@@ -423,6 +482,7 @@ def preview_recipe(
     vibe_text: str = "",
     effects_preset: Optional[str] = None,
     gate_accept: Any = None,
+    section_role: Optional[str] = None,
 ) -> RecipePreview:
     """
     Offline lookup preview (no MIDI).
@@ -430,6 +490,7 @@ def preview_recipe(
     Feel language layers on catalog who. Different artist identity (other catalog
     musician or Spotify stranger ≠ who) unpins the who-chip. Empty vibe sticks.
     Optional ``gate_accept`` binds Spotify genres/followers into cousin few-shot.
+    Optional ``section_role`` resolves catalog ``sections[]`` for drip + knobs.
     """
     from .cursor_style_lookup import lookup_musician_style
 
@@ -454,7 +515,10 @@ def preview_recipe(
         skip_artist_gate=True,  # UI / caller already gated
         gate_accept=gate_accept if different_artist else None,
     )
-    profile = result.profile
+    role = normalize_section_role(section_role)
+    profile = (
+        resolve_section_recipe(result.profile, role) if role else result.profile
+    )
     mtype = _match_type_for_profile(
         profile,
         matched_locally=result.matched_locally,
@@ -470,7 +534,9 @@ def preview_recipe(
         profile=profile,
         path=path,
         match_type=mtype,
-        one_liner=format_recipe_one_liner(profile, effects_preset=effects_preset),
+        one_liner=format_recipe_one_liner(
+            profile, effects_preset=effects_preset, section_role=role
+        ),
         match_line=format_match_line(
             profile,
             match_type=mtype,

@@ -47,8 +47,11 @@ from midi_gen import style_prompting as _style_prompting
 importlib.reload(_style_prompting)
 from midi_gen.style_prompting import (
     ARTIST_REJECT_DRIP,
+    EXTEND_CHIP_FACTORS,
+    SECTION_CHIP_LABELS,
     artist_reject_drip_copy,
     clamp_bars,
+    clamp_extend_factor,
     double_bars,
     featured_style_cards,
     format_match_line,
@@ -61,6 +64,8 @@ from midi_gen.style_prompting import (
     resolve_lookup_inputs,
     session_clears_on_artist_reject,
     surprise_roll,
+    toggle_extend_factor,
+    toggle_section_chip,
 )
 from midi_gen.ui_prefs import load_prefs, prefs_for_session, save_prefs
 
@@ -197,6 +202,18 @@ def _apply_double_bars() -> None:
     st.session_state["bars"] = double_bars(int(st.session_state.get("bars", 8)))
 
 
+def _apply_section_chip(role: str) -> None:
+    st.session_state["section_role"] = toggle_section_chip(
+        st.session_state.get("section_role"), role
+    )
+
+
+def _apply_extend_factor(factor: int) -> None:
+    st.session_state["extend_factor"] = toggle_extend_factor(
+        st.session_state.get("extend_factor", 1), factor
+    )
+
+
 # --- One-page chrome: home stays sacred; extras are full-screen takeovers ---
 # PASS bar order: Browse → Mood → Length → Effects → Capture → Advanced → Geek last.
 TAKEOVER_LABELS = {
@@ -224,6 +241,8 @@ def _persist_widget_keys() -> None:
         ("vibe_text", ""),
         ("catalog_pick", None),
         ("bars", 8),
+        ("section_role", None),
+        ("extend_factor", 1),
         ("effects_preset", "tape_and_human"),
         ("use_sdk", False),
         ("sketch_bpm", None),
@@ -247,6 +266,15 @@ def _persist_widget_keys() -> None:
         elif default is not None:
             st.session_state[key] = default
             st.session_state[shadow] = default
+    # Normalize section / extend after mirror (None = chips off).
+    role = st.session_state.get("section_role")
+    if role is not None and not str(role).strip():
+        st.session_state["section_role"] = None
+        st.session_state["_persist_section_role"] = None
+    st.session_state["extend_factor"] = clamp_extend_factor(
+        st.session_state.get("extend_factor", 1)
+    )
+    st.session_state["_persist_extend_factor"] = st.session_state["extend_factor"]
 
 
 def _render_who_caption() -> None:
@@ -452,12 +480,19 @@ def _render_arp_live(profile: Any) -> None:
 
 
 def _render_bars_knobs() -> None:
-    """Half / Double + bars slider (Length & feel takeover)."""
+    """Half / Double / Extend + bars slider (Length & feel takeover)."""
     st.session_state["bars"] = clamp_bars(int(st.session_state.get("bars", 8)))
+    st.session_state["extend_factor"] = clamp_extend_factor(
+        st.session_state.get("extend_factor", 1)
+    )
     st.markdown('<div class="bars-chip-row">', unsafe_allow_html=True)
-    bars_label, half_col, double_col = st.columns([2, 1, 1])
+    bars_label, half_col, double_col, *extend_cols = st.columns(
+        [2, 1, 1] + [1] * len(EXTEND_CHIP_FACTORS)
+    )
     with bars_label:
-        st.caption(f"Loop length · **{st.session_state['bars']} bars**")
+        extend_n = int(st.session_state["extend_factor"])
+        extend_note = f" · extend {extend_n}×" if extend_n > 1 else ""
+        st.caption(f"Loop length · **{st.session_state['bars']} bars**{extend_note}")
     with half_col:
         st.button(
             "½ Half",
@@ -476,6 +511,21 @@ def _render_bars_knobs() -> None:
             help="Double sketch length for a longer playable loop.",
             on_click=_apply_double_bars,
         )
+    for col, factor in zip(extend_cols, EXTEND_CHIP_FACTORS):
+        with col:
+            on = int(st.session_state["extend_factor"]) == factor
+            st.button(
+                f"{'● ' if on else ''}{factor}× Extend",
+                use_container_width=True,
+                key=f"bars_extend_{factor}",
+                type="primary" if on else "secondary",
+                help=(
+                    "Engine extend_factor — stretch bars and bars-per-chord "
+                    f"by {factor}× (not a new generator)."
+                ),
+                on_click=_apply_extend_factor,
+                args=(factor,),
+            )
     st.markdown("</div>", unsafe_allow_html=True)
     st.slider(
         "Bars",
@@ -484,6 +534,61 @@ def _render_bars_knobs() -> None:
         help="Defaults to the catalog profile length when left alone.",
         key="bars",
     )
+
+
+def _render_section_chips(*, key_prefix: str = "section") -> None:
+    """Verse / Chorus / Bridge — default off = full sketch as today."""
+    current = st.session_state.get("section_role")
+    st.markdown(
+        '<p class="feel-path-label">Section (optional)</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="section-chip-row">', unsafe_allow_html=True)
+    cols = st.columns(len(SECTION_CHIP_LABELS))
+    for col, (role, label) in zip(cols, SECTION_CHIP_LABELS):
+        with col:
+            on = current == role
+            st.button(
+                f"{'● ' if on else ''}{label}",
+                key=f"{key_prefix}_{role}",
+                use_container_width=True,
+                type="primary" if on else "secondary",
+                help=(
+                    f"Sketch a {role} fingerprint when the catalog has one. "
+                    "Off = full sketch. Typed “ELO bridge” still works."
+                ),
+                on_click=_apply_section_chip,
+                args=(role,),
+            )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def _render_extend_chips(*, key_prefix: str = "extend") -> None:
+    """2× / 4× Extend on home — wires Engine extend_factor."""
+    current = clamp_extend_factor(st.session_state.get("extend_factor", 1))
+    st.session_state["extend_factor"] = current
+    st.markdown(
+        '<p class="feel-path-label">Extend (optional)</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="extend-chip-row">', unsafe_allow_html=True)
+    cols = st.columns(len(EXTEND_CHIP_FACTORS))
+    for col, factor in zip(cols, EXTEND_CHIP_FACTORS):
+        with col:
+            on = current == factor
+            st.button(
+                f"{'● ' if on else ''}{factor}× Extend",
+                key=f"{key_prefix}_{factor}",
+                use_container_width=True,
+                type="primary" if on else "secondary",
+                help=(
+                    "Stretch bars and bars-per-chord via Engine extend_factor "
+                    f"({factor}×). Off = length as set."
+                ),
+                on_click=_apply_extend_factor,
+                args=(factor,),
+            )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _render_mood_packs(*, key_prefix: str = "mood") -> None:
@@ -863,6 +968,11 @@ st.markdown(
         max-width: 40rem;
         margin: 0.25rem 0 0.75rem 0;
       }
+      .section-chip-row,
+      .extend-chip-row {
+        max-width: 28rem;
+        margin: 0.15rem 0 0.65rem 0;
+      }
 
       .chrome-row {
         max-width: 56rem;
@@ -1069,6 +1179,13 @@ else:
     query, identity_name = "", None
 
 st.session_state["bars"] = clamp_bars(int(st.session_state.get("bars", 8)))
+st.session_state["extend_factor"] = clamp_extend_factor(
+    st.session_state.get("extend_factor", 1)
+)
+_section_role = st.session_state.get("section_role")
+if _section_role is not None and not str(_section_role).strip():
+    _section_role = None
+    st.session_state["section_role"] = None
 
 recipe = (
     preview_recipe(
@@ -1076,6 +1193,7 @@ recipe = (
         vibe_text=st.session_state.get("vibe_text") or "" if not _artist_rejected else "",
         effects_preset=effects_preset,
         gate_accept=None if _artist_rejected else _gate,
+        section_role=_section_role,
     )
     if _has_style_intent and not _artist_rejected
     else None
@@ -1718,6 +1836,8 @@ else:
         unsafe_allow_html=True,
     )
     _render_search_feel()
+    _render_section_chips(key_prefix="home_section")
+    _render_extend_chips(key_prefix="home_extend")
     _render_chrome_row(has_sketch=bool(run))
     _render_recipe_panel()
     generate = _render_generate_row()
@@ -1757,6 +1877,10 @@ if st.session_state.pop("auto_generate", False):
 
 bars = clamp_bars(int(st.session_state.get("bars", 8)))
 use_sdk = bool(st.session_state.get("use_sdk", False))
+section_role = st.session_state.get("section_role")
+if section_role is not None and not str(section_role).strip():
+    section_role = None
+extend_factor = clamp_extend_factor(st.session_state.get("extend_factor", 1))
 
 # --- Generate pipeline ---
 if generate:
@@ -1768,6 +1892,10 @@ if generate:
             "bars": int(bars),
             "debug": False,
         }
+        if section_role:
+            overrides["section_role"] = section_role
+        if extend_factor > 1:
+            overrides["extend_factor"] = int(extend_factor)
         if st.session_state.get("arp_mode") in ARP_MODE_LABELS:
             overrides["arp_mode"] = st.session_state["arp_mode"]
         if st.session_state.get("arp_steps") in ARP_STEP_CHOICES:
@@ -1791,6 +1919,7 @@ if generate:
                 live_tweak=live_tweak,
                 identity_name=identity_name,
                 vibe_text=str(st.session_state.get("vibe_text") or "").strip() or None,
+                section_role=section_role,
             )
             summary = summarize_midi_file(path)
             wav_bytes = render_midi_to_wav_bytes(path)
