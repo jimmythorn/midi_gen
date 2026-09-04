@@ -50,12 +50,20 @@ from midi_gen.style_prompting import (
     EXTEND_CHIP_FACTORS,
     SECTION_CHIP_LABELS,
     artist_reject_drip_copy,
+    DEFAULT_CHORD_COUNT,
+    DEFAULT_GENERATION_TYPE,
+    DEFAULT_SKETCH_BARS,
+    GENERATION_TYPES,
     clamp_bars,
+    clamp_chord_count,
     clamp_extend_factor,
+    clamp_generation_type,
     double_bars,
     featured_style_cards,
+    format_likeness_blurb,
     format_match_line,
     format_plain_feel_match,
+    format_shape_label,
     half_bars,
     mood_chip_packs,
     preview_recipe,
@@ -256,7 +264,9 @@ def _persist_widget_keys() -> None:
     pairs = (
         ("vibe_text", ""),
         ("catalog_pick", None),
-        ("bars", 8),
+        ("bars", DEFAULT_SKETCH_BARS),
+        ("chord_count", DEFAULT_CHORD_COUNT),
+        ("generation_type", DEFAULT_GENERATION_TYPE),
         ("section_role", None),
         ("extend_factor", 1),
         ("effects_preset", "tape_and_human"),
@@ -444,7 +454,7 @@ def _render_arp_live(profile: Any) -> None:
     )
     st.caption("Mess with these while Playing — sketch rewrites and keeps streaming.")
     if getattr(profile, "generation_type", "arpeggio") != "arpeggio":
-        st.caption("Drone sketch — arp knobs hide (they would not change the pad).")
+        st.caption("Progression sketch — arp knobs hide (they would not change the hold).")
         return
     dir_col, step_col, oct_col = st.columns(3)
     with dir_col:
@@ -497,7 +507,7 @@ def _render_arp_live(profile: Any) -> None:
 
 def _render_bars_knobs() -> None:
     """Half / Double / Extend + bars slider (Length & feel takeover)."""
-    st.session_state["bars"] = clamp_bars(int(st.session_state.get("bars", 8)))
+    st.session_state["bars"] = clamp_bars(int(st.session_state.get("bars", DEFAULT_SKETCH_BARS)))
     st.session_state["extend_factor"] = clamp_extend_factor(
         st.session_state.get("extend_factor", 1)
     )
@@ -536,8 +546,8 @@ def _render_bars_knobs() -> None:
                 key=f"bars_extend_{factor}",
                 type="primary" if on else "secondary",
                 help=(
-                    "Engine extend_factor — stretch bars and bars-per-chord "
-                    f"by {factor}× (not a new generator)."
+                    f"Hold the progression {factor}× longer. "
+                    "2×–4× Extend is how a drone is made."
                 ),
                 on_click=_apply_extend_factor,
                 args=(factor,),
@@ -584,7 +594,7 @@ def _render_extend_chips(*, key_prefix: str = "extend") -> None:
     current = clamp_extend_factor(st.session_state.get("extend_factor", 1))
     st.session_state["extend_factor"] = current
     st.markdown(
-        '<p class="feel-path-label">Extend (optional)</p>',
+        '<p class="feel-path-label">Extend (drone)</p>',
         unsafe_allow_html=True,
     )
     st.markdown('<div class="extend-chip-row">', unsafe_allow_html=True)
@@ -598,13 +608,48 @@ def _render_extend_chips(*, key_prefix: str = "extend") -> None:
                 use_container_width=True,
                 type="primary" if on else "secondary",
                 help=(
-                    "Stretch bars and bars-per-chord via Engine extend_factor "
-                    f"({factor}×). Off = length as set."
+                    f"Hold the progression {factor}× longer. "
+                    "That is the drone. Off = length as set."
                 ),
                 on_click=_apply_extend_factor,
                 args=(factor,),
             )
     st.markdown("</div>", unsafe_allow_html=True)
+
+
+def _render_sketch_layout() -> None:
+    """Home knobs: bars, chord count, progression/arp shape."""
+    st.markdown(
+        '<p class="feel-path-label">Sketch</p>',
+        unsafe_allow_html=True,
+    )
+    bar_col, chord_col, shape_col = st.columns(3)
+    with bar_col:
+        st.slider(
+            "Bars",
+            min_value=2,
+            max_value=32,
+            step=1,
+            key="bars",
+            help="Sketch length. 16 bars / 4 chords = 4 bars each.",
+        )
+    with chord_col:
+        st.slider(
+            "Chords",
+            min_value=1,
+            max_value=8,
+            step=1,
+            key="chord_count",
+            help="How many roots in the loop. Cycles the recipe progression.",
+        )
+    with shape_col:
+        st.selectbox(
+            "Shape",
+            options=list(GENERATION_TYPES),
+            format_func=format_shape_label,
+            key="generation_type",
+            help="Progression holds each chord. Extend 2×–4× to make a drone. Arpeggio walks the same roots.",
+        )
 
 
 def _render_mood_packs(*, key_prefix: str = "mood") -> None:
@@ -1115,7 +1160,11 @@ if "catalog_pick" not in st.session_state:
 if "vibe_text" not in st.session_state:
     st.session_state["vibe_text"] = ""
 if "bars" not in st.session_state:
-    st.session_state["bars"] = 8
+    st.session_state["bars"] = DEFAULT_SKETCH_BARS
+if "chord_count" not in st.session_state:
+    st.session_state["chord_count"] = DEFAULT_CHORD_COUNT
+if "generation_type" not in st.session_state:
+    st.session_state["generation_type"] = DEFAULT_GENERATION_TYPE
 if "effects_preset" not in st.session_state:
     st.session_state["effects_preset"] = "tape_and_human"
 if "use_sdk" not in st.session_state:
@@ -1197,7 +1246,13 @@ if _has_style_intent:
 else:
     query, identity_name = "", None
 
-st.session_state["bars"] = clamp_bars(int(st.session_state.get("bars", 8)))
+st.session_state["bars"] = clamp_bars(int(st.session_state.get("bars", DEFAULT_SKETCH_BARS)))
+st.session_state["chord_count"] = clamp_chord_count(
+    st.session_state.get("chord_count", DEFAULT_CHORD_COUNT)
+)
+st.session_state["generation_type"] = clamp_generation_type(
+    st.session_state.get("generation_type", DEFAULT_GENERATION_TYPE)
+)
 st.session_state["extend_factor"] = clamp_extend_factor(
     st.session_state.get("extend_factor", 1)
 )
@@ -1274,12 +1329,17 @@ def _render_recipe_panel() -> None:
         if recipe.path == "both"
         else ("feel only" if recipe.path == "vibe" else "who path (named catalog)")
     )
+    layout = (
+        f"{st.session_state.get('bars')} bars · "
+        f"{st.session_state.get('chord_count')} chords · "
+        f"{format_shape_label(st.session_state.get('generation_type'))}"
+    )
     st.markdown(
         f"""
         <div class="recipe-preview">
           <div class="label">About to generate · {path_note}</div>
           <div class="line">{recipe.one_liner}</div>
-          <div class="feel">{recipe.plain_feel_line}</div>
+          <div class="feel">{recipe.plain_feel_line} · {layout}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1710,7 +1770,7 @@ def _render_advanced_takeover() -> None:
     st.toggle(
         "Cursor SDK enrichment",
         key="use_sdk",
-        help="Research the selected artist or vibe and drive sketch params from that. Requires CURSOR_API_KEY.",
+        help="Research the artist and write a short home blurb: why this sketch sounds like them. Requires CURSOR_API_KEY.",
     )
     use_sdk = bool(st.session_state.get("use_sdk", False))
     if not use_sdk:
@@ -1858,6 +1918,7 @@ else:
     _render_search_feel()
     _render_section_chips(key_prefix="home_section")
     _render_extend_chips(key_prefix="home_extend")
+    _render_sketch_layout()
     _render_chrome_row(has_sketch=bool(run))
     _render_recipe_panel()
     generate = _render_generate_row()
@@ -1880,11 +1941,19 @@ else:
         st.markdown(f'<p class="post-feel">{plain}</p>', unsafe_allow_html=True)
         st.caption(
             f"{options.get('mode')} · {options.get('bpm')} BPM · "
-            f"{options.get('bars')} bars"
+            f"{options.get('bars')} bars · "
+            f"{len(options.get('chord_progression') or [])} chords · "
+            f"{format_shape_label(options.get('generation_type'))}"
         )
-        notes = str(getattr(profile, "style_notes", "") or "").strip()
-        if notes:
-            st.caption(notes)
+        likeness = run.get("likeness_blurb")
+        if not likeness:
+            likeness = format_likeness_blurb(
+                profile, used_cursor_sdk=bool(result.used_cursor_sdk)
+            )
+        if likeness:
+            label, body = likeness
+            st.markdown(f"**{label}**")
+            st.write(body)
         _render_listen(run)
         # Again + Try instead with Play (Fun Now sacred on main).
         _render_play_hero(run, with_fun_now=True)
@@ -1895,7 +1964,11 @@ else:
 if st.session_state.pop("auto_generate", False):
     generate = False if _artist_rejected or not _has_style_intent else True
 
-bars = clamp_bars(int(st.session_state.get("bars", 8)))
+bars = clamp_bars(int(st.session_state.get("bars", DEFAULT_SKETCH_BARS)))
+chord_count = clamp_chord_count(st.session_state.get("chord_count", DEFAULT_CHORD_COUNT))
+generation_type = clamp_generation_type(
+    st.session_state.get("generation_type", DEFAULT_GENERATION_TYPE)
+)
 use_sdk = bool(st.session_state.get("use_sdk", False))
 section_role = st.session_state.get("section_role")
 if section_role is not None and not str(section_role).strip():
@@ -1910,8 +1983,12 @@ if generate:
         overrides = {
             "effects_preset": effects_preset,
             "bars": int(bars),
+            "chord_count": int(chord_count),
+            "generation_type": generation_type,
             "debug": False,
         }
+        if generation_type == "drone":
+            overrides["drone_held"] = True
         if section_role:
             overrides["section_role"] = section_role
         if extend_factor > 1:
@@ -1944,6 +2021,9 @@ if generate:
             summary = summarize_midi_file(path)
             wav_bytes = render_midi_to_wav_bytes(path)
             plain = format_plain_feel_match(result.profile)
+            likeness = format_likeness_blurb(
+                result.profile, used_cursor_sdk=bool(result.used_cursor_sdk)
+            )
             st.session_state["last_run"] = {
                 "path": path,
                 "result": result,
@@ -1953,6 +2033,7 @@ if generate:
                 "wav_bytes": wav_bytes,
                 "preview_caption": describe_preview(path),
                 "plain_feel_line": plain,
+                "likeness_blurb": likeness,
                 "match_line": format_match_line(
                     result.profile,
                     effects_preset=options.get("effects_preset") or effects_preset,

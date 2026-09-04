@@ -129,6 +129,8 @@ class MusicianStyleProfile:
     source: str = "catalog"  # catalog | cursor_sdk | hybrid
     # Research notes from Cursor SDK (empty for catalog-only profiles)
     style_notes: str = ""
+    # Listener-facing 1–2 sentences: why this sketch sounds like the musician.
+    likeness_summary: str = ""
 
     def to_options(
         self,
@@ -1131,6 +1133,7 @@ NEUTRAL_SPARSE_DEFAULTS: Dict[str, Any] = {
     "sections": None,
     "source": "sparse",
     "style_notes": "",
+    "likeness_summary": "",
 }
 
 # Structural contract for cousin few-shot (create_arp already binds these).
@@ -1650,6 +1653,7 @@ def profile_from_dict(data: Dict[str, Any], source: str = "cursor_sdk") -> Music
                 continue
         base["root_notes"] = cleaned_roots or ["E3", "A3", "D3", "G3"]
     base["style_notes"] = str(base.get("style_notes") or "").strip()[:800]
+    base["likeness_summary"] = str(base.get("likeness_summary") or "").strip()[:400]
     return MusicianStyleProfile(**base)
 
 

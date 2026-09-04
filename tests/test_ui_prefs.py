@@ -248,13 +248,13 @@ def test_catalog_select_keeps_feel():
 def test_half_double_bars_use_callbacks():
     at = _apptest()
     _open_takeover(at, "length")
-    assert at.session_state["bars"] == 8
+    assert at.session_state["bars"] == 16
     at.button(key="bars_double").click().run()
     assert not at.exception, at.exception
-    assert at.session_state["bars"] == 16
+    assert at.session_state["bars"] == 32
     at.button(key="bars_half").click().run()
     assert not at.exception, at.exception
-    assert at.session_state["bars"] == 8
+    assert at.session_state["bars"] == 16
 
 
 def test_ui_widget_mutations_use_callbacks():

@@ -27,6 +27,7 @@ from midi_gen.style_prompting import (
     FEATURED_STYLE_IDS,
     double_bars,
     featured_style_cards,
+    format_likeness_blurb,
     format_match_line,
     format_plain_feel_match,
     format_recipe_one_liner,
@@ -177,6 +178,42 @@ def test_plain_feel_match_and_surprise_related():
 
     coltrane = get_profile_by_id("coltrane_sheets")
     assert format_plain_feel_match(coltrane) == "Sounds like John Coltrane (modal · sheets)"
+
+
+def test_format_likeness_blurb_prefers_cursor_summary():
+    from midi_gen.musician_styles import profile_from_dict
+
+    sdk = profile_from_dict(
+        {
+            "name": "Electric Light Orchestra",
+            "styles": ["classic rock"],
+            "description": "Catalog stub.",
+            "likeness_summary": "Stacked I–V–vi–IV holds and a bright midrange pad, like ELO choruses.",
+            "style_notes": "Spotify accept: ELO; genres=[classic rock]; followers.total=9000000",
+        },
+        source="cursor_sdk",
+    )
+    label, body = format_likeness_blurb(sdk, used_cursor_sdk=True)
+    assert label == "Why it sounds like Electric Light Orchestra"
+    assert "ELO choruses" in body
+    assert "followers.total" not in body
+    assert "Spotify accept" not in body
+
+    eno = get_profile_by_id("eno_ambient")
+    cat_label, cat_body = format_likeness_blurb(eno, used_cursor_sdk=False)
+    assert cat_label.startswith("Why this sketch")
+    assert cat_body == eno.description
+
+
+def test_ui_renders_likeness_blurb():
+    src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
+    assert "format_likeness_blurb" in src
+    assert '"likeness_blurb": likeness' in src
+    assert "Why it sounds like" in src or "likeness_blurb" in src
+
+
+def test_plain_feel_continued_surprise():
+    eno = get_profile_by_id("eno_ambient")
 
     surprise = surprise_related_profile(eno, vibe_hint="ambient")
     assert surprise is not None

@@ -167,6 +167,8 @@ def test_sdk_research_prompt_asks_for_style_notes():
 
     assert "Research the query first" in STYLE_PROFILE_JSON_SCHEMA
     assert "style_notes" in STYLE_PROFILE_JSON_SCHEMA
+    assert "likeness_summary" in STYLE_PROFILE_JSON_SCHEMA
+    assert "why THIS sketch sounds like" in STYLE_PROFILE_JSON_SCHEMA
     assert "hints only" in STYLE_PROFILE_JSON_SCHEMA
 
 
@@ -247,6 +249,7 @@ def test_profile_from_sdk_shaped_dict():
             "arp_steps": 12,  # invalid -> clamped to 8
             "effects_preset": "human_feel",
             "style_notes": "Modal vamps, walking inner voices.",
+            "likeness_summary": "Dorian vamps and walking inner voices, like a mid-tempo modal date.",
         },
         source="cursor_sdk",
     )
@@ -254,3 +257,4 @@ def test_profile_from_sdk_shaped_dict():
     assert profile.arp_steps == 8
     assert profile.bpm == 140
     assert "Modal vamps" in profile.style_notes
+    assert "Dorian vamps" in profile.likeness_summary

@@ -58,6 +58,7 @@ Then return ONLY a single JSON object (no markdown) with these keys:
   "styles": ["tag1", "tag2"],
   "description": "one short sentence",
   "style_notes": "2-4 sentences: the stylistic preferences you found and how they map to these params",
+  "likeness_summary": "1-2 sentences: why THIS sketch sounds like the named musician (harmony, motion, texture). Not a biography. Not param jargon.",
   "generation_type": "arpeggio" or "drone",
   "mode": "major|minor|dorian|phrygian|lydian|mixolydian|locrian",
   "bpm": 40-240,
@@ -110,7 +111,17 @@ recipe. Not a transcription of a specific piece.
 # Widget/session keys that may override a researched recipe (loop length / RNG /
 # section chip / Extend stretch).
 LOOKUP_STICKY_OVERRIDE_KEYS = frozenset(
-    {"bars", "seed", "debug", "filename", "extend_factor", "section_role"}
+    {
+        "bars",
+        "seed",
+        "debug",
+        "filename",
+        "extend_factor",
+        "section_role",
+        "generation_type",
+        "drone_held",
+        "chord_count",
+    }
 )
 
 
@@ -384,6 +395,7 @@ def _enrich_sdk_with_cousin_contract(
         "styles",
         "description",
         "style_notes",
+        "likeness_summary",
         "generation_type",
         "mode",
         "mode_color",
@@ -709,6 +721,9 @@ def generate_midi_for_style(
                 if k not in ("section_role", "section", "sections")
             }
             options.update(sticky)
+    from .style_prompting import apply_user_sketch_layout
+
+    options = apply_user_sketch_layout(options)
     path = create_arp(options)
     return path, result, options
 

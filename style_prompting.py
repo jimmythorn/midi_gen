@@ -122,6 +122,17 @@ MOOD_CHIP_PACKS: tuple[dict, ...] = (
 # Sketch length bounds (match Advanced slider / create_arp clamps).
 BARS_MIN = 2
 BARS_MAX = 32
+CHORD_COUNT_MIN = 1
+CHORD_COUNT_MAX = 8
+DEFAULT_SKETCH_BARS = 16
+DEFAULT_CHORD_COUNT = 4
+DEFAULT_GENERATION_TYPE = "drone"
+DEFAULT_PROGRESSION: tuple[str, ...] = ("C3", "G3", "A3", "F3")
+GENERATION_TYPES: tuple[str, ...] = ("drone", "arpeggio")
+SHAPE_LABELS: Dict[str, str] = {
+    "drone": "Progression",
+    "arpeggio": "Arpeggio",
+}
 
 # Plain-feel vocabulary (happy-path line, not geek match type).
 _FEEL_PREF: tuple[str, ...] = (
@@ -215,6 +226,62 @@ def mood_chip_packs() -> List[MoodChipPack]:
 
 def clamp_bars(bars: int) -> int:
     return max(BARS_MIN, min(BARS_MAX, int(bars)))
+
+
+def clamp_chord_count(raw: Any) -> int:
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        n = DEFAULT_CHORD_COUNT
+    return max(CHORD_COUNT_MIN, min(CHORD_COUNT_MAX, n))
+
+
+def clamp_generation_type(raw: Any) -> str:
+    s = str(raw or "").strip().lower()
+    if s in ("progression", "progressions", "held"):
+        return "drone"
+    return s if s in GENERATION_TYPES else DEFAULT_GENERATION_TYPE
+
+
+def format_shape_label(raw: Any) -> str:
+    """User-facing shape: held drone is Progression."""
+    key = clamp_generation_type(raw)
+    return SHAPE_LABELS.get(key, SHAPE_LABELS[DEFAULT_GENERATION_TYPE])
+
+
+def resize_chord_progression(
+    roots: Optional[Sequence[Any]],
+    count: int,
+) -> List[str]:
+    """Trim or cycle roots to ``count``. Empty source → I–V–vi–IV."""
+    n = clamp_chord_count(count)
+    src = [str(r).strip() for r in (roots or []) if str(r).strip()]
+    if not src:
+        src = list(DEFAULT_PROGRESSION)
+    return [src[i % len(src)] for i in range(n)]
+
+
+def apply_user_sketch_layout(options: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Apply user bars/chords/shape knobs onto Engine options.
+
+    ``chord_count`` resizes ``chord_progression`` / ``root_notes``.
+    User ``drone`` without an explicit held flag becomes held chords.
+    No-op when those keys are absent.
+    """
+    out = dict(options)
+    if "generation_type" in out:
+        out["generation_type"] = clamp_generation_type(out.get("generation_type"))
+        if out["generation_type"] == "drone" and out.get("drone_held") is None:
+            out["drone_held"] = True
+    if "chord_count" in out and out["chord_count"] is not None:
+        count = clamp_chord_count(out["chord_count"])
+        src = out.get("chord_progression") or out.get("root_notes")
+        resized = resize_chord_progression(src, count)
+        out["chord_progression"] = resized
+        out["root_notes"] = list(resized)
+        out["chord_count"] = count
+    return out
 
 
 def half_bars(bars: int) -> int:
@@ -382,11 +449,11 @@ def _match_type_for_profile(
 
 
 def _section_drip_shape(profile: MusicianStyleProfile) -> str:
-    """Section sketch shape — held progression unless wash opts out."""
+    """Section sketch shape — progression unless wash opts out."""
     if profile.drone_held is False:
         return "drone" if profile.generation_type == "drone" else "arp"
     if profile.chord_progression or profile.drone_held is True:
-        return "held progression"
+        return "progression"
     return "drone" if profile.generation_type == "drone" else "arp"
 
 
@@ -402,7 +469,7 @@ def format_recipe_one_liner(
     Example: "Brian Eno · drone · lydian · 72 BPM · Subtle tape"
 
     When ``section_role`` is set (chip or resolved profile), name the section
-    so the drip is not an ambient wash: e.g. ``Philip Glass · bridge · held progression``.
+    so the drip is not an ambient wash: e.g. ``Philip Glass · bridge · progression``.
     """
     role = normalize_section_role(section_role) or normalize_section_role(
         getattr(profile, "section_role", None)
@@ -414,7 +481,10 @@ def format_recipe_one_liner(
         preset_label = get_preset(preset_id)["label"]
     except Exception:
         preset_label = preset_id
-    gen = "drone" if profile.generation_type == "drone" else "arp"
+    if profile.generation_type == "drone":
+        gen = "drone" if profile.drone_held is False else "progression"
+    else:
+        gen = "arp"
     return (
         f"{profile.name} · {gen} · {profile.mode} · "
         f"{profile.bpm} BPM · {preset_label}"
@@ -479,6 +549,42 @@ def format_plain_feel_match(profile: MusicianStyleProfile) -> str:
     else:
         shape = next((w for w in _SHAPE_PREF if w in bag), "pulse")
     return f"Sounds like {profile.name} ({feel} · {shape})"
+
+
+def _usable_likeness_prose(text: str, *, limit: int = 400) -> str:
+    """Drop Spotify gate residue so the home blurb stays listener-facing."""
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    words = [
+        part
+        for part in raw.split()
+        if not part.startswith("followers.total=")
+    ]
+    out = " ".join(words).strip()
+    if out.lower().startswith("spotify accept"):
+        return ""
+    return out[:limit]
+
+
+def format_likeness_blurb(
+    profile: MusicianStyleProfile,
+    *,
+    used_cursor_sdk: bool = False,
+) -> Optional[Tuple[str, str]]:
+    """
+    Home blurb: Cursor likeness when SDK ran; else catalog description.
+
+    Returns ``(label, body)`` or None.
+    """
+    summary = _usable_likeness_prose(getattr(profile, "likeness_summary", "") or "")
+    notes = _usable_likeness_prose(getattr(profile, "style_notes", "") or "")
+    if used_cursor_sdk and (summary or notes):
+        return (f"Why it sounds like {profile.name}", summary or notes)
+    desc = (profile.description or "").strip()
+    if desc:
+        return (f"Why this sketch · {profile.name}", desc)
+    return None
 
 
 # Back-compat alias used by early Fun Now wiring

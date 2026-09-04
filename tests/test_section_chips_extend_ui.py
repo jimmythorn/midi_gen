@@ -73,13 +73,13 @@ def test_drip_names_section_when_set_else_unchanged():
     glass = get_profile_by_id("glass_minimal")
     baseline = format_recipe_one_liner(glass)
     assert "bridge" not in baseline
-    assert "held progression" not in baseline
+    assert "progression" not in baseline
     assert "Philip Glass" in baseline
     assert "arp" in baseline or "drone" in baseline
 
     bridge = resolve_section_recipe(glass, "bridge")
     drip = format_recipe_one_liner(bridge, section_role="bridge")
-    assert drip == "Philip Glass · bridge · held progression"
+    assert drip == "Philip Glass · bridge · progression"
 
     off = format_recipe_one_liner(glass, section_role=None)
     assert off == baseline
@@ -96,7 +96,7 @@ def test_preview_recipe_section_chip_resolves_role():
         get_profile_by_id("glass_minimal"), "bridge"
     ).chord_progression
     assert "bridge" in bridged.one_liner
-    assert "held progression" in bridged.one_liner
+    assert "progression" in bridged.one_liner
 
 
 def test_preview_recipe_intro_outro_prechorus_resolve():
