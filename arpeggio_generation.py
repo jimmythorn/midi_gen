@@ -36,6 +36,52 @@ def _resolve_chord_progression(
     return out or None
 
 
+def resolve_extend_factor(raw: Any) -> int:
+    """Clamp extend multiplier to 1–4 (identity when unset / invalid)."""
+    if raw is None:
+        return 1
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(4, value))
+
+
+def apply_extend_factor(options: Dict, factor: Optional[Any] = None) -> Dict:
+    """
+    Return a copy of ``options`` with ``bars`` multiplied by extend_factor (1–4).
+
+    Stretch duration of each held chord / segment; does not add chord changes.
+    Safe to call from UI or generate paths before ``create_arp``.
+    """
+    opts = dict(options)
+    resolved = resolve_extend_factor(
+        factor if factor is not None else opts.get("extend_factor", 1)
+    )
+    opts["extend_factor"] = resolved
+    if resolved > 1:
+        base_bars = int(opts.get("bars", 16))
+        opts["bars"] = base_bars * resolved
+    return opts
+
+
+def resolve_drone_held(
+    options: Dict,
+    chord_progression: Optional[List[int]],
+) -> bool:
+    """
+    Held progression default: True when ``chord_progression`` is set.
+
+    Explicit ``drone_held`` / ``held`` wins. Ambient wash recipes opt out with
+    ``drone_held=False`` (or omit progression).
+    """
+    if "drone_held" in options:
+        return bool(options["drone_held"])
+    if "held" in options:
+        return bool(options["held"])
+    return bool(chord_progression)
+
+
 def _expand_cell_to_grid(
     cell: Sequence[Optional[int]],
     *,
@@ -60,7 +106,7 @@ def create_arp(options: Dict):
     """
     Main function to generate MIDI data based on given options.
     """
-    options = dict(options)  # avoid mutating caller
+    options = apply_extend_factor(dict(options))  # avoid mutating caller; stretch bars
     debug = options.get('debug', False)
     root = options.get('root', 0)
     root_notes_str_param = options.get('root_notes', None)
@@ -71,6 +117,8 @@ def create_arp(options: Dict):
     if debug:
         print(f"[DEBUG] Generation Type: {generation_type}")
         print(f"[DEBUG] root_notes_str_param from options: {root_notes_str_param}")
+        if options.get("extend_factor", 1) > 1:
+            print(f"[DEBUG] extend_factor={options['extend_factor']} → bars={options.get('bars')}")
 
     processed_root_notes_midi: List[int] = []
     if root_notes_str_param:
@@ -279,8 +327,18 @@ def create_arp(options: Dict):
         # This function must return List[Tuple[note, start_tick, duration_tick, velocity]]
         # Pass relevant options and the processed MIDI root notes
         drone_options = options.copy()
+        # Recipe progression wins over parallel root_notes for segment roots.
+        if chord_progression:
+            processed_root_notes_midi = list(chord_progression)
+        drone_held = resolve_drone_held(drone_options, chord_progression)
+        drone_options["drone_held"] = drone_held
         # Slow sparse mutate: map development.mutate_every_n → variation interval
-        if development and development.get("mutate_every_n"):
+        # (wash path only — held sustains one voicing for the full segment)
+        if (
+            not drone_held
+            and development
+            and development.get("mutate_every_n")
+        ):
             drone_options["drone_variation_interval_bars"] = max(
                 int(drone_options.get("drone_variation_interval_bars", 2)),
                 int(development["mutate_every_n"]),
@@ -295,7 +353,10 @@ def create_arp(options: Dict):
             drone_options, processed_root_notes_midi, rng=drone_rng
         )
         if debug:
-            print(f"[INFO] Drone generation selected. {len(final_event_list)} drone events generated.")
+            print(
+                f"[INFO] Drone generation selected "
+                f"(held={drone_held}). {len(final_event_list)} drone events generated."
+            )
 
     # --- Filename and MIDI file creation ---
     root_notes_names_for_file = '-'.join([note_to_name(note) for note in processed_root_notes_midi]) if processed_root_notes_midi else str(root)
