@@ -313,3 +313,36 @@ def test_explicit_non_held_with_progression(tmp_path):
         ag.generate_drone_events = real  # type: ignore[assignment]
 
     assert captured["held"] is False
+
+
+def test_eno_wash_catalog_opts_out_of_held():
+    """Ambient pad recipe must not flip to held when progression is present."""
+    from midi_gen.musician_styles import get_profile_by_id
+
+    eno = get_profile_by_id("eno_ambient")
+    assert eno is not None
+    assert eno.drone_held is False
+    opts = eno.to_options()
+    assert opts.get("drone_held") is False
+    # Even if FULL-contract / cousin attaches a progression later:
+    assert resolve_drone_held(
+        opts, [note_str_to_midi(n) for n in ("C3", "G2", "F3", "D3")]
+    ) is False
+
+
+def test_wash_catalog_drones_all_opt_out():
+    from midi_gen.musician_styles import MUSICIAN_STYLE_CATALOG
+
+    wash = [
+        p
+        for p in MUSICIAN_STYLE_CATALOG
+        if p.generation_type == "drone"
+        and any(
+            t in p.styles
+            for t in ("wash", "ambient", "ambient pad", "ambient drone", "pad", "texture")
+        )
+    ]
+    assert wash, "expected at least eno_ambient"
+    for profile in wash:
+        assert profile.drone_held is False, profile.id
+        assert profile.to_options().get("drone_held") is False, profile.id

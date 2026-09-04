@@ -55,6 +55,9 @@ class MusicianStyleProfile:
     drone_enable_walkdowns: bool = True
     drone_walkdown_num_steps: int = 2
     drone_walkdown_step_ticks: int = 240
+    # None = omit (create_arp defaults held when chord_progression set).
+    # Wash/ambient pad recipes must set False so progression does not flip them held.
+    drone_held: Optional[bool] = None
     source: str = "catalog"  # catalog | cursor_sdk | hybrid
     # Research notes from Cursor SDK (empty for catalog-only profiles)
     style_notes: str = ""
@@ -96,6 +99,8 @@ class MusicianStyleProfile:
             "effects_preset": self.effects_preset,
             "style_source": self.source,
         }
+        if self.drone_held is not None:
+            opts["drone_held"] = bool(self.drone_held)
         if self.chord_progression:
             opts["chord_progression"] = list(self.chord_progression)
         if self.development:
@@ -131,6 +136,9 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         drone_min_notes_held=3,
         drone_octave_doubling_chance=0.35,
         drone_enable_walkdowns=False,
+        # Wash / ambient pad — keep voicing drift; do not flip to held when
+        # FULL-contract or cousin paths attach a chord_progression.
+        drone_held=False,
         # Slow sparse voicing drift (no phase). Drone path maps mutate_every_n
         # onto variation interval; not an arp cell tile. seed_bars=4 holds the
         # opening pad longer before sparse mutate (Composer lock).
@@ -688,6 +696,7 @@ NEUTRAL_SPARSE_DEFAULTS: Dict[str, Any] = {
     "drone_enable_walkdowns": True,
     "drone_walkdown_num_steps": 2,
     "drone_walkdown_step_ticks": 240,
+    "drone_held": None,
     "source": "sparse",
     "style_notes": "",
 }
@@ -811,6 +820,8 @@ def sparse_unknown_profile(
     joined = " ".join(data["styles"])
     if "drone" in joined or "ambient" in joined:
         data["generation_type"] = "drone"
+        # Sparse ambient/drone is wash-intent, not held progression.
+        data["drone_held"] = False
     return profile_from_dict(data, source="sparse")
 
 
@@ -932,6 +943,10 @@ def profile_from_dict(data: Dict[str, Any], source: str = "cursor_sdk") -> Music
 
     base["embellish"] = bool(base.get("embellish", False))
     base["rhythmic_variation"] = bool(base.get("rhythmic_variation", False))
+    if base.get("drone_held") is None:
+        base["drone_held"] = None
+    else:
+        base["drone_held"] = bool(base.get("drone_held"))
 
     raw_prog = base.get("chord_progression")
     if raw_prog is None:
