@@ -15,6 +15,46 @@ from .scale import FULL_SCALE_INTERVALS
 from .notes import note_str_to_midi
 
 
+SECTION_ROLES = frozenset({"bridge", "chorus", "verse"})
+_SECTION_CUE_RE = re.compile(r"\b(bridge|chorus|verse)\b", re.IGNORECASE)
+
+
+def normalize_section_role(raw: Optional[Any]) -> Optional[str]:
+    """Clamp free-text / option values to bridge|chorus|verse."""
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        raw = raw.get("role")
+    text = str(raw or "").strip().lower()
+    if not text:
+        return None
+    if text in SECTION_ROLES:
+        return text
+    match = _SECTION_CUE_RE.search(text)
+    return match.group(1).lower() if match else None
+
+
+def parse_section_role_from_text(text: Optional[str]) -> Optional[str]:
+    """Light free-text cue parse — first bridge|chorus|verse token wins."""
+    if not text:
+        return None
+    match = _SECTION_CUE_RE.search(str(text))
+    return match.group(1).lower() if match else None
+
+
+def progression_pitch_classes(prog: Optional[List[str]]) -> Optional[tuple]:
+    """Root pitch-class tuple for bridge≠chorus checks."""
+    if not prog:
+        return None
+    pcs = []
+    for note in prog:
+        try:
+            pcs.append(note_str_to_midi(str(note)) % 12)
+        except (ValueError, IndexError, TypeError):
+            continue
+    return tuple(pcs) if pcs else None
+
+
 @dataclass(frozen=True)
 class MusicianStyleProfile:
     """Generation recipe inspired by a musician or style family."""
@@ -58,12 +98,32 @@ class MusicianStyleProfile:
     # None = omit (create_arp defaults held when chord_progression set).
     # Wash/ambient pad recipes must set False so progression does not flip them held.
     drone_held: Optional[bool] = None
+    # Optional Engine stretch (1–4); omit → create_arp default 1.
+    extend_factor: Optional[int] = None
+    # Active section after resolve (bridge|chorus|verse); None = top-level recipe.
+    section_role: Optional[str] = None
+    # Catalog fingerprints: [{role, chord_progression, mode?, bars?, generation_type?}, ...]
+    sections: Optional[List[Dict[str, Any]]] = None
     source: str = "catalog"  # catalog | cursor_sdk | hybrid
     # Research notes from Cursor SDK (empty for catalog-only profiles)
     style_notes: str = ""
 
-    def to_options(self, effects_config: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
-        """Convert profile into options dict consumed by create_arp()."""
+    def to_options(
+        self,
+        effects_config: Optional[List[Dict[str, Any]]] = None,
+        *,
+        section_role: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Convert profile into flat options dict consumed by create_arp()."""
+        role = normalize_section_role(section_role)
+        if role is None:
+            role = normalize_section_role(self.section_role)
+        if role:
+            resolved = resolve_section_recipe(self, role)
+            if resolved is not self:
+                # Already flattened — do not re-enter with a role hint.
+                return resolved.to_options(effects_config=effects_config, section_role=None)
+
         opts: Dict[str, Any] = {
             "generation_type": self.generation_type,
             "root": 0,
@@ -101,10 +161,17 @@ class MusicianStyleProfile:
         }
         if self.drone_held is not None:
             opts["drone_held"] = bool(self.drone_held)
+        if self.extend_factor is not None:
+            try:
+                opts["extend_factor"] = max(1, min(4, int(self.extend_factor)))
+            except (TypeError, ValueError):
+                opts["extend_factor"] = 1
         if self.chord_progression:
             opts["chord_progression"] = list(self.chord_progression)
         if self.development:
             opts["development"] = dict(self.development)
+        if self.section_role:
+            opts["section_role"] = self.section_role
         return opts
 
     def as_dict(self) -> Dict[str, Any]:
@@ -139,6 +206,23 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         # Wash / ambient pad — keep voicing drift; do not flip to held when
         # FULL-contract or cousin paths attach a chord_progression.
         drone_held=False,
+        # Sparse pad bed (not pop I–V–vi–IV); chorus default for section resolve.
+        chord_progression=["C3", "G2", "F3", "D3"],
+        sections=[
+            {
+                "role": "chorus",
+                "chord_progression": ["C3", "G2", "F3", "D3"],
+                "mode": "lydian",
+                "bars": 8,
+            },
+            {
+                # Sparse departure — still ambient drone, different roots.
+                "role": "bridge",
+                "chord_progression": ["F3", "C3", "Bb2", "F3"],
+                "mode": "lydian",
+                "bars": 8,
+            },
+        ],
         # Slow sparse voicing drift (no phase). Drone path maps mutate_every_n
         # onto variation interval; not an arp cell tile. seed_bars=4 holds the
         # opening pad longer before sparse mutate (Composer lock).
@@ -175,6 +259,29 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         embellish=False,
         rhythmic_variation=False,
         effects_preset="human_feel",
+        # Sticky Am family — chorus identity; not Reich phase / Eno wash.
+        chord_progression=["A3", "A3", "E3", "A3"],
+        sections=[
+            {
+                "role": "chorus",
+                "chord_progression": ["A3", "A3", "E3", "A3"],
+                "mode": "minor",
+                "bars": 16,
+            },
+            {
+                "role": "verse",
+                "chord_progression": ["A3", "E3", "A3", "E3"],
+                "mode": "minor",
+                "bars": 8,
+            },
+            {
+                # Depart roots; stay additive minor cell family — not phase vamp.
+                "role": "bridge",
+                "chord_progression": ["C3", "G3", "F3", "C3"],
+                "mode": "minor",
+                "bars": 8,
+            },
+        ],
         # Additive-only: grow attacks only — cell is the event; no phase.
         development={
             "enabled": True,
@@ -210,6 +317,21 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         rhythmic_variation=True,
         mode_color={"enabled": True, "accent_every": 4},
         chord_progression=["D3", "A3", "G3", "D3"],  # short modal vamp, voice-led
+        sections=[
+            {
+                "role": "chorus",
+                "chord_progression": ["D3", "A3", "G3", "D3"],
+                "mode": "dorian",
+                "bars": 8,
+            },
+            {
+                # Same modal-vamp habit; different roots from chorus.
+                "role": "bridge",
+                "chord_progression": ["E3", "B3", "A3", "E3"],
+                "mode": "dorian",
+                "bars": 8,
+            },
+        ],
         effects_preset="clean",
         development={
             "enabled": True,
@@ -248,6 +370,20 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         embellish=False,  # color via mode_color, not Coltrane neighbor density
         rhythmic_variation=False,
         chord_progression=["Db3", "Ab3", "Eb3", "Ab3"],  # floating modal vamp
+        sections=[
+            {
+                "role": "chorus",
+                "chord_progression": ["Db3", "Ab3", "Eb3", "Ab3"],
+                "mode": "lydian",
+                "bars": 8,
+            },
+            {
+                "role": "bridge",
+                "chord_progression": ["Gb3", "Db3", "Ab3", "Eb3"],
+                "mode": "lydian",
+                "bars": 8,
+            },
+        ],
         effects_preset="subtle_tape",
         # Slow wash: hold seed, rare soft mutate — not additive cells, not phase.
         development={
@@ -287,6 +423,21 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         embellish=True,
         rhythmic_variation=True,
         chord_progression=["D3", "G3", "D3", "C3"],
+        sections=[
+            {
+                "role": "chorus",
+                "chord_progression": ["D3", "G3", "D3", "C3"],
+                "mode": "dorian",
+                "bars": 8,
+            },
+            {
+                # Borrow/color inside sheets family — not Glass additive cells.
+                "role": "bridge",
+                "chord_progression": ["D3", "Bb3", "A3", "C3"],
+                "mode": "dorian",
+                "bars": 8,
+            },
+        ],
         effects_preset="human_feel",
         development={
             "enabled": True,
@@ -323,6 +474,20 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         embellish=False,
         rhythmic_variation=False,  # rests from crooked development, not RV
         chord_progression=["Bb3", "Eb3", "F3", "Bb3"],
+        sections=[
+            {
+                "role": "chorus",
+                "chord_progression": ["Bb3", "Eb3", "F3", "Bb3"],
+                "mode": "major",
+                "bars": 8,
+            },
+            {
+                "role": "bridge",
+                "chord_progression": ["Eb3", "Ab3", "Bb3", "F3"],
+                "mode": "major",
+                "bars": 8,
+            },
+        ],
         effects_preset="human_feel",
         # Crooked: rests and contour flips — not phase creep.
         development={
@@ -360,6 +525,20 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         embellish=False,  # instability via RV + mutate, not neighbor embellish
         rhythmic_variation=True,  # Aphex identity: unstable rhythm cells
         chord_progression=["E2", "B2", "A2", "E3"],
+        sections=[
+            {
+                "role": "chorus",
+                "chord_progression": ["E2", "B2", "A2", "E3"],
+                "mode": "phrygian",
+                "bars": 8,
+            },
+            {
+                "role": "bridge",
+                "chord_progression": ["A2", "E3", "F2", "B2"],
+                "mode": "phrygian",
+                "bars": 8,
+            },
+        ],
         effects_preset="worn_tape",
         # Jittery every-bar mutate — not a clean sequence, not Reich phase.
         development={
@@ -397,6 +576,20 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         embellish=False,
         rhythmic_variation=False,
         chord_progression=["A3", "D3", "E3", "A3"],  # i–iv–V–i
+        sections=[
+            {
+                "role": "chorus",
+                "chord_progression": ["A3", "D3", "E3", "A3"],
+                "mode": "minor",
+                "bars": 8,
+            },
+            {
+                "role": "bridge",
+                "chord_progression": ["D3", "G3", "A3", "E3"],
+                "mode": "minor",
+                "bars": 8,
+            },
+        ],
         effects_preset="clean",
         # Sequence-like: contour invert + densify — no phase_creep, no Glass additive_only.
         development={
@@ -434,6 +627,20 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         embellish=False,
         rhythmic_variation=False,
         chord_progression=["G3", "D3", "C3", "G3"],
+        sections=[
+            {
+                "role": "chorus",
+                "chord_progression": ["G3", "D3", "C3", "G3"],
+                "mode": "major",
+                "bars": 8,
+            },
+            {
+                "role": "bridge",
+                "chord_progression": ["C3", "G3", "A3", "E3"],
+                "mode": "major",
+                "bars": 8,
+            },
+        ],
         effects_preset="human_feel",
         # Almost-static: long seed, rare mutate — not Glass additive cells.
         development={
@@ -471,6 +678,20 @@ MUSICIAN_STYLE_CATALOG: List[MusicianStyleProfile] = [
         embellish=False,
         rhythmic_variation=False,
         chord_progression=["D3", "A3", "G3", "C4"],
+        sections=[
+            {
+                "role": "chorus",
+                "chord_progression": ["D3", "A3", "G3", "C4"],
+                "mode": "dorian",
+                "bars": 8,
+            },
+            {
+                "role": "bridge",
+                "chord_progression": ["G3", "D3", "C4", "A3"],
+                "mode": "dorian",
+                "bars": 8,
+            },
+        ],
         effects_preset="tape_and_human",
         # Gentle evolve — keep arpeggio (not Eno drone); not Coltrane sheets.
         development={
@@ -697,6 +918,9 @@ NEUTRAL_SPARSE_DEFAULTS: Dict[str, Any] = {
     "drone_walkdown_num_steps": 2,
     "drone_walkdown_step_ticks": 240,
     "drone_held": None,
+    "extend_factor": None,
+    "section_role": None,
+    "sections": None,
     "source": "sparse",
     "style_notes": "",
 }
@@ -734,6 +958,178 @@ SOFT_STEER_KEYS: tuple[str, ...] = (
 
 # Minimum score_profile hit to treat a catalog neighbor as a real cousin.
 COUSIN_SCORE_FLOOR = 2.0
+
+
+def _clean_progression_notes(raw: Any) -> Optional[List[str]]:
+    if raw is None:
+        return None
+    if not isinstance(raw, (list, tuple)):
+        return None
+    cleaned: List[str] = []
+    for note in raw:
+        try:
+            if isinstance(note, int):
+                from .notes import note_to_name
+                cleaned.append(note_to_name(int(note)))
+            else:
+                note_str_to_midi(str(note))
+                cleaned.append(str(note))
+        except (ValueError, IndexError, TypeError):
+            continue
+    return cleaned or None
+
+
+def _normalize_section_entry(raw: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+    role = normalize_section_role(raw.get("role"))
+    prog = _clean_progression_notes(raw.get("chord_progression"))
+    if not role or not prog:
+        return None
+    entry: Dict[str, Any] = {
+        "role": role,
+        "chord_progression": prog,
+    }
+    mode = str(raw.get("mode") or "").strip().lower()
+    if mode in FULL_SCALE_INTERVALS:
+        entry["mode"] = mode
+    if raw.get("bars") is not None:
+        try:
+            entry["bars"] = int(max(1, min(64, int(raw["bars"]))))
+        except (TypeError, ValueError):
+            pass
+    gen = str(raw.get("generation_type") or "").strip().lower()
+    if gen in ("arpeggio", "drone"):
+        entry["generation_type"] = gen
+    return entry
+
+
+def _normalize_sections(raw: Any) -> Optional[List[Dict[str, Any]]]:
+    if raw is None:
+        return None
+    if not isinstance(raw, (list, tuple)):
+        return None
+    out: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw:
+        entry = _normalize_section_entry(item)
+        if entry is None or entry["role"] in seen:
+            continue
+        seen.add(entry["role"])
+        out.append(entry)
+    return out or None
+
+
+def find_section_entry(
+    profile: MusicianStyleProfile,
+    section_role: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    role = normalize_section_role(section_role)
+    if not role or not profile.sections:
+        return None
+    for entry in profile.sections:
+        if normalize_section_role(entry.get("role")) == role:
+            return entry
+    return None
+
+
+def resolve_section_recipe(
+    profile: MusicianStyleProfile,
+    section_role: Optional[str] = None,
+) -> MusicianStyleProfile:
+    """
+    who + section → flat recipe (progression / mode / bars) for Engine options.
+
+    If ``profile.sections`` has the role, use that fingerprint. Else keep
+    top-level ``chord_progression`` / mode / bars and stamp ``section_role``.
+    """
+    role = normalize_section_role(section_role)
+    if role is None:
+        role = normalize_section_role(profile.section_role)
+    if role is None:
+        return profile
+
+    entry = find_section_entry(profile, role)
+    if entry is None:
+        if profile.section_role == role:
+            return profile
+        data = profile.as_dict()
+        data["section_role"] = role
+        return profile_from_dict(data, source=profile.source)
+
+    want_prog = list(entry["chord_progression"])
+    want_mode = entry.get("mode")
+    want_bars = entry.get("bars")
+    want_gen = entry.get("generation_type")
+    already = (
+        profile.section_role == role
+        and profile.chord_progression == want_prog
+        and (want_mode is None or profile.mode == want_mode)
+        and (want_bars is None or profile.bars == int(want_bars))
+        and (want_gen is None or profile.generation_type == want_gen)
+    )
+    if already:
+        return profile
+
+    data = profile.as_dict()
+    data["section_role"] = role
+    data["chord_progression"] = want_prog
+    # Keep segment roots aligned with the resolved progression.
+    data["root_notes"] = list(want_prog)
+    if want_mode is not None:
+        data["mode"] = want_mode
+    if want_bars is not None:
+        data["bars"] = int(want_bars)
+    if want_gen is not None:
+        data["generation_type"] = want_gen
+    # Preserve wash opt-out (Eno) and other profile-level Engine knobs.
+    return profile_from_dict(data, source=profile.source)
+
+
+def find_progression_bearing_neighbors(
+    query: str,
+    *,
+    limit: int = 3,
+    exclude_ids: Optional[set] = None,
+) -> List[MusicianStyleProfile]:
+    """
+    Few-shot neighbors that carry real chord_progression / sections.
+
+    Prefers same harmonic habit over BPM-only hits. Never invents wallpaper.
+    """
+    if limit <= 0:
+        return []
+    exclude = {str(x) for x in (exclude_ids or set())}
+    ranked = find_profiles(query, limit=max(limit * 4, 8))
+    # Fall back to full-catalog score order when local hits are thin.
+    if len(ranked) < limit * 2:
+        scored = sorted(
+            MUSICIAN_STYLE_CATALOG,
+            key=lambda p: score_profile(query, p),
+            reverse=True,
+        )
+        seen_ids = {p.id for p in ranked}
+        for profile in scored:
+            if profile.id in seen_ids:
+                continue
+            ranked.append(profile)
+            seen_ids.add(profile.id)
+
+    out: List[MusicianStyleProfile] = []
+    for profile in ranked:
+        if profile.id in exclude:
+            continue
+        has_prog = bool(profile.chord_progression)
+        has_sections = bool(
+            profile.sections
+            and any(s.get("chord_progression") for s in profile.sections)
+        )
+        if not (has_prog or has_sections):
+            continue
+        out.append(profile)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def recipe_structure_fingerprint(profile: MusicianStyleProfile) -> tuple:
@@ -897,15 +1293,35 @@ def profile_from_dict(data: Dict[str, Any], source: str = "cursor_sdk") -> Music
     """Normalize arbitrary dict (e.g. SDK JSON) into a valid profile."""
     # Neutral sparse blank — never CATALOG[0] (eno_ambient wallpaper).
     base = dict(NEUTRAL_SPARSE_DEFAULTS)
+    incoming = dict(data or {})
+
+    # Nested section block → flat role + progression/mode/bars (SDK convenience).
+    raw_section = incoming.pop("section", None)
+    if isinstance(raw_section, dict):
+        role = normalize_section_role(raw_section.get("role"))
+        if role:
+            incoming["section_role"] = role
+        sec_prog = _clean_progression_notes(raw_section.get("chord_progression"))
+        if sec_prog:
+            incoming["chord_progression"] = sec_prog
+        mode = str(raw_section.get("mode") or "").strip().lower()
+        if mode in FULL_SCALE_INTERVALS:
+            incoming["mode"] = mode
+        if raw_section.get("bars") is not None:
+            incoming["bars"] = raw_section["bars"]
+        gen = str(raw_section.get("generation_type") or "").strip().lower()
+        if gen in ("arpeggio", "drone"):
+            incoming["generation_type"] = gen
+
     # Prefer matching catalog musician when name is known
-    name = str(data.get("name") or data.get("musician") or "").strip()
+    name = str(incoming.get("name") or incoming.get("musician") or "").strip()
     if name:
         existing = find_best_profile(name)
         if existing and score_profile(name, existing) >= 5:
             base = existing.as_dict()
 
     allowed = set(base.keys())
-    for key, value in data.items():
+    for key, value in incoming.items():
         if key in allowed and value is not None:
             base[key] = value
 
@@ -948,22 +1364,27 @@ def profile_from_dict(data: Dict[str, Any], source: str = "cursor_sdk") -> Music
     else:
         base["drone_held"] = bool(base.get("drone_held"))
 
+    if base.get("extend_factor") is None:
+        base["extend_factor"] = None
+    else:
+        try:
+            base["extend_factor"] = max(1, min(4, int(base.get("extend_factor"))))
+        except (TypeError, ValueError):
+            base["extend_factor"] = None
+
+    base["section_role"] = normalize_section_role(base.get("section_role"))
+    # Prefer explicit sections from incoming; keep catalog sections when name-matched
+    # and incoming omitted them or sent null (do not wipe identity fingerprints).
+    if incoming.get("sections") is not None:
+        base["sections"] = _normalize_sections(incoming.get("sections"))
+    else:
+        base["sections"] = _normalize_sections(base.get("sections"))
+
     raw_prog = base.get("chord_progression")
     if raw_prog is None:
         base["chord_progression"] = None
     elif isinstance(raw_prog, (list, tuple)):
-        cleaned_prog = []
-        for note in raw_prog:
-            try:
-                if isinstance(note, int):
-                    from .notes import note_to_name
-                    cleaned_prog.append(note_to_name(int(note)))
-                else:
-                    note_str_to_midi(str(note))
-                    cleaned_prog.append(str(note))
-            except (ValueError, IndexError, TypeError):
-                continue
-        base["chord_progression"] = cleaned_prog or None
+        base["chord_progression"] = _clean_progression_notes(raw_prog)
     else:
         base["chord_progression"] = None
 

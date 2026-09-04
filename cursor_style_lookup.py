@@ -22,10 +22,14 @@ from .musician_styles import (
     MusicianStyleProfile,
     cousin_recipe_from_neighbors,
     find_profiles,
+    find_progression_bearing_neighbors,
     has_full_recipe_contract,
     is_effects_only_overlay,
     list_styles,
+    normalize_section_role,
+    parse_section_role_from_text,
     profile_from_dict,
+    resolve_section_recipe,
     score_profile,
     sparse_unknown_profile,
 )
@@ -37,6 +41,15 @@ Research the query first. Use your knowledge of the musician's recorded work,
 typical harmony, rhythm, texture, tempo range, and studio habits — or, for a
 vibe, the genre/feel it names. Closest local catalog hits are hints only; do
 not copy them unless the query is that same person.
+
+Honesty (tier B):
+- Stick to catalog identity when the query is a known catalog name/alias.
+- Cousin / sparse OK for strangers; forbid Glass/Eno wallpaper cosplay.
+- Forbid effects-only diffs (preset/BPM paint on a blank recipe).
+- Bridge/chorus must include a non-empty chord_progression grounded in the
+  artist/genre — never generic pop I–V–vi–IV wallpaper after musical accept.
+- When both bridge and chorus are produced, bridge roots must differ from
+  chorus roots.
 
 Then return ONLY a single JSON object (no markdown) with these keys:
 {
@@ -62,6 +75,19 @@ Then return ONLY a single JSON object (no markdown) with these keys:
   "embellish": true/false,
   "rhythmic_variation": true/false,
   "chord_progression": ["D3", "A3", "G3", "D3"] or null,
+  "section_role": "bridge"|"chorus"|"verse"|null,
+  "section": {
+    "role": "bridge"|"chorus"|"verse",
+    "chord_progression": ["D3", "A3", "G3", "D3"],
+    "mode": "dorian",
+    "bars": 8
+  } or null,
+  "sections": [
+    {"role": "chorus", "chord_progression": ["D3", "A3", "G3", "D3"], "mode": "dorian", "bars": 8},
+    {"role": "bridge", "chord_progression": ["E3", "B3", "A3", "E3"], "mode": "dorian", "bars": 8}
+  ] or null,
+  "drone_held": true/false/null,
+  "extend_factor": 1-4 or null,
   "development": null OR {
     "enabled": true,
     "seed_bars": 1|2|3|4,
@@ -74,8 +100,8 @@ Then return ONLY a single JSON object (no markdown) with these keys:
   "effects_preset": "clean|subtle_tape|worn_tape|human_feel|tape_and_human"
 }
 Map researched preferences onto those knobs (tempo, mode, drone vs arp,
-repetition, tape vs clean). This JSON is the generation recipe. Not a
-transcription of a specific piece.
+repetition, tape vs clean, section progression). This JSON is the generation
+recipe. Not a transcription of a specific piece.
 """
 
 # Widget/session keys that may override a researched recipe (loop length / RNG only).
@@ -91,9 +117,11 @@ class StyleLookupResult:
     raw_sdk_text: Optional[str] = None
     message: str = ""
 
-    def to_options(self) -> Dict[str, Any]:
+    def to_options(self, section_role: Optional[str] = None) -> Dict[str, Any]:
         effects = build_effects_config(self.profile.effects_preset)
-        return self.profile.to_options(effects_config=effects)
+        role = normalize_section_role(section_role)
+        resolved = resolve_section_recipe(self.profile, role) if role else self.profile
+        return resolved.to_options(effects_config=effects, section_role=None)
 
 
 def load_dotenv_if_present(path: Optional[os.PathLike[str] | str] = None) -> None:
@@ -283,6 +311,10 @@ def _nearest_cousins(
     seed = _cousin_seed_query(query, gate)
     if not seed:
         return []
+    # Prefer progression/section-bearing neighbors (same habit, not BPM alone).
+    bearing = find_progression_bearing_neighbors(seed, limit=limit)
+    if bearing:
+        return bearing
     return find_profiles(seed, limit=limit)
 
 
@@ -515,6 +547,19 @@ def lookup_musician_style(
             sdk_data["id"] = local_best.id
             sdk_data["name"] = local_best.name
             sdk_data["source"] = "hybrid"
+            # Catalog identity owns section fingerprints unless SDK authored some.
+            if not sdk_data.get("sections") and local_best.sections:
+                sdk_data["sections"] = [
+                    dict(s) for s in local_best.sections
+                ]
+            if (
+                not sdk_data.get("chord_progression")
+                and local_best.chord_progression
+            ):
+                sdk_data["chord_progression"] = list(local_best.chord_progression)
+            # Preserve wash opt-out (Eno) — do not let SDK flip drone_held.
+            if local_best.drone_held is not None and sdk_data.get("drone_held") is None:
+                sdk_data["drone_held"] = local_best.drone_held
             merged = profile_from_dict(sdk_data, source="hybrid")
             return StyleLookupResult(
                 profile=merged,
@@ -590,6 +635,7 @@ def generate_midi_for_style(
     live_tweak: bool = False,
     identity_name: Optional[str] = None,
     vibe_text: Optional[str] = None,
+    section_role: Optional[str] = None,
 ) -> Tuple[str, StyleLookupResult, Dict[str, Any]]:
     """
     Lookup style and generate a MIDI file.
@@ -599,6 +645,10 @@ def generate_midi_for_style(
 
     When the Cursor SDK returns a recipe, widget overrides are ignored except
     loop length / seed / debug — unless ``live_tweak`` (user moved a live knob).
+
+    Optional ``section_role`` (or free-text bridge/chorus/verse in the query)
+    resolves catalog ``sections[]`` into flat Engine chord_progression before
+    ``create_arp``.
 
     Returns (midi_path, lookup_result, options_used).
     """
@@ -620,18 +670,39 @@ def generate_midi_for_style(
         skip_artist_gate=True,  # already gated above
         gate_accept=gate,
     )
-    options = result.to_options()
+    role = normalize_section_role(section_role)
+    if role is None and overrides:
+        role = normalize_section_role(overrides.get("section_role"))
+        if role is None:
+            role = normalize_section_role(overrides.get("section"))
+    if role is None:
+        role = parse_section_role_from_text(query) or parse_section_role_from_text(vibe_text)
+
+    options = result.to_options(section_role=role)
     if overrides:
         to_apply = dict(overrides)
         if result.used_cursor_sdk and not live_tweak:
             to_apply = {
                 k: v for k, v in to_apply.items() if k in LOOKUP_STICKY_OVERRIDE_KEYS
             }
+        # section_role already applied via resolve; do not let raw overrides
+        # re-stamp a nested section blob into create_arp.
+        to_apply.pop("section", None)
+        to_apply.pop("sections", None)
         options.update(to_apply)
         # Keep effects in sync if preset overridden
         if "effects_preset" in to_apply:
             options["effects_config"] = build_effects_config(to_apply["effects_preset"])
             options["effects_preset"] = to_apply["effects_preset"]
+        # Re-apply section if override carried a role after sticky filter.
+        override_role = normalize_section_role(to_apply.get("section_role"))
+        if override_role and override_role != role:
+            options = result.to_options(section_role=override_role)
+            sticky = {
+                k: v for k, v in to_apply.items()
+                if k not in ("section_role", "section", "sections")
+            }
+            options.update(sticky)
     path = create_arp(options)
     return path, result, options
 
