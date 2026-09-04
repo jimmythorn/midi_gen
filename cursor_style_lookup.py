@@ -104,8 +104,11 @@ repetition, tape vs clean, section progression). This JSON is the generation
 recipe. Not a transcription of a specific piece.
 """
 
-# Widget/session keys that may override a researched recipe (loop length / RNG only).
-LOOKUP_STICKY_OVERRIDE_KEYS = frozenset({"bars", "seed", "debug", "filename"})
+# Widget/session keys that may override a researched recipe (loop length / RNG /
+# section chip / Extend stretch).
+LOOKUP_STICKY_OVERRIDE_KEYS = frozenset(
+    {"bars", "seed", "debug", "filename", "extend_factor", "section_role"}
+)
 
 
 @dataclass
