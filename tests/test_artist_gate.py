@@ -57,10 +57,6 @@ def test_catalog_hit_skips_spotify():
     assert result.source == "catalog"
     assert calls == []
 
-    alias = resolve_artist_query("gymnopedie", spotify_search=boom)
-    assert alias.source == "catalog"
-    assert calls == []
-
     satie = resolve_artist_query("Erik Satie", spotify_search=boom)
     assert satie.source == "catalog"
     assert calls == []
@@ -128,13 +124,16 @@ def test_spotify_artist_10000_followers_accepted():
     assert result.spotify_artist.followers_total == 10_000
 
 
-def test_spotify_artist_missing_followers_fail_closed():
+def test_spotify_artist_missing_followers_accepted():
+    """Client Credentials search omits followers.total — still a named artist."""
     def hit(_query: str):
-        return [_artist("No Count", followers_total=None)]
+        return [_artist("Miles Davis", followers_total=None)]
 
-    result = resolve_artist_query("No Count", spotify_search=hit)
-    assert isinstance(result, ArtistGateReject)
-    assert result.reason == "not_a_musician"
+    result = resolve_artist_query("Miles Davis", spotify_search=hit)
+    assert isinstance(result, ArtistGateAccept)
+    assert result.source == "spotify"
+    assert result.spotify_artist is not None
+    assert result.spotify_artist.name == "Miles Davis"
 
 
 def test_spotify_artist_accepted():
@@ -161,6 +160,23 @@ def test_weak_description_keyword_does_not_skip_spotify():
     assert isinstance(result, ArtistGateReject)
     assert result.reason == "no_match"
     assert calls == ["Not Music"]
+
+
+def test_force_spotify_does_not_skip_catalog_name():
+    calls = []
+
+    def hit(query: str):
+        calls.append(query)
+        return [_artist("Philip Glass", followers_total=1_000_000)]
+
+    result = resolve_artist_query(
+        "Philip Glass",
+        spotify_search=hit,
+        force_spotify=True,
+    )
+    assert result.accepted
+    assert result.source == "spotify"
+    assert calls == ["Philip Glass"]
 
 
 def test_short_catalog_surname_still_skips_spotify():
@@ -219,17 +235,36 @@ def test_missing_env_catalog_path_still_generates(monkeypatch, tmp_path):
     assert options["bars"] == 2
 
 
-def test_satie_alias_still_generates(monkeypatch):
+def test_satie_name_still_generates(monkeypatch):
     monkeypatch.delenv("SPOTIFY_CLIENT_ID", raising=False)
     monkeypatch.delenv("SPOTIFY_CLIENT_SECRET", raising=False)
 
     path, result, _options = generate_midi_for_style(
-        "gymnopedie",
+        "Erik Satie",
         use_cursor_sdk=False,
         overrides={"bars": 2, "effects_preset": "clean", "debug": False},
     )
     assert Path(path).exists()
     assert result.profile.id == "satie_neoclassical"
+
+
+def test_feel_phrase_queries_spotify_not_catalog_tags():
+    calls = []
+
+    def hit(query: str):
+        calls.append(query)
+        return [_artist("Led Zeppelin", followers_total=20_000_000)]
+
+    result = resolve_artist_query("classic rock", spotify_search=hit)
+    assert isinstance(result, ArtistGateAccept)
+    assert result.source == "spotify"
+    assert result.spotify_artist is not None
+    assert result.spotify_artist.name == "Led Zeppelin"
+    assert calls == ["classic rock"]
+
+    gym = resolve_artist_query("gymnopedie", spotify_search=hit)
+    assert gym.source == "spotify"
+    assert "gymnopedie" in calls
 
 
 def test_generate_rejects_before_sdk_and_create_arp(monkeypatch):

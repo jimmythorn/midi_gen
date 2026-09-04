@@ -122,6 +122,38 @@ def test_spotify_stranger_not_glass_from_catalog_pick():
     assert result.profile.source in ("cousin", "sparse", "hybrid")
 
 
+def test_spotify_genre_query_unpins_who_to_returned_artist():
+    """Genre vibe must use the Spotify artist, not the who-chip or a catalog tag."""
+    artist = SpotifyArtist(
+        id="zep1",
+        name="Led Zeppelin",
+        type="artist",
+        followers_total=20_000_000,
+        raw={"genres": ["classic rock", "album rock"]},
+    )
+    gate = ArtistGateAccept(
+        query="classic rock",
+        source="spotify",
+        spotify_artist=artist,
+        message="spotify accept",
+    )
+    query, identity_name = resolve_lookup_inputs(
+        "Philip Glass", "classic rock", gate_accept=gate
+    )
+    assert query == "Led Zeppelin"
+    assert identity_name is None
+
+    result = lookup_musician_style(
+        query,
+        use_cursor_sdk=False,
+        identity_name=identity_name,
+        skip_artist_gate=True,
+        gate_accept=gate,
+    )
+    assert result.profile.name == "Led Zeppelin"
+    assert result.profile.id != "glass_minimal"
+
+
 def test_require_artist_genres_drive_cousin_few_shot():
     """Leak (c): genres from gate accept must drive cousin selection."""
     artist = SpotifyArtist(

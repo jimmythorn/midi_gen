@@ -477,7 +477,11 @@ def lookup_musician_style(
     gate: Optional[ArtistGateAccept] = gate_accept
     if not skip_artist_gate:
         # Reject before any Cursor SDK enrich or generic invent-a-sketch path.
-        gate = require_artist(query, identity_name=identity_name)
+        gate = require_artist(
+            query,
+            identity_name=identity_name,
+            force_spotify=bool(feel),
+        )
     identity = _catalog_identity(identity_name)
     candidates = find_profiles(query, limit=5) if query else []
     if identity is not None:
@@ -600,7 +604,11 @@ def generate_midi_for_style(
     """
     # Fail closed before create_arp / SDK — shared gate with lookup.
     # Bind accept (genres / followers) into few-shot / sparse path.
-    gate = require_artist(query, identity_name=identity_name)
+    gate = require_artist(
+        query,
+        identity_name=identity_name,
+        force_spotify=bool((vibe_text or "").strip()),
+    )
 
     from .arpeggio_generation import create_arp
 

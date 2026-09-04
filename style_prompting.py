@@ -652,11 +652,11 @@ def vibe_is_different_artist_identity(
     True when typed vibe is a *different artist identity* than the who-chip.
 
     Different artist =
-      - catalog musician *name* hit that is not the who-chip, or
-      - Spotify type=artist accept whose returned name matches the typed string
-        and is not the who-chip.
+      - Spotify type=artist accept whose name is not the who-chip, or
+      - catalog musician *name* hit that is not the who-chip.
 
-    Style aliases / mood chips / style-keyword scores are feel — never unpin.
+    Style aliases / mood chips stay pinned only when Spotify did not return
+    a different artist (genre queries resolve to the Spotify artist).
     """
     who = (catalog_name or "").strip()
     vibe = (vibe_text or "").strip()
@@ -664,25 +664,17 @@ def vibe_is_different_artist_identity(
         return False
     if who and vibe.lower() == who.lower():
         return False
-    # Mood / feel language (aliases, vibe chips, mood packs) stays pinned.
-    if _vibe_is_feel_language(vibe):
-        return False
-    other = _catalog_musician_named(vibe, excluding=who)
-    if other is not None:
-        return True
-    # Spotify stranger: returned name must match typed string and ≠ who-chip.
     if gate_accept is not None and getattr(gate_accept, "accepted", False):
         if getattr(gate_accept, "source", None) == "spotify":
             artist = getattr(gate_accept, "spotify_artist", None)
             if artist is not None and (artist.type or "") == "artist":
                 artist_name = (artist.name or "").strip()
-                if (
-                    artist_name
-                    and artist_name.lower() != who.lower()
-                    and _names_refer_to_same_artist(vibe, artist_name)
-                ):
+                if artist_name and artist_name.lower() != who.lower():
                     return True
-    return False
+    if _vibe_is_feel_language(vibe):
+        return False
+    other = _catalog_musician_named(vibe, excluding=who)
+    return other is not None
 
 
 def resolve_lookup_inputs(
@@ -704,6 +696,11 @@ def resolve_lookup_inputs(
     if not vibe:
         return who, (who or None)
     if vibe_is_different_artist_identity(who, vibe, gate_accept=gate_accept):
+        if gate_accept is not None and getattr(gate_accept, "source", None) == "spotify":
+            artist = getattr(gate_accept, "spotify_artist", None)
+            artist_name = (getattr(artist, "name", None) or "").strip()
+            if artist_name:
+                return artist_name, None
         return vibe, None
     # Feel layers on selected artist.
     return resolve_happy_path_query(who, vibe), (who or None)
@@ -736,8 +733,8 @@ def resolve_artist_gate_for_ui(
     """
     Run ``resolve_artist_query`` for pre-Generate drip.
 
-    When vibe is present, pass no identity pin (fail closed for non-artists).
-    When vibe is empty, pin the catalog who so curated picks stay instant.
+    Typed Search / feel always hits Spotify (force_spotify).
+    Empty vibe pins the catalog who so Browse picks stay local.
     """
     from .artist_gate import resolve_artist_query
 
@@ -748,6 +745,7 @@ def resolve_artist_gate_for_ui(
             vibe,
             identity_name=None,
             spotify_search=spotify_search,
+            force_spotify=True,
         )
     return resolve_artist_query(
         who,

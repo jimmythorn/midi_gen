@@ -252,6 +252,13 @@ def _persist_widget_keys() -> None:
 def _render_who_caption() -> None:
     pick = str(st.session_state.get("catalog_pick") or "").strip()
     vibe = str(st.session_state.get("vibe_text") or "").strip()
+    spotify_name = str(st.session_state.get("spotify_artist_name") or "").strip()
+    if spotify_name:
+        if vibe and vibe.lower() != spotify_name.lower():
+            st.caption(f"Selected · **{spotify_name}** · {vibe}")
+        else:
+            st.caption(f"Selected · **{spotify_name}**")
+        return
     if pick and vibe:
         st.caption(f"Selected · **{pick}** + **{vibe}**")
     elif pick:
@@ -1038,12 +1045,18 @@ if _artist_rejected:
     )
     st.session_state.pop("auto_generate", None)
     st.session_state.pop("pending_replay", False)
+    st.session_state.pop("spotify_artist_name", None)
     if _had_last_run:
         st.rerun()
 else:
     st.session_state.pop("artist_reject_reason", None)
     if st.session_state.get("generate_error") == ARTIST_REJECT_DRIP:
         st.session_state.pop("generate_error", None)
+    _spotify_hit = getattr(_gate, "spotify_artist", None) if _gate is not None else None
+    if getattr(_gate, "source", None) == "spotify" and _spotify_hit is not None:
+        st.session_state["spotify_artist_name"] = _spotify_hit.name
+    else:
+        st.session_state.pop("spotify_artist_name", None)
 
 # Identity pin: feel layers on who; only Spotify/other-catalog artists unpin.
 if _has_style_intent:
@@ -1142,7 +1155,7 @@ def _render_search_feel() -> None:
     )
     st.text_input(
         "Vibe (feel)",
-        placeholder="e.g. ambient drone, gymnopédie, sheets of sound, anything…",
+        placeholder="e.g. classic rock, ambient drone, gymnopédie, sheets of sound…",
         help=(
             "Search a feel or musician. Browse to pin an artist; "
             "feel then layers on them instead of replacing them."

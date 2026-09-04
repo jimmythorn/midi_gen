@@ -10,14 +10,19 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+import certifi
+
 TOKEN_URL = "https://accounts.spotify.com/api/token"
 SEARCH_URL = "https://api.spotify.com/v1/search"
+ARTISTS_URL = "https://api.spotify.com/v1/artists"
 
 
 class SpotifyClientError(Exception):
@@ -89,6 +94,12 @@ def load_spotify_credentials(
     return cid, secret
 
 
+def _default_urlopen(req, timeout=20):
+    """urlopen with certifi CA bundle (macOS python.org builds ship no certs)."""
+    ctx = ssl.create_default_context(cafile=certifi.where())
+    return urllib.request.urlopen(req, timeout=timeout, context=ctx)
+
+
 def fetch_client_credentials_token(
     client_id: str,
     client_secret: str,
@@ -107,7 +118,7 @@ def fetch_client_credentials_token(
             "Content-Type": "application/x-www-form-urlencoded",
         },
     )
-    urlopen = opener if opener is not None else urllib.request.urlopen
+    urlopen = opener if opener is not None else _default_urlopen
     try:
         with urlopen(req, timeout=20) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
@@ -123,6 +134,85 @@ def fetch_client_credentials_token(
     return token
 
 
+def genre_field_query(query: str) -> str:
+    """Spotify search field filter: genre:\"classic rock\"."""
+    q = (query or "").strip()
+    if not q:
+        return ""
+    if q.lower().startswith("genre:"):
+        return q
+    cleaned = q.replace('"', "").strip()
+    if not cleaned:
+        return ""
+    return f'genre:"{cleaned}"'
+
+
+def artist_name_matches_query(query: str, artist_name: str) -> bool:
+    """True when the typed string names this artist (not a genre phrase)."""
+    q = (query or "").strip().lower()
+    n = (artist_name or "").strip().lower()
+    if not q or not n:
+        return False
+    if q == n:
+        return True
+    q_toks = {t for t in re.split(r"[^a-z0-9]+", q) if t}
+    n_toks = {t for t in re.split(r"[^a-z0-9]+", n) if t}
+    return bool(n_toks) and n_toks.issubset(q_toks)
+
+
+def _artist_from_item(item: Dict[str, Any]) -> Optional[SpotifyArtist]:
+    if not isinstance(item, dict):
+        return None
+    artist_id = str(item.get("id") or "")
+    if not artist_id:
+        return None
+    return SpotifyArtist(
+        id=artist_id,
+        name=str(item.get("name") or ""),
+        type=str(item.get("type") or ""),
+        followers_total=_parse_followers_total(item),
+        raw=item,
+    )
+
+
+def hydrate_artists(
+    artists: List[SpotifyArtist],
+    *,
+    access_token: str,
+    opener: Any = None,
+) -> List[SpotifyArtist]:
+    """
+    GET /v1/artists?ids=… so genres/followers come from the artist object.
+
+    Search items often ship empty genres. Hydrate failure returns the search rows.
+    """
+    ids = [a.id for a in artists if a.id]
+    if not ids:
+        return list(artists)
+    params = urllib.parse.urlencode({"ids": ",".join(ids[:50])})
+    req = urllib.request.Request(
+        f"{ARTISTS_URL}?{params}",
+        method="GET",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    urlopen = opener if opener is not None else _default_urlopen
+    try:
+        with urlopen(req, timeout=20) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+        return list(artists)
+
+    raw_list = payload.get("artists") if isinstance(payload, dict) else None
+    if not isinstance(raw_list, list):
+        return list(artists)
+    by_id = {}
+    for item in raw_list:
+        parsed = _artist_from_item(item) if isinstance(item, dict) else None
+        if parsed is not None:
+            by_id[parsed.id] = parsed
+    return [by_id.get(a.id, a) for a in artists]
+
+
 def search_artists(
     query: str,
     *,
@@ -131,7 +221,7 @@ def search_artists(
     opener: Any = None,
 ) -> List[SpotifyArtist]:
     """
-    GET /v1/search?type=artist. Returns typed artist rows only (type == 'artist').
+    GET /v1/search?type=artist. Returns rows from the search payload (unhydrated).
     """
     q = (query or "").strip()
     if not q:
@@ -148,7 +238,7 @@ def search_artists(
         method="GET",
         headers={"Authorization": f"Bearer {access_token}"},
     )
-    urlopen = opener if opener is not None else urllib.request.urlopen
+    urlopen = opener if opener is not None else _default_urlopen
     try:
         with urlopen(req, timeout=20) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
@@ -168,23 +258,36 @@ def search_artists(
 
     out: List[SpotifyArtist] = []
     for item in items:
-        if not isinstance(item, dict):
-            continue
-        item_type = str(item.get("type") or "")
-        artist_id = str(item.get("id") or "")
-        name = str(item.get("name") or "")
-        if not artist_id:
-            continue
-        out.append(
-            SpotifyArtist(
-                id=artist_id,
-                name=name,
-                type=item_type,
-                followers_total=_parse_followers_total(item),
-                raw=item,
-            )
-        )
+        parsed = _artist_from_item(item) if isinstance(item, dict) else None
+        if parsed is not None:
+            out.append(parsed)
     return out
+
+
+def search_artists_for_query(
+    query: str,
+    *,
+    access_token: str,
+    limit: int = 5,
+    opener: Any = None,
+) -> List[SpotifyArtist]:
+    """
+    Artist name search, then genre:\"query\" when no result names the query.
+
+    Hydrates hits so genres/followers are the artist-object values.
+    """
+    named = search_artists(query, access_token=access_token, limit=limit, opener=opener)
+    named_artists = [a for a in named if a.type == "artist" and a.id and a.name]
+    if named_artists:
+        return hydrate_artists(named_artists, access_token=access_token, opener=opener)
+    genre_q = genre_field_query(query)
+    if genre_q and genre_q != query:
+        genre_hits = search_artists(
+            genre_q, access_token=access_token, limit=limit, opener=opener
+        )
+        if genre_hits:
+            return hydrate_artists(genre_hits, access_token=access_token, opener=opener)
+    return hydrate_artists(named, access_token=access_token, opener=opener)
 
 
 def search_artists_with_credentials(
@@ -207,7 +310,9 @@ def search_artists_with_credentials(
             "SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET are required for artist search"
         )
     token = fetch_client_credentials_token(creds[0], creds[1], opener=opener)
-    return search_artists(query, access_token=token, limit=limit, opener=opener)
+    return search_artists_for_query(
+        query, access_token=token, limit=limit, opener=opener
+    )
 
 
 class MissingSpotifyCredentials(SpotifyClientError):

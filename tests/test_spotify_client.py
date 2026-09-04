@@ -17,12 +17,17 @@ if "midi_gen" not in sys.modules:
     sys.modules["midi_gen"] = _pkg
 
 from midi_gen.spotify_client import (
+    ARTISTS_URL,
     MissingSpotifyCredentials,
     SEARCH_URL,
     TOKEN_URL,
+    artist_name_matches_query,
     fetch_client_credentials_token,
+    genre_field_query,
+    hydrate_artists,
     load_spotify_credentials,
     search_artists,
+    search_artists_for_query,
     search_artists_with_credentials,
 )
 
@@ -122,6 +127,170 @@ def test_parse_followers_total_missing_is_none():
         ),
     )
     assert [a.followers_total for a in artists] == [None, None, None]
+
+
+def test_genre_field_query_and_name_match():
+    assert genre_field_query("classic rock") == 'genre:"classic rock"'
+    assert genre_field_query('genre:"rock"') == 'genre:"rock"'
+    assert artist_name_matches_query("Miles Davis", "Miles Davis") is True
+    assert artist_name_matches_query("miles davis quintet", "Miles Davis") is True
+    assert artist_name_matches_query("classic rock", "Led Zeppelin") is False
+    assert artist_name_matches_query("classic rock", "Classic Rock All Stars") is False
+
+
+def test_search_for_query_uses_genre_when_name_is_not_an_artist():
+    seen = []
+
+    def opener(req, timeout=20):
+        seen.append(req.full_url)
+        if req.full_url.startswith(SEARCH_URL) and "genre" not in req.full_url:
+            return _FakeResp({"artists": {"items": []}})
+        if req.full_url.startswith(SEARCH_URL):
+            assert "genre" in req.full_url
+            return _FakeResp(
+                {
+                    "artists": {
+                        "items": [
+                            {
+                                "id": "zep",
+                                "name": "Led Zeppelin",
+                                "type": "artist",
+                                "followers": {"total": 20_000_000},
+                                "genres": [],
+                            }
+                        ]
+                    }
+                }
+            )
+        assert req.full_url.startswith(ARTISTS_URL)
+        return _FakeResp(
+            {
+                "artists": [
+                    {
+                        "id": "zep",
+                        "name": "Led Zeppelin",
+                        "type": "artist",
+                        "followers": {"total": 20_000_000},
+                        "genres": ["classic rock", "album rock"],
+                    }
+                ]
+            }
+        )
+
+    artists = search_artists_for_query("classic rock", access_token="tok", opener=opener)
+    assert [a.name for a in artists] == ["Led Zeppelin"]
+    assert artists[0].genres == ["classic rock", "album rock"]
+    assert any(u.startswith(SEARCH_URL) and "genre" in u for u in seen)
+    assert any(u.startswith(ARTISTS_URL) for u in seen)
+
+
+def test_search_for_query_uses_name_hits_for_genre_phrase():
+    seen = []
+
+    def opener(req, timeout=20):
+        seen.append(req.full_url)
+        if req.full_url.startswith(SEARCH_URL):
+            assert "genre" not in req.full_url
+            return _FakeResp(
+                {
+                    "artists": {
+                        "items": [
+                            {
+                                "id": "acdc",
+                                "name": "AC/DC",
+                                "type": "artist",
+                            }
+                        ]
+                    }
+                }
+            )
+        return _FakeResp({"artists": [{"id": "acdc", "name": "AC/DC", "type": "artist"}]})
+
+    artists = search_artists_for_query("classic rock", access_token="tok", opener=opener)
+    assert [a.name for a in artists] == ["AC/DC"]
+    assert sum(1 for u in seen if u.startswith(SEARCH_URL)) == 1
+
+
+def test_search_for_query_keeps_name_hit_without_genre_fallback():
+    seen = []
+
+    def opener(req, timeout=20):
+        seen.append(req.full_url)
+        if req.full_url.startswith(SEARCH_URL):
+            assert "genre" not in req.full_url
+            return _FakeResp(
+                {
+                    "artists": {
+                        "items": [
+                            {
+                                "id": "miles",
+                                "name": "Miles Davis",
+                                "type": "artist",
+                                "followers": {"total": 1_500_000},
+                            }
+                        ]
+                    }
+                }
+            )
+        return _FakeResp(
+            {
+                "artists": [
+                    {
+                        "id": "miles",
+                        "name": "Miles Davis",
+                        "type": "artist",
+                        "followers": {"total": 1_500_000},
+                        "genres": ["jazz"],
+                    }
+                ]
+            }
+        )
+
+    artists = search_artists_for_query("Miles Davis", access_token="tok", opener=opener)
+    assert artists[0].name == "Miles Davis"
+    assert artists[0].genres == ["jazz"]
+    assert sum(1 for u in seen if u.startswith(SEARCH_URL)) == 1
+
+
+def test_hydrate_artists_fills_genres():
+    seed = search_artists(
+        "Anyone",
+        access_token="tok",
+        opener=lambda req, timeout=20: _FakeResp(
+            {
+                "artists": {
+                    "items": [
+                        {
+                            "id": "a1",
+                            "name": "Anyone",
+                            "type": "artist",
+                            "followers": {"total": 12_000},
+                            "genres": [],
+                        }
+                    ]
+                }
+            }
+        ),
+    )
+    assert seed[0].genres == []
+    filled = hydrate_artists(
+        seed,
+        access_token="tok",
+        opener=lambda req, timeout=20: _FakeResp(
+            {
+                "artists": [
+                    {
+                        "id": "a1",
+                        "name": "Anyone",
+                        "type": "artist",
+                        "followers": {"total": 12_000},
+                        "genres": ["classic rock"],
+                    }
+                ]
+            }
+        ),
+    )
+    assert filled[0].genres == ["classic rock"]
 
 
 def test_search_with_credentials_missing_raises(monkeypatch):

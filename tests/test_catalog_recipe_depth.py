@@ -175,7 +175,7 @@ def test_locked_four_development_unchanged():
     }
 
 
-def test_all_ten_recipe_fingerprints_unique():
+def test_all_recipe_fingerprints_unique():
     fps = {}
     for profile in MUSICIAN_STYLE_CATALOG:
         fp = _recipe_fingerprint(profile)

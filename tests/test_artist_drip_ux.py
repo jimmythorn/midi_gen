@@ -16,6 +16,7 @@ if "midi_gen" not in sys.modules:
     sys.modules["midi_gen"] = _pkg
 
 from midi_gen.artist_gate import ArtistGateAccept, ArtistGateReject
+from midi_gen.spotify_client import MIN_SPOTIFY_FOLLOWERS, SpotifyArtist
 from midi_gen.style_prompting import (
     ARTIST_REJECT_DRIP,
     artist_gate_query_for_ui,
@@ -63,21 +64,69 @@ def test_pre_generate_ted_bundy_rejects_despite_catalog_pin():
     assert result.reason == "no_match"
 
 
-def test_pre_generate_catalog_chip_vibe_skips_spotify():
+def _spotify_artist(name: str) -> SpotifyArtist:
+    return SpotifyArtist(
+        id="spotify-artist-1",
+        name=name,
+        type="artist",
+        followers_total=MIN_SPOTIFY_FOLLOWERS,
+        raw={"id": "spotify-artist-1", "name": name, "type": "artist"},
+    )
+
+
+def test_pre_generate_feel_vibe_queries_spotify():
     calls = []
 
-    def boom(query: str):
+    def hit(query: str):
         calls.append(query)
-        raise AssertionError("catalog/alias vibe must skip Spotify")
+        return [_spotify_artist("Brian Eno")]
 
     result = resolve_artist_gate_for_ui(
         "Philip Glass",
         "ambient drone",
-        spotify_search=boom,
+        spotify_search=hit,
     )
     assert isinstance(result, ArtistGateAccept)
-    assert result.source == "catalog"
-    assert calls == []
+    assert result.source == "spotify"
+    assert result.spotify_artist is not None
+    assert result.spotify_artist.name == "Brian Eno"
+    assert calls == ["ambient drone"]
+
+
+def test_pre_generate_classic_rock_queries_spotify():
+    calls = []
+
+    def hit(query: str):
+        calls.append(query)
+        return [_spotify_artist("Led Zeppelin")]
+
+    result = resolve_artist_gate_for_ui(
+        "Philip Glass",
+        "classic rock",
+        spotify_search=hit,
+    )
+    assert isinstance(result, ArtistGateAccept)
+    assert result.source == "spotify"
+    assert result.spotify_artist is not None
+    assert result.spotify_artist.name == "Led Zeppelin"
+    assert calls == ["classic rock"]
+
+
+def test_typed_search_hits_spotify_even_for_catalog_name():
+    calls = []
+
+    def hit(query: str):
+        calls.append(query)
+        return [_spotify_artist("Philip Glass")]
+
+    result = resolve_artist_gate_for_ui(
+        "",
+        "Philip Glass",
+        spotify_search=hit,
+    )
+    assert isinstance(result, ArtistGateAccept)
+    assert result.source == "spotify"
+    assert calls == ["Philip Glass"]
 
 
 def test_pre_generate_empty_vibe_uses_catalog_identity():
@@ -103,14 +152,16 @@ def test_unknown_name_missing_creds_fail_closed(monkeypatch):
     assert artist_reject_drip_copy(result.reason) == ARTIST_REJECT_DRIP
 
 
-def test_alias_gymnopedie_accepts_instant():
+def test_feel_alias_queries_spotify():
     calls = []
 
-    def boom(query: str):
+    def hit(query: str):
         calls.append(query)
-        raise AssertionError("alias must skip Spotify")
+        return [_spotify_artist("Erik Satie")]
 
-    result = resolve_artist_gate_for_ui("Philip Glass", "gymnopedie", spotify_search=boom)
+    result = resolve_artist_gate_for_ui("Philip Glass", "gymnopedie", spotify_search=hit)
     assert result.accepted
-    assert result.source == "catalog"
-    assert calls == []
+    assert result.source == "spotify"
+    assert result.spotify_artist is not None
+    assert result.spotify_artist.name == "Erik Satie"
+    assert calls == ["gymnopedie"]

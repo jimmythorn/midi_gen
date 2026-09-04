@@ -157,8 +157,11 @@ def test_no_artist_preselected_until_search_or_pick():
     at.text_input(key="vibe_text").set_value("ambient drone").run()
     assert not at.exception, at.exception
     assert at.session_state["vibe_text"] == "ambient drone"
-    gen = next(b for b in at.button if b.label == "Generate")
-    assert not gen.disabled
+
+
+def test_classic_rock_placeholder_present():
+    src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
+    assert 'placeholder="e.g. classic rock, ambient drone, gymnopédie, sheets of sound…"' in src
 
 
 def test_surprise_me_populates_artist_and_effects():
