@@ -29,7 +29,7 @@ if "midi_gen" not in sys.modules:
 
 import streamlit as st
 
-from midi_gen.audio_preview import describe_preview, render_midi_to_wav_bytes
+from midi_gen.audio_preview import render_midi_to_wav_bytes
 from midi_gen.artist_gate import ArtistGateReject, ArtistRejected
 from midi_gen.cursor_style_lookup import cursor_sdk_available, generate_midi_for_style
 from midi_gen.effects_presets import EFFECT_PARAM_HELP, explain_effects_config, list_presets
@@ -974,6 +974,22 @@ st.markdown(
         font-size: 0.92rem;
         margin-top: 0.35rem;
       }
+      .generate-loading .line::after {
+        content: "";
+        display: inline-block;
+        width: 0.7em;
+        height: 0.7em;
+        margin-left: 0.55rem;
+        border: 2px solid var(--line);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        vertical-align: -0.1em;
+        animation: gen-spin 0.7s linear infinite;
+      }
+      @keyframes gen-spin {
+        to { transform: rotate(360deg); }
+      }
+
       .recipe-preview .feel {
         color: var(--text);
         font-size: 1.0rem;
@@ -1370,15 +1386,32 @@ def _render_search_feel() -> None:
     _render_who_caption()
 
 
+GENERATE_BUSY_COPY = "Resolving style and writing MIDI…"
+
+
+def _render_generate_loading() -> None:
+    """Replace last-run results so Generate always shows a busy state."""
+    st.markdown(
+        f"""
+        <div class="recipe-preview generate-loading">
+          <div class="label">Generating</div>
+          <div class="line">{GENERATE_BUSY_COPY}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _render_generate_row() -> bool:
     st.markdown('<div class="generate-wrap">', unsafe_allow_html=True)
     gen_col, surprise_col = st.columns([3, 1])
     with gen_col:
+        _gen_busy = bool(st.session_state.get("auto_generate"))
         clicked = st.button(
-            "Generate",
+            "Generating…" if _gen_busy else "Generate",
             type="primary",
             use_container_width=True,
-            disabled=_artist_rejected or not _has_style_intent,
+            disabled=_artist_rejected or not _has_style_intent or _gen_busy,
             help=(
                 ARTIST_REJECT_DRIP
                 if _artist_rejected
@@ -1452,10 +1485,6 @@ def _render_again_try(run_data: dict) -> None:
 def _render_listen(run_data: dict) -> None:
     """In-browser sine preview — home, not Geek."""
     st.markdown("### Listen")
-    st.caption(
-        "Sine preview in this page. Play into Logic for a real instrument. "
-        + (run_data.get("preview_caption") or "")
-    )
     if run_data.get("wav_bytes"):
         st.audio(run_data["wav_bytes"], format="audio/wav")
     else:
@@ -1916,6 +1945,7 @@ else:
     _render_chrome_row(has_sketch=bool(run))
     _render_recipe_panel()
     generate = _render_generate_row()
+    _gen_busy = bool(generate or st.session_state.get("auto_generate"))
 
     if st.session_state.get("generate_error") and not run:
         _reject = st.session_state.get("artist_reject_reason")
@@ -1924,7 +1954,9 @@ else:
         else:
             st.error(f"Generation failed: {st.session_state['generate_error']}")
 
-    if not run:
+    if _gen_busy:
+        _render_generate_loading()
+    elif not run:
         st.info("Type a feel or open Mood, then Generate — or Surprise me.")
     else:
         result = run["result"]
@@ -1973,7 +2005,7 @@ extend_factor = clamp_extend_factor(st.session_state.get("extend_factor", 1))
 if generate:
     player.stop(wait=True)
     st.session_state["live_was_playing"] = False
-    with st.spinner("Resolving style and writing MIDI…"):
+    with st.spinner(GENERATE_BUSY_COPY):
         overrides = {
             "effects_preset": effects_preset,
             "bars": int(bars),
@@ -2025,7 +2057,6 @@ if generate:
                 "summary": summary,
                 "query": query,
                 "wav_bytes": wav_bytes,
-                "preview_caption": describe_preview(path),
                 "plain_feel_line": plain,
                 "likeness_blurb": likeness,
                 "match_line": format_match_line(
@@ -2051,10 +2082,12 @@ if generate:
                 exc.result.reason
             )
             st.session_state.pop("pending_replay", False)
+            st.rerun()
         except Exception as exc:
             st.session_state.pop("artist_reject_reason", None)
             st.session_state["generate_error"] = str(exc)
             st.session_state.pop("pending_replay", False)
+            st.rerun()
 
 if st.session_state.get("generate_error") and run and not takeover:
     _reject = st.session_state.get("artist_reject_reason")

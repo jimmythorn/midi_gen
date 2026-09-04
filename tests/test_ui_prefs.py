@@ -355,6 +355,9 @@ def test_one_page_chrome_takeovers_source_and_nav():
     geek = src[src.index("def _render_geek_takeover") : src.index("def _render_effects_takeover")]
     assert "st.audio" not in geek
     assert "def _render_listen" in src
+    assert "Sine preview in this page" not in src
+    assert "preview_caption" not in src
+    assert "describe_preview" not in src
     assert '"Philip Glass" if "Philip Glass" in musician_names' not in src
     assert 'placeholder="Select an artist…"' in src
     assert '"Generate"' in src
@@ -368,6 +371,13 @@ def test_one_page_chrome_takeovers_source_and_nav():
     # Play honesty: one click MMC Record + Start; Re-Play restarts the take
     assert "MMC Record" in src
     assert "Re-Play" in src
+    assert "def _render_generate_loading" in src
+    assert "GENERATE_BUSY_COPY" in src
+    home_after_gen = home_src[home_src.index("generate = _render_generate_row") :]
+    assert home_after_gen.index("_gen_busy") < home_after_gen.index("_render_generate_loading")
+    assert home_after_gen.index("_render_generate_loading") < home_after_gen.index(
+        "Type a feel or open Mood"
+    )
     cap = src.index("def _render_capture_setup")
     adv = src.index("def _render_advanced_takeover")
     assert "AUDITION_CAPTURE_STRIP_HTML" in src[cap:adv]
