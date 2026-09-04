@@ -51,6 +51,20 @@ def _drone_color_note(
     return rng.choice(candidates) if candidates else None
 
 
+def _held_chord_voicing(
+    root_midi_note: int,
+    mode: str,
+    min_octave: int,
+) -> List[int]:
+    """Tight triad (or mode chord-tone recipe) in ``min_octave``."""
+    chord_tone_pcs = get_scale(root_midi_note, mode, use_chord_tones=True)
+    notes = sorted({
+        max(1, min(127, pitch_class_at_octave(pc, min_octave)))
+        for pc in chord_tone_pcs
+    })
+    return notes or [max(1, min(127, root_midi_note))]
+
+
 def generate_drone_events(
     options: Dict,
     processed_root_notes_midi: List[int],
@@ -58,6 +72,10 @@ def generate_drone_events(
 ) -> List[MidiEvent]:
     """
     Generates drone events with dynamic voicing, octave doubling/shifts, and DIATONIC melodic walkdowns.
+
+    When ``options['drone_held']`` is true, emits one sustained chord-tone voicing
+    per root segment (no walkdowns / doubling / octave shifts / color accents).
+    Chord changes land only on segment boundaries.
 
     When ``rng`` is omitted, builds ``random.Random(options['seed'])`` if seed is
     set, otherwise an unbound ``Random()`` — same contract as the arpeggio path.
@@ -72,10 +90,14 @@ def generate_drone_events(
     min_octave_param = options.get('min_octave', 3)
     max_octave_param = options.get('max_octave', 5)
     base_velocity = options.get('drone_base_velocity', 70)
+    held = bool(options.get('drone_held', False))
     color_enabled, _color_intervals, _color_accent = normalize_mode_color(
         options.get('mode_color', True), mode
     )
-    
+    if held:
+        # Held progression: chord identity only — no voicing wash.
+        color_enabled = False
+
     variation_interval_bars = options.get('drone_variation_interval_bars', DEFAULT_DRONE_VARIATION_INTERVAL_BARS)
     min_notes_held = options.get('drone_min_notes_held', DEFAULT_DRONE_MIN_NOTES_HELD)
     octave_doubling_chance = options.get('drone_octave_doubling_chance', DEFAULT_DRONE_OCTAVE_DOUBLING_CHANCE)
@@ -85,6 +107,13 @@ def generate_drone_events(
     walkdown_num_steps_config = options.get('drone_walkdown_num_steps', DEFAULT_DRONE_WALKDOWN_NUM_STEPS)
     walkdown_step_ticks_config = options.get('drone_walkdown_step_ticks', DEFAULT_DRONE_WALKDOWN_STEP_TICKS)
     min_target_sustain_ticks = options.get('min_target_sustain_ticks_for_walkdown', DEFAULT_MINIMUM_TARGET_SUSTAIN_TICKS_FOR_WALKDOWN)
+
+    if held:
+        variation_interval_bars = max(1, int(total_bars))
+        min_notes_held = 3
+        octave_doubling_chance = 0.0
+        allow_octave_shifts = False
+        enable_walkdowns = False
 
     ticks_per_beat = 480
     ticks_per_bar = ticks_per_beat * 4
@@ -117,6 +146,22 @@ def generate_drone_events(
 
         segment_start_tick = global_current_tick
         segment_duration_ticks = segment_duration_bars * ticks_per_bar
+
+        if held:
+            base_chord_notes = _held_chord_voicing(
+                root_midi_note, mode, min_octave_param
+            )
+            if options.get('debug'):
+                print(
+                    f"[DRONE HELD] Root: {root_midi_note}, Mode: {mode}, "
+                    f"Voicing: {base_chord_notes}, Segment Bars: {segment_duration_bars}"
+                )
+            for note in base_chord_notes:
+                final_drone_events.append(
+                    (note, segment_start_tick, segment_duration_ticks, base_velocity)
+                )
+            global_current_tick += segment_duration_ticks
+            continue
 
         chord_tone_pitch_classes = get_scale(root_midi_note, mode, use_chord_tones=True)
         
