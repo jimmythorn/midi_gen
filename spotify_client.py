@@ -3,6 +3,10 @@ Spotify Web API client (Client Credentials, Artist Search only).
 
 Uses stdlib urllib — no user OAuth. Credentials from env:
   SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
+
+Artist path: ``search_artists_for_query`` (name, then genre fallback).
+Mood path: ``search_artists_by_genre`` / ``search_artists_by_genre_with_credentials``
+(genre field only) — see ``mood_search.genre_artist_candidates``.
 """
 
 from __future__ import annotations
@@ -233,6 +237,25 @@ def search_artists_for_query(
     return named
 
 
+def search_artists_by_genre(
+    genre: str,
+    *,
+    access_token: str,
+    limit: int = 10,
+    opener: Any = None,
+) -> List[SpotifyArtist]:
+    """
+    Genre-first Artist Search for Mood path: always ``genre:\"…\"``.
+
+    Does not run name search. Empty / unusable genre → [].
+    Artist path continues to use ``search_artists_for_query`` (name, then genre).
+    """
+    genre_q = genre_field_query(genre)
+    if not genre_q:
+        return []
+    return search_artists(genre_q, access_token=access_token, limit=limit, opener=opener)
+
+
 def search_artists_with_credentials(
     query: str,
     *,
@@ -255,6 +278,31 @@ def search_artists_with_credentials(
     token = fetch_client_credentials_token(creds[0], creds[1], opener=opener)
     return search_artists_for_query(
         query, access_token=token, limit=limit, opener=opener
+    )
+
+
+def search_artists_by_genre_with_credentials(
+    genre: str,
+    *,
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
+    limit: int = 10,
+    opener: Any = None,
+) -> List[SpotifyArtist]:
+    """
+    Client Credentials + genre-first Artist Search (Mood path).
+
+    Raises SpotifyClientError on HTTP failure.
+    Raises MissingSpotifyCredentials when id/secret absent.
+    """
+    creds = load_spotify_credentials(client_id=client_id, client_secret=client_secret)
+    if creds is None:
+        raise MissingSpotifyCredentials(
+            "SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET are required for genre search"
+        )
+    token = fetch_client_credentials_token(creds[0], creds[1], opener=opener)
+    return search_artists_by_genre(
+        genre, access_token=token, limit=limit, opener=opener
     )
 
 
