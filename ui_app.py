@@ -290,21 +290,21 @@ def _render_catalog_selectbox(names: list[str]) -> None:
 
 
 def _apply_section_chip(role: str) -> None:
-    """Stage Song part only — does not clear last_run or auto-generate."""
+    """Stage Song part only — does not clear the prior sketch or trigger Generate."""
     st.session_state["section_role"] = toggle_section_chip(
         st.session_state.get("section_role"), role
     )
 
 
 def _apply_timing_factor(factor: float) -> None:
-    """Stage Timing only — does not clear last_run or auto-generate."""
+    """Stage Timing only — does not clear the prior sketch or trigger Generate."""
     st.session_state["timing_factor"] = toggle_timing_factor(
         st.session_state.get("timing_factor", DEFAULT_TIMING_FACTOR), factor
     )
 
 
 def _apply_generation_mode(mode: str) -> None:
-    """Stage Pattern|Progression only — does not clear last_run or auto-generate."""
+    """Stage Pattern|Progression only — does not clear the prior sketch or trigger Generate."""
     st.session_state["generation_mode"] = clamp_generation_mode(mode)
     # Keep legacy shape key aligned for Length takeover / sketch layout.
     st.session_state["generation_type"] = (

@@ -133,8 +133,9 @@ def test_ui_simplify_home_source_and_apptest():
     assert "Full sketch" not in src
     assert "Play / Record" in src
     assert "Search + Preview" in src
-    assert 'key="home_timing_0_5"' in src or "home_timing_" in src
-    assert 'key="home_mode_pattern"' in src or "home_mode_" in src
+    assert 'key_prefix="home_timing"' in src
+    assert 'key_prefix="home_mode"' in src
+    assert 'key_prefix="home_section"' in src
     assert "home_timing_select" not in src
     assert "home_mode_select" not in src
     assert "_render_timing_chips" in src

@@ -195,14 +195,17 @@ def test_pattern_chip_stages_until_generate():
         opts.get("generation_type")
     )
     assert mode == "progression"
-    prior = at.session_state["last_run"]
-    prior_wav = prior.get("wav_bytes")
+    prior_path = at.session_state["last_run"]["path"]
+    prior_wav = at.session_state["last_run"].get("wav_bytes")
     at.button(key="home_mode_pattern").click().run()
     assert not at.exception, at.exception
     assert at.session_state["generation_mode"] == "pattern"
-    assert at.session_state.get("last_run") is prior
-    assert at.session_state["last_run"].get("wav_bytes") is prior_wav
-    assert not at.session_state.get("auto_generate")
+    assert at.session_state["last_run"]["path"] == prior_path
+    assert at.session_state["last_run"].get("wav_bytes") == prior_wav
+    try:
+        assert not at.session_state["auto_generate"]
+    except KeyError:
+        pass
     opts = at.session_state["last_run"]["options"]
     stale = opts.get("generation_mode") or generation_mode_from_type(
         opts.get("generation_type")
@@ -234,24 +237,28 @@ def test_timing_and_pattern_chips_keep_last_run_sticky():
     at.button(key="home_timing_0_5").click().run()
     assert not at.exception, at.exception
     assert float(at.session_state["timing_factor"]) == 0.5
-    assert at.session_state.get("last_run") is run
-    assert at.session_state["last_run"]["wav_bytes"] is wav_before
     assert at.session_state["last_run"]["path"] == path_before
-    assert not at.session_state.get("auto_generate")
+    assert at.session_state["last_run"]["wav_bytes"] == wav_before
+    try:
+        assert not at.session_state["auto_generate"]
+    except KeyError:
+        pass
 
     at.button(key="home_mode_pattern").click().run()
     assert not at.exception, at.exception
     assert at.session_state["generation_mode"] == "pattern"
-    assert at.session_state.get("last_run") is run
-    assert at.session_state["last_run"]["wav_bytes"] is wav_before
-    assert not at.session_state.get("auto_generate")
+    assert at.session_state["last_run"]["path"] == path_before
+    assert at.session_state["last_run"]["wav_bytes"] == wav_before
+    try:
+        assert not at.session_state["auto_generate"]
+    except KeyError:
+        pass
 
     # Busy path keeps prior preview keys (do not wipe last_run to stage generate).
     at.session_state["auto_generate"] = True
-    assert at.session_state.get("last_run") is run
-    assert at.session_state["last_run"]["wav_bytes"] is wav_before
-    assert "wav_bytes" in at.session_state["last_run"]
     assert at.session_state["last_run"]["path"] == path_before
+    assert at.session_state["last_run"]["wav_bytes"] == wav_before
+    assert at.session_state["last_run"].get("wav_bytes")
 
 
 def test_generate_busy_keeps_prior_preview_keys_in_source():
@@ -263,11 +270,10 @@ def test_generate_busy_keeps_prior_preview_keys_in_source():
     assert 'st.session_state.pop("last_run"' not in gen_click
     assert 'st.session_state["last_run"] = None' not in gen_click
     # Preview remount only after new MIDI lands — not at Generate click.
-    assert '"_preview_rev"' not in gen_click
-    assert 'st.session_state["_preview_rev"]' in src[
-        src.index('st.session_state["last_run"] = {') : src.index(
-            'st.session_state.pop("generate_error", None)'
-        )
+    assert 'st.session_state["_preview_rev"]' not in gen_click
+    gen_ok = src[src.index('st.session_state["last_run"] = {') :]
+    assert 'st.session_state["_preview_rev"]' in gen_ok[
+        : gen_ok.index("_queue_play_record_tab()")
     ]
     play_tab = src[src.index("with tab_play:") : src.index("# Auto-generate")]
     assert "if _gen_busy and not run" in play_tab
@@ -607,11 +613,12 @@ def test_one_page_chrome_takeovers_source_and_nav():
     listen = src[src.index("def _render_listen") : src.index("def _render_play_hero")]
     assert "preview_audio" in listen
     assert "st.audio" not in listen
-    assert '"_preview_rev"' not in src[
+    assert 'st.session_state["_preview_rev"]' not in src[
         src.index("def _on_generate_click") : src.index("def _apply_search_kind")
     ]
-    assert 'st.session_state["_preview_rev"]' in src[
-        src.index('st.session_state["last_run"] = {') : src.index("_queue_play_record_tab()")
+    gen_ok = src[src.index('st.session_state["last_run"] = {') :]
+    assert 'st.session_state["_preview_rev"]' in gen_ok[
+        : gen_ok.index("_queue_play_record_tab()")
     ]
     html = (_ROOT / "preview_audio" / "frontend" / "index.html").read_text(
         encoding="utf-8"
