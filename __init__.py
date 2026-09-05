@@ -11,6 +11,12 @@ from .arpeggio_generation import (
 )
 from .artist_gate import ArtistGateReject, ArtistRejected, resolve_artist_query
 from .cursor_style_lookup import generate_midi_for_style, lookup_musician_style
+from .mood_search import (
+    ArtistCandidate,
+    GenreArtistCandidates,
+    candidates_as_combo_rows,
+    genre_artist_candidates,
+)
 from .musician_styles import (
     list_musicians,
     list_styles,
@@ -18,13 +24,17 @@ from .musician_styles import (
 )
 
 __all__ = [
+    "ArtistCandidate",
     "ArtistGateReject",
     "ArtistRejected",
+    "GenreArtistCandidates",
     "apply_extend_factor",
     "apply_generation_mode",
     "apply_timing_factor",
+    "candidates_as_combo_rows",
     "create_arp",
     "generate_midi_for_style",
+    "genre_artist_candidates",
     "lookup_musician_style",
     "list_musicians",
     "list_styles",

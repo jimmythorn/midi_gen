@@ -41,6 +41,8 @@ Optional Cursor SDK enrichment: `export CURSOR_API_KEY=crsr_...` before `./run_u
 
 Artist gate (reject-before-generate): typed Search / feel always hits Spotify Artist Search via Client Credentials (`SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` — never commit secrets): name search first, then `genre:"query"` if name search is empty. Browse catalog picks with an empty search stay local. Accept `type=artist` with a name. `followers.total >= 10000` applies only when Spotify sends a count (Client Credentials payloads often omit followers/genres). Below that / non-artists fail closed before `create_arp` / SDK enrich. Sample Musician drip copy stays plain ("Not finding a musician…").
 
+**Mood path (Sketch UX combo-box):** Style Lab exposes `genre_artist_candidates(genre)` — genre-first Spotify search → ranked artist candidates `(name, id, followers, genres)` for home-search match lists. Mood chips stay UI-owned. Fail closed when the genre has no usable artists. See [MOOD_SEARCH.md](MOOD_SEARCH.md). Does not replace the artist name path or the 10k gate.
+
 ## Play into Logic Pro (IAC)
 
 1. **Audio MIDI Setup** → MIDI Studio → **IAC Driver** → enable **Device is online**.
