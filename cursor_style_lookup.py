@@ -731,7 +731,10 @@ def generate_midi_for_style(
         options.update(to_apply)
         # Keep effects in sync if preset overridden
         if "effects_preset" in to_apply:
-            options["effects_config"] = build_effects_config(to_apply["effects_preset"])
+            options["effects_config"] = build_effects_config(
+                to_apply["effects_preset"],
+                overrides=to_apply.get("effects_overrides"),
+            )
             options["effects_preset"] = to_apply["effects_preset"]
         # Re-apply section if override carried a role after sticky filter.
         override_role = normalize_section_role(to_apply.get("section_role"))
