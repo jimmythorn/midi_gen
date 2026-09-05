@@ -194,6 +194,32 @@ def resolve_drone_held(
     return bool(chord_progression)
 
 
+def apply_arp_step_mask(
+    cell: Sequence[Optional[int]],
+    *,
+    arp_steps: int,
+    gates: Optional[Sequence[Any]] = None,
+    pitches: Optional[Sequence[Any]] = None,
+) -> List[Optional[int]]:
+    """Pad/truncate a cell, rest closed gates, replace int pitches."""
+    out: List[Optional[int]] = list(cell)[:arp_steps]
+    if len(out) < arp_steps:
+        out.extend([None] * (arp_steps - len(out)))
+    if gates is not None:
+        padded_gates = list(gates)[:arp_steps]
+        padded_gates.extend([True] * (arp_steps - len(padded_gates)))
+        for index, on in enumerate(padded_gates):
+            if not on:
+                out[index] = None
+    if pitches is not None:
+        padded_pitches = list(pitches)[:arp_steps]
+        padded_pitches.extend([None] * (arp_steps - len(padded_pitches)))
+        for index, pitch in enumerate(padded_pitches):
+            if isinstance(pitch, int):
+                out[index] = pitch
+    return out
+
+
 def _expand_cell_to_grid(
     cell: Sequence[Optional[int]],
     *,
@@ -417,6 +443,15 @@ def create_arp(options: Dict):
                         )
 
                     placed = apply_phase_offset(bar_cell, phase)
+                    gates = options.get("arp_gates")
+                    pitches = options.get("arp_pitches")
+                    if gates is not None or pitches is not None:
+                        placed = apply_arp_step_mask(
+                            placed,
+                            arp_steps=arp_steps,
+                            gates=gates,
+                            pitches=pitches,
+                        )
                     final_event_list.extend(
                         _expand_cell_to_grid(
                             placed,
