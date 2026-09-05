@@ -121,6 +121,7 @@ LOOKUP_STICKY_OVERRIDE_KEYS = frozenset(
         "timing_factor",
         "section_role",
         "generation_type",
+        "generation_mode",
         "drone_held",
         "chord_count",
     }
@@ -699,8 +700,10 @@ def generate_midi_for_style(
         role = parse_section_role_from_text(query) or parse_section_role_from_text(vibe_text)
 
     options = result.to_options(section_role=role)
+    generation_mode = None
     if overrides:
         to_apply = dict(overrides)
+        generation_mode = to_apply.pop("generation_mode", None)
         if result.used_cursor_sdk and not live_tweak:
             to_apply = {
                 k: v for k, v in to_apply.items() if k in LOOKUP_STICKY_OVERRIDE_KEYS
@@ -709,6 +712,7 @@ def generate_midi_for_style(
         # re-stamp a nested section blob into create_arp.
         to_apply.pop("section", None)
         to_apply.pop("sections", None)
+        to_apply.pop("generation_mode", None)
         options.update(to_apply)
         # Keep effects in sync if preset overridden
         if "effects_preset" in to_apply:
@@ -720,12 +724,16 @@ def generate_midi_for_style(
             options = result.to_options(section_role=override_role)
             sticky = {
                 k: v for k, v in to_apply.items()
-                if k not in ("section_role", "section", "sections")
+                if k not in ("section_role", "section", "sections", "generation_mode")
             }
             options.update(sticky)
     from .style_prompting import apply_user_sketch_layout
 
     options = apply_user_sketch_layout(options)
+    if generation_mode is not None:
+        from .arpeggio_generation import apply_generation_mode
+
+        options = apply_generation_mode(options, generation_mode)
     path = create_arp(options)
     return path, result, options
 

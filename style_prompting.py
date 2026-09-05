@@ -13,7 +13,7 @@ import random
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from .arpeggio_generation import resolve_extend_factor
+from .arpeggio_generation import resolve_extend_factor, resolve_timing_factor
 from .effects_presets import get_preset, list_presets
 from .musician_styles import (
     MUSICIAN_STYLE_CATALOG,
@@ -25,25 +25,43 @@ from .musician_styles import (
     resolve_section_recipe,
 )
 
-# Home section chips — default off (None) = full sketch as today.
+# Home section chips — display order locked for Sketch UX.
 SECTION_CHIP_ROLES: tuple[str, ...] = (
+    "intro",
     "verse",
+    "pre-chorus",
     "chorus",
     "bridge",
-    "intro",
     "outro",
-    "pre-chorus",
 )
 SECTION_CHIP_LABELS: tuple[tuple[str, str], ...] = (
+    ("intro", "Intro"),
     ("verse", "Verse"),
+    ("pre-chorus", "Pre-chorus"),
     ("chorus", "Chorus"),
     ("bridge", "Bridge"),
-    ("intro", "Intro"),
     ("outro", "Outro"),
-    ("pre-chorus", "Pre-chorus"),
 )
-# Extend stretch factors shown next to Half/Double (1 = off).
+# Legacy Extend stretch factors (Length takeover / older tests). Prefer timing chips.
 EXTEND_CHIP_FACTORS: tuple[int, ...] = (2, 4)
+# Timing chips → Engine timing_factor {0.5, 1, 2, 4}.
+# Double = 0.5 (faster); 1× = identity; Half = 2; Quarter = 4.
+TIMING_CHIP_FACTORS: tuple[float, ...] = (0.5, 1.0, 2.0, 4.0)
+TIMING_CHIP_LABELS: tuple[tuple[float, str], ...] = (
+    (0.5, "Double"),
+    (1.0, "1×"),
+    (2.0, "Half"),
+    (4.0, "Quarter"),
+)
+DEFAULT_TIMING_FACTOR = 1.0
+GENERATION_MODES: tuple[str, ...] = ("pattern", "progression")
+DEFAULT_GENERATION_MODE = "progression"
+GENERATION_MODE_LABELS: Dict[str, str] = {
+    "pattern": "Pattern",
+    "progression": "Progression",
+}
+SEARCH_KINDS: tuple[str, ...] = ("mood", "artist")
+DEFAULT_SEARCH_KIND = "mood"
 
 
 # Curated subset spanning the FULL catalog (not only recently enriched profiles).
@@ -299,6 +317,32 @@ def clamp_extend_factor(raw: Any) -> int:
     return resolve_extend_factor(raw)
 
 
+def clamp_timing_factor(raw: Any) -> float:
+    """UI/session timing_factor — {0.5, 1, 2, 4}; identity 1 when unset."""
+    return float(resolve_timing_factor(raw))
+
+
+def clamp_generation_mode(raw: Any) -> str:
+    """Home Pattern | Progression toggle → Engine apply_generation_mode."""
+    key = str(raw or "").strip().lower()
+    if key in ("arp", "arpeggio"):
+        return "pattern"
+    if key in ("drone", "held", "progressions"):
+        return "progression"
+    return key if key in GENERATION_MODES else DEFAULT_GENERATION_MODE
+
+
+def format_generation_mode_label(raw: Any) -> str:
+    return GENERATION_MODE_LABELS.get(
+        clamp_generation_mode(raw), GENERATION_MODE_LABELS[DEFAULT_GENERATION_MODE]
+    )
+
+
+def clamp_search_kind(raw: Any) -> str:
+    key = str(raw or "").strip().lower()
+    return key if key in SEARCH_KINDS else DEFAULT_SEARCH_KIND
+
+
 def toggle_section_chip(current: Optional[str], clicked: str) -> Optional[str]:
     """
     Section chip toggle: click active chip → off; else select that role.
@@ -319,6 +363,36 @@ def toggle_extend_factor(current: Any, clicked: int) -> int:
         return clamp_extend_factor(current)
     cur = clamp_extend_factor(current)
     return 1 if cur == factor else factor
+
+
+def toggle_timing_factor(current: Any, clicked: Any) -> float:
+    """Timing chip: click active → 1×; else set Double / Half / Quarter / 1×."""
+    factor = clamp_timing_factor(clicked)
+    if factor not in TIMING_CHIP_FACTORS:
+        return clamp_timing_factor(current)
+    cur = clamp_timing_factor(current)
+    # Clicking identity while already identity stays 1; clicking other active → 1×.
+    if abs(cur - factor) < 1e-9 and abs(factor - 1.0) > 1e-9:
+        return DEFAULT_TIMING_FACTOR
+    return factor
+
+
+def catalog_name_matches(query: str, *, limit: int = 8) -> List[str]:
+    """Substring / token matches against curated musician names (Artist search)."""
+    q = (query or "").strip().lower()
+    if not q:
+        return []
+    names = sorted({p.name for p in MUSICIAN_STYLE_CATALOG})
+    starts = [n for n in names if n.lower().startswith(q)]
+    contains = [n for n in names if q in n.lower() and n not in starts]
+    out = starts + contains
+    return out[: max(1, int(limit))]
+
+
+def generation_mode_from_type(raw: Any) -> str:
+    """Map legacy generation_type session value → Pattern | Progression."""
+    gt = clamp_generation_type(raw)
+    return "pattern" if gt == "arpeggio" else "progression"
 
 
 def surprise_related_profile(
@@ -897,15 +971,20 @@ def resolve_artist_gate_for_ui(
     vibe_text: str = "",
     *,
     spotify_search=None,
+    search_kind: str = "mood",
 ):
     """
     Run ``resolve_artist_query`` for pre-Generate drip.
 
     Typed Search / feel always hits Spotify (force_spotify).
-    Empty vibe pins the catalog who so Browse picks stay local.
+    Empty vibe pins the catalog who so catalog picks stay local.
+
+    Mood combo rows come from Style Lab ``genre_artist_candidates`` (#34)
+    when present — this gate stays the artist path.
     """
     from .artist_gate import resolve_artist_query
 
+    _ = clamp_search_kind(search_kind)  # reserved for Sketch UX mood vs artist
     vibe = (vibe_text or "").strip()
     who = (catalog_name or "").strip()
     if vibe:

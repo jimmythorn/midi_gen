@@ -47,33 +47,40 @@ from midi_gen import style_prompting as _style_prompting
 importlib.reload(_style_prompting)
 from midi_gen.style_prompting import (
     ARTIST_REJECT_DRIP,
-    EXTEND_CHIP_FACTORS,
+    DEFAULT_GENERATION_MODE,
+    DEFAULT_SEARCH_KIND,
+    DEFAULT_TIMING_FACTOR,
+    GENERATION_MODES,
     SECTION_CHIP_LABELS,
+    TIMING_CHIP_LABELS,
     artist_reject_drip_copy,
+    catalog_name_matches,
     DEFAULT_CHORD_COUNT,
     DEFAULT_GENERATION_TYPE,
     DEFAULT_SKETCH_BARS,
-    GENERATION_TYPES,
     clamp_bars,
     clamp_chord_count,
     clamp_extend_factor,
+    clamp_generation_mode,
     clamp_generation_type,
+    clamp_search_kind,
+    clamp_timing_factor,
     double_bars,
     featured_style_cards,
+    format_generation_mode_label,
     format_likeness_blurb,
     format_match_line,
     format_plain_feel_match,
-    format_shape_label,
+    generation_mode_from_type,
     half_bars,
     mood_chip_packs,
     preview_recipe,
-    related_from_lookup_result,
     resolve_artist_gate_for_ui,
     resolve_lookup_inputs,
     session_clears_on_artist_reject,
     surprise_roll,
-    toggle_extend_factor,
     toggle_section_chip,
+    toggle_timing_factor,
 )
 from midi_gen.ui_prefs import load_prefs, prefs_for_session, save_prefs
 
@@ -192,6 +199,7 @@ def _reset_arp_knobs() -> None:
 def _apply_vibe_text(chip: str) -> None:
     """Set vibe from a chip. Must run as on_click (before the text_input binds)."""
     st.session_state["vibe_text"] = chip
+    st.session_state["search_kind"] = "mood"
     _reset_arp_knobs()
     st.session_state.pop("ui_takeover", None)
 
@@ -199,6 +207,7 @@ def _apply_vibe_text(chip: str) -> None:
 def _apply_featured_style(name: str) -> None:
     """Select a featured catalog name. Feel stays layered on."""
     st.session_state["catalog_pick"] = name
+    st.session_state["search_kind"] = "artist"
     _reset_arp_knobs()
     st.session_state.pop("ui_takeover", None)
 
@@ -237,21 +246,71 @@ def _apply_section_chip(role: str) -> None:
     )
 
 
-def _apply_extend_factor(factor: int) -> None:
-    st.session_state["extend_factor"] = toggle_extend_factor(
-        st.session_state.get("extend_factor", 1), factor
+def _apply_timing_factor(factor: float) -> None:
+    st.session_state["timing_factor"] = toggle_timing_factor(
+        st.session_state.get("timing_factor", DEFAULT_TIMING_FACTOR), factor
     )
 
 
+def _apply_generation_mode(mode: str) -> None:
+    st.session_state["generation_mode"] = clamp_generation_mode(mode)
+    # Keep legacy shape key aligned for Length takeover / sketch layout.
+    st.session_state["generation_type"] = (
+        "arpeggio" if st.session_state["generation_mode"] == "pattern" else "drone"
+    )
+
+
+def _apply_search_match(name: str) -> None:
+    """Pin a combo-box match — Mood pins Spotify artist name; Artist pins who."""
+    kind = clamp_search_kind(st.session_state.get("search_kind"))
+    if kind == "artist":
+        st.session_state["catalog_pick"] = name
+    else:
+        # Style Lab mood candidates → existing gate via force_spotify on name.
+        st.session_state["vibe_text"] = name
+        st.session_state["catalog_pick"] = None
+    _reset_arp_knobs()
+
+
+def _on_search_match_pick() -> None:
+    name = str(st.session_state.get("search_match_pick") or "").strip()
+    if name:
+        _apply_search_match(name)
+
+
+def _mood_combo_names(query: str, *, limit: int = 10) -> list[str]:
+    """Mood match rows via Style Lab ``genre_artist_candidates`` (#34)."""
+    q = (query or "").strip()
+    if not q:
+        return []
+    try:
+        from midi_gen.mood_search import (
+            candidates_as_combo_rows,
+            genre_artist_candidates,
+        )
+    except ImportError:
+        return []
+    try:
+        result = genre_artist_candidates(q, limit=limit)
+    except Exception:
+        return []
+    if not getattr(result, "ok", False):
+        return []
+    rows = candidates_as_combo_rows(result)
+    names: list[str] = []
+    for row in rows:
+        name = str((row or {}).get("name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
 # --- One-page chrome: home stays sacred; extras are full-screen takeovers ---
-# PASS bar order: Browse → Mood → Length → Effects → Capture → Advanced → Geek last.
+# Browse / Mood / Capture moved onto home (mood chips + Play/Record tab).
 TAKEOVER_LABELS = {
-    "browse": "Browse",
-    "moods": "Mood",
-    "length": "Length",
+    "more": "More",
     "effects": "Effects",
-    "capture": "Capture",
-    "advanced": "Advanced",
+    "debug": "Debug",
     "geek": "Geek",
 }
 
@@ -269,11 +328,14 @@ def _persist_widget_keys() -> None:
     pairs = (
         ("vibe_text", ""),
         ("catalog_pick", None),
+        ("search_kind", DEFAULT_SEARCH_KIND),
         ("bars", DEFAULT_SKETCH_BARS),
         ("chord_count", DEFAULT_CHORD_COUNT),
         ("generation_type", DEFAULT_GENERATION_TYPE),
+        ("generation_mode", DEFAULT_GENERATION_MODE),
         ("section_role", None),
         ("extend_factor", 1),
+        ("timing_factor", DEFAULT_TIMING_FACTOR),
         ("effects_preset", "tape_and_human"),
         ("use_sdk", _cursor_api_key_present()),
         ("sketch_bpm", None),
@@ -297,7 +359,9 @@ def _persist_widget_keys() -> None:
         elif default is not None:
             st.session_state[key] = default
             st.session_state[shadow] = default
-    # Normalize section / extend after mirror (None = chips off).
+    # Normalize section / timing after mirror (None = chips off).
+    # Widget-bound keys (search_kind radio) must not be reassigned after instantiate —
+    # only refresh their shadow mirrors.
     role = st.session_state.get("section_role")
     if role is not None and not str(role).strip():
         st.session_state["section_role"] = None
@@ -306,6 +370,25 @@ def _persist_widget_keys() -> None:
         st.session_state.get("extend_factor", 1)
     )
     st.session_state["_persist_extend_factor"] = st.session_state["extend_factor"]
+    st.session_state["timing_factor"] = clamp_timing_factor(
+        st.session_state.get("timing_factor", DEFAULT_TIMING_FACTOR)
+    )
+    st.session_state["_persist_timing_factor"] = st.session_state["timing_factor"]
+    st.session_state["generation_mode"] = clamp_generation_mode(
+        st.session_state.get("generation_mode", DEFAULT_GENERATION_MODE)
+    )
+    st.session_state["_persist_generation_mode"] = st.session_state["generation_mode"]
+    st.session_state["_persist_search_kind"] = clamp_search_kind(
+        st.session_state.get("search_kind", DEFAULT_SEARCH_KIND)
+    )
+    # Map legacy takeover names from older sessions.
+    legacy = st.session_state.get("ui_takeover")
+    if legacy == "length":
+        st.session_state["ui_takeover"] = "more"
+    elif legacy == "advanced":
+        st.session_state["ui_takeover"] = "debug"
+    elif legacy in ("browse", "moods", "capture"):
+        st.session_state.pop("ui_takeover", None)
 
 
 def _render_who_caption() -> None:
@@ -365,11 +448,6 @@ def _render_chrome_row(*, has_sketch: bool) -> None:
 
 def _apply_again() -> None:
     st.session_state["pending_again"] = True
-
-
-def _apply_related(name: str) -> None:
-    st.session_state["pending_related_name"] = name
-    _reset_arp_knobs()
 
 
 def _apply_surprise(name: str, profile_id: str, effects_preset: str) -> None:
@@ -511,19 +589,12 @@ def _render_arp_live(profile: Any) -> None:
 
 
 def _render_bars_knobs() -> None:
-    """Half / Double / Extend + bars slider (Length & feel takeover)."""
+    """Half / Double chip row (More takeover). Bars slider lives in sketch layout."""
     st.session_state["bars"] = clamp_bars(int(st.session_state.get("bars", DEFAULT_SKETCH_BARS)))
-    st.session_state["extend_factor"] = clamp_extend_factor(
-        st.session_state.get("extend_factor", 1)
-    )
     st.markdown('<div class="bars-chip-row">', unsafe_allow_html=True)
-    bars_label, half_col, double_col, *extend_cols = st.columns(
-        [2, 1, 1] + [1] * len(EXTEND_CHIP_FACTORS)
-    )
+    bars_label, half_col, double_col = st.columns([2, 1, 1])
     with bars_label:
-        extend_n = int(st.session_state["extend_factor"])
-        extend_note = f" · extend {extend_n}×" if extend_n > 1 else ""
-        st.caption(f"Loop length · **{st.session_state['bars']} bars**{extend_note}")
+        st.caption(f"Loop length · **{st.session_state['bars']} bars**")
     with half_col:
         st.button(
             "½ Half",
@@ -542,36 +613,14 @@ def _render_bars_knobs() -> None:
             help="Double sketch length for a longer playable loop.",
             on_click=_apply_double_bars,
         )
-    for col, factor in zip(extend_cols, EXTEND_CHIP_FACTORS):
-        with col:
-            on = int(st.session_state["extend_factor"]) == factor
-            st.button(
-                f"{'● ' if on else ''}{factor}× Extend",
-                use_container_width=True,
-                key=f"bars_extend_{factor}",
-                type="primary" if on else "secondary",
-                help=(
-                    f"Hold the progression {factor}× longer. "
-                    "2×–4× Extend is how a drone is made."
-                ),
-                on_click=_apply_extend_factor,
-                args=(factor,),
-            )
     st.markdown("</div>", unsafe_allow_html=True)
-    st.slider(
-        "Bars",
-        2,
-        32,
-        help="Defaults to the catalog profile length when left alone.",
-        key="bars",
-    )
 
 
 def _render_section_chips(*, key_prefix: str = "section") -> None:
-    """Verse / Chorus / Bridge / Intro / Outro / Pre-chorus — default off."""
+    """Intro / Verse / Pre-chorus / Chorus / Bridge / Outro — default off."""
     current = st.session_state.get("section_role")
     st.markdown(
-        '<p class="feel-path-label">Section (optional)</p>',
+        '<p class="feel-path-label">Song part</p>',
         unsafe_allow_html=True,
     )
     st.markdown('<div class="section-chip-row">', unsafe_allow_html=True)
@@ -594,41 +643,82 @@ def _render_section_chips(*, key_prefix: str = "section") -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-def _render_extend_chips(*, key_prefix: str = "extend") -> None:
-    """2× / 4× Extend on home — wires Engine extend_factor."""
-    current = clamp_extend_factor(st.session_state.get("extend_factor", 1))
-    st.session_state["extend_factor"] = current
+def _render_timing_chips(*, key_prefix: str = "timing") -> None:
+    """Double / 1× / Half / Quarter → Engine timing_factor."""
+    current = clamp_timing_factor(
+        st.session_state.get("timing_factor", DEFAULT_TIMING_FACTOR)
+    )
+    st.session_state["timing_factor"] = current
     st.markdown(
-        '<p class="feel-path-label">Extend (drone)</p>',
+        '<p class="feel-path-label">Timing</p>',
         unsafe_allow_html=True,
     )
     st.markdown('<div class="extend-chip-row">', unsafe_allow_html=True)
-    cols = st.columns(len(EXTEND_CHIP_FACTORS))
-    for col, factor in zip(cols, EXTEND_CHIP_FACTORS):
+    cols = st.columns(len(TIMING_CHIP_LABELS))
+    for col, (factor, label) in zip(cols, TIMING_CHIP_LABELS):
         with col:
-            on = current == factor
+            on = abs(current - factor) < 1e-9
             st.button(
-                f"{'● ' if on else ''}{factor}× Extend",
-                key=f"{key_prefix}_{factor}",
+                f"{'● ' if on else ''}{label}",
+                key=f"{key_prefix}_{str(factor).replace('.', '_')}",
                 use_container_width=True,
                 type="primary" if on else "secondary",
                 help=(
-                    f"Hold the progression {factor}× longer. "
-                    "That is the drone. Off = length as set."
+                    "Double = faster (half bars per chord). "
+                    "Half / Quarter hold each chord longer. "
+                    "1× = normal."
                 ),
-                on_click=_apply_extend_factor,
+                on_click=_apply_timing_factor,
                 args=(factor,),
             )
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+def _render_generation_mode_toggle(*, key_prefix: str = "gen_mode") -> None:
+    """Pattern | Progression → Engine apply_generation_mode (recipe default)."""
+    current = clamp_generation_mode(
+        st.session_state.get("generation_mode", DEFAULT_GENERATION_MODE)
+    )
+    st.session_state["generation_mode"] = current
+    st.markdown(
+        '<p class="feel-path-label">Pattern | Progression</p>',
+        unsafe_allow_html=True,
+    )
+    cols = st.columns(len(GENERATION_MODES))
+    for col, mode in zip(cols, GENERATION_MODES):
+        with col:
+            on = current == mode
+            st.button(
+                f"{'● ' if on else ''}{format_generation_mode_label(mode)}",
+                key=f"{key_prefix}_{mode}",
+                use_container_width=True,
+                type="primary" if on else "secondary",
+                help=(
+                    "Pattern walks an arpeggio. Progression holds each chord. "
+                    "Does not rewrite who / fingerprint. "
+                    "Wash recipes that opt out of held chords still win."
+                ),
+                on_click=_apply_generation_mode,
+                args=(mode,),
+            )
+
+
+def _render_compact_controls_strip() -> None:
+    """Song part · Timing · Pattern|Progression under Preview (locked order)."""
+    st.markdown('<div class="compact-controls">', unsafe_allow_html=True)
+    _render_section_chips(key_prefix="home_section")
+    _render_timing_chips(key_prefix="home_timing")
+    _render_generation_mode_toggle(key_prefix="home_mode")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 def _render_sketch_layout() -> None:
-    """Home knobs: bars, chord count, progression/arp shape."""
+    """More takeover: bars, chord count (shape lives on home as Pattern|Progression)."""
     st.markdown(
         '<p class="feel-path-label">Sketch</p>',
         unsafe_allow_html=True,
     )
-    bar_col, chord_col, shape_col = st.columns(3)
+    bar_col, chord_col = st.columns(2)
     with bar_col:
         st.slider(
             "Bars",
@@ -647,17 +737,13 @@ def _render_sketch_layout() -> None:
             key="chord_count",
             help="How many roots in the loop. Cycles the recipe progression.",
         )
-    with shape_col:
-        st.selectbox(
-            "Shape",
-            options=list(GENERATION_TYPES),
-            format_func=format_shape_label,
-            key="generation_type",
-            help="Progression holds each chord. Extend 2×–4× to make a drone. Arpeggio walks the same roots.",
-        )
 
 
 def _render_mood_packs(*, key_prefix: str = "mood") -> None:
+    st.markdown(
+        '<p class="feel-path-label">Mood</p>',
+        unsafe_allow_html=True,
+    )
     st.caption("Examples only — free-text stays first-class.")
     for pack in mood_packs:
         st.markdown(
@@ -837,7 +923,7 @@ st.markdown(
         color: #f0b4a4;
       }
 
-      /* Audition → Capture: light context unit; Play stays the hero below */
+      /* Capture / Play context (Audition strip dropped) */
       .audition-capture {
         border: 1px solid var(--line);
         border-radius: 14px;
@@ -1058,6 +1144,16 @@ st.markdown(
         max-width: 28rem;
         margin: 0.15rem 0 0.65rem 0;
       }
+      .compact-controls {
+        max-width: 48rem;
+        margin: 0.5rem 0 0.85rem 0;
+        padding: 0.55rem 0 0.15rem 0;
+        border-top: 1px solid var(--line);
+      }
+      .compact-controls .feel-path-label {
+        font-size: 0.95rem;
+        margin: 0.45rem 0 0.25rem 0;
+      }
 
       .chrome-row {
         max-width: 56rem;
@@ -1115,23 +1211,9 @@ MULTI_PORT_HELP = (
     "same IAC bus you pick here — mismatched ports mean silence."
 )
 
-# Light Audition→Capture context — denser opts live collapsed under Advanced.
-AUDITION_CAPTURE_STRIP_HTML = """
-<div class="audition-capture">
-  <div class="strip-label">Audition → Capture</div>
-  <div class="pair">
-    <div class="lane">
-      <p class="title">Play (live)</p>
-      <p class="sub">Hear the sketch in Logic — loops until Stop; stream only, nothing written.</p>
-    </div>
-    <div class="lane">
-      <p class="title">Record in Logic</p>
-      <p class="sub">Keep a region — live stream alone never writes the project.</p>
-    </div>
-  </div>
-  <p class="order"><strong>Capture order:</strong> Arm → Record in Logic → Play here.</p>
-</div>
-"""
+# Light context — denser opts live in Play / Record + Debug.
+# Audition strip dropped (UI Simplify); Play / Record tab carries the path.
+AUDITION_CAPTURE_STRIP_HTML = ""
 
 SILENCE_CHECKLIST_HTML = """
 <p class="silence-check"><strong>Hearing nothing?</strong>
@@ -1180,12 +1262,20 @@ if "catalog_pick" not in st.session_state:
     st.session_state["_persist_catalog_pick"] = None
 if "vibe_text" not in st.session_state:
     st.session_state["vibe_text"] = ""
+if "search_kind" not in st.session_state:
+    st.session_state["search_kind"] = DEFAULT_SEARCH_KIND
 if "bars" not in st.session_state:
     st.session_state["bars"] = DEFAULT_SKETCH_BARS
 if "chord_count" not in st.session_state:
     st.session_state["chord_count"] = DEFAULT_CHORD_COUNT
 if "generation_type" not in st.session_state:
     st.session_state["generation_type"] = DEFAULT_GENERATION_TYPE
+if "generation_mode" not in st.session_state:
+    st.session_state["generation_mode"] = generation_mode_from_type(
+        st.session_state.get("generation_type", DEFAULT_GENERATION_TYPE)
+    )
+if "timing_factor" not in st.session_state:
+    st.session_state["timing_factor"] = DEFAULT_TIMING_FACTOR
 if "effects_preset" not in st.session_state:
     st.session_state["effects_preset"] = "tape_and_human"
 if "use_sdk" not in st.session_state:
@@ -1195,13 +1285,15 @@ if "use_sdk" not in st.session_state:
 _seed_transport_bool_prefs()
 _persist_widget_keys()
 
-# Pending related-style regenerate (Try instead / Surprise me — named identity jump)
+# Pending related-style regenerate (Random / named identity jump)
 _pending_related = st.session_state.pop("pending_related_name", None)
 if _pending_related:
     if _pending_related in musician_names:
         st.session_state["catalog_pick"] = _pending_related
+        st.session_state["search_kind"] = "artist"
     else:
         st.session_state["vibe_text"] = _pending_related
+        st.session_state["search_kind"] = "mood"
     st.session_state["auto_generate"] = True
 
 # Again: same recipe, new take/seed (not an identity jump)
@@ -1226,7 +1318,13 @@ _catalog_who = str(st.session_state.get("catalog_pick") or "").strip()
 _vibe_now = str(st.session_state.get("vibe_text") or "").strip()
 _has_style_intent = bool(_catalog_who or _vibe_now)
 _gate = (
-    resolve_artist_gate_for_ui(_catalog_who, _vibe_now) if _has_style_intent else None
+    resolve_artist_gate_for_ui(
+        _catalog_who,
+        _vibe_now,
+        search_kind=st.session_state.get("search_kind", DEFAULT_SEARCH_KIND),
+    )
+    if _has_style_intent
+    else None
 )
 _artist_rejected = bool(
     _has_style_intent
@@ -1274,8 +1372,20 @@ st.session_state["chord_count"] = clamp_chord_count(
 st.session_state["generation_type"] = clamp_generation_type(
     st.session_state.get("generation_type", DEFAULT_GENERATION_TYPE)
 )
+st.session_state["generation_mode"] = clamp_generation_mode(
+    st.session_state.get(
+        "generation_mode",
+        generation_mode_from_type(st.session_state.get("generation_type")),
+    )
+)
 st.session_state["extend_factor"] = clamp_extend_factor(
     st.session_state.get("extend_factor", 1)
+)
+st.session_state["timing_factor"] = clamp_timing_factor(
+    st.session_state.get("timing_factor", DEFAULT_TIMING_FACTOR)
+)
+st.session_state["search_kind"] = clamp_search_kind(
+    st.session_state.get("search_kind", DEFAULT_SEARCH_KIND)
 )
 _section_role = st.session_state.get("section_role")
 if _section_role is not None and not str(_section_role).strip():
@@ -1326,8 +1436,8 @@ def _render_recipe_panel() -> None:
         st.markdown(
             """
             <div class="recipe-preview">
-              <div class="label">About to generate</div>
-              <div class="line">Search a feel or pick an artist.</div>
+              <div class="label">Preview here</div>
+              <div class="line">Search a feel or musician.</div>
               <div class="feel">Nothing is selected yet.</div>
             </div>
             """,
@@ -1353,14 +1463,21 @@ def _render_recipe_panel() -> None:
     layout = (
         f"{st.session_state.get('bars')} bars · "
         f"{st.session_state.get('chord_count')} chords · "
-        f"{format_shape_label(st.session_state.get('generation_type'))}"
+        f"{format_generation_mode_label(st.session_state.get('generation_mode'))}"
     )
+    timing = clamp_timing_factor(st.session_state.get("timing_factor", DEFAULT_TIMING_FACTOR))
+    timing_note = ""
+    if abs(timing - 1.0) > 1e-9:
+        for factor, label in TIMING_CHIP_LABELS:
+            if abs(timing - factor) < 1e-9:
+                timing_note = f" · {label}"
+                break
     st.markdown(
         f"""
         <div class="recipe-preview">
-          <div class="label">About to generate · {path_note}</div>
+          <div class="label">Preview here · {path_note}</div>
           <div class="line">{recipe.one_liner}</div>
-          <div class="feel">{recipe.plain_feel_line} · {layout}</div>
+          <div class="feel">{recipe.plain_feel_line} · {layout}{timing_note}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1369,21 +1486,61 @@ def _render_recipe_panel() -> None:
 
 def _render_search_feel() -> None:
     st.markdown(
-        '<p class="feel-path-label">Search / feel</p>',
+        '<p class="feel-path-label">Who or vibe</p>',
         unsafe_allow_html=True,
+    )
+    st.radio(
+        "Search as",
+        options=list(("mood", "artist")),
+        format_func=lambda k: "Mood" if k == "mood" else "Artist",
+        key="search_kind",
+        horizontal=True,
+        help=(
+            "Mood = Spotify genre candidates (Style Lab). "
+            "Artist = musician gate / catalog."
+        ),
+        label_visibility="collapsed",
+    )
+    kind = clamp_search_kind(st.session_state.get("search_kind"))
+    placeholder = (
+        "e.g. classic rock, ambient, jazz…"
+        if kind == "mood"
+        else "e.g. Philip Glass, Nils Frahm, Brian Eno…"
     )
     st.text_input(
         "Vibe (feel)",
-        placeholder="e.g. classic rock, ambient drone, gymnopédie, sheets of sound…",
+        placeholder=placeholder,
         help=(
-            "Search a feel or musician. Browse to pin an artist; "
-            "feel then layers on them instead of replacing them."
+            "Mood = genre feel. Artist = musician name. "
+            "Pick a match below when the list fills in."
         ),
         key="vibe_text",
         label_visibility="collapsed",
         width="stretch",
     )
     _render_who_caption()
+    q = str(st.session_state.get("vibe_text") or "").strip()
+    matches: list[str] = []
+    if kind == "artist":
+        matches = catalog_name_matches(q, limit=8)
+        pick = str(st.session_state.get("catalog_pick") or "").strip()
+        if pick and pick not in matches:
+            matches = [pick] + matches
+    elif q:
+        # Prefer Style Lab genre_artist_candidates (#34); empty until that merges.
+        matches = _mood_combo_names(q, limit=10)
+    if matches:
+        st.selectbox(
+            "Matches",
+            options=matches,
+            index=None,
+            placeholder="Pick a match…",
+            key="search_match_pick",
+            help="Potential matches — tap to pin.",
+            on_change=_on_search_match_pick,
+        )
+    elif kind == "mood" and q:
+        st.caption("No mood matches for that genre yet — try another feel or Artist search.")
 
 
 GENERATE_BUSY_COPY = "Resolving style and writing MIDI…"
@@ -1438,7 +1595,7 @@ def _render_generate_row() -> bool:
         surprise_pick = surprise_roll_pick[0] if surprise_roll_pick else None
         surprise_fx = surprise_roll_pick[1] if surprise_roll_pick else ""
         st.button(
-            "Surprise me",
+            "Random",
             use_container_width=True,
             key="surprise_me",
             disabled=surprise_pick is None,
@@ -1455,11 +1612,8 @@ def _render_generate_row() -> bool:
 
 
 def _render_again_try(run_data: dict) -> None:
-    """Fun Now sacred — Again + Try instead stay with Play on main."""
-    result = run_data["result"]
-    related = related_from_lookup_result(
-        result, limit=3, vibe_hint=run_data.get("query") or ""
-    )
+    """Again stays with Play — Try instead dropped (UI Simplify)."""
+    _ = run_data
     st.button(
         "Again",
         use_container_width=True,
@@ -1467,24 +1621,11 @@ def _render_again_try(run_data: dict) -> None:
         help="Same recipe, new take/seed.",
         on_click=_apply_again,
     )
-    if related:
-        st.markdown("#### Try instead")
-        st.caption("Adjacent feels from the full catalog — regenerates without resetting the form.")
-        rel_cols = st.columns(min(3, len(related)))
-        for i, rel in enumerate(related[:3]):
-            with rel_cols[i]:
-                st.button(
-                    rel.name,
-                    key=f"related_{rel.id}",
-                    use_container_width=True,
-                    on_click=_apply_related,
-                    args=(rel.name,),
-                )
 
 
 def _render_listen(run_data: dict) -> None:
-    """In-browser sine preview — home, not Geek."""
-    st.markdown("### Listen")
+    """In-browser sine preview — Search + Preview hero."""
+    st.markdown("### Preview here")
     if run_data.get("wav_bytes"):
         st.audio(run_data["wav_bytes"], format="audio/wav")
     else:
@@ -1492,7 +1633,7 @@ def _render_listen(run_data: dict) -> None:
 
 
 def _render_play_hero(run_data: dict, *, with_fun_now: bool = False) -> None:
-    """Sacred Play / Clear IAC — stays on home (and sticky if playing in a takeover)."""
+    """Sacred Play / Clear IAC — Play / Record tab (and sticky if playing elsewhere)."""
     result = run_data["result"]
     options = run_data["options"]
     path = run_data["path"]
@@ -1505,12 +1646,12 @@ def _render_play_hero(run_data: dict, *, with_fun_now: bool = False) -> None:
     if "live_sync_logic" not in st.session_state:
         st.session_state["live_sync_logic"] = False
 
-    # Fun Now (Again / Try instead) sits with Play on main — not buried in a takeover.
+    # Again sits with Play — Try instead dropped.
     if with_fun_now:
         _render_again_try(run_data)
 
-    st.markdown("### Play into Logic")
-    # Honest: live stream ≠ region. Capture takeover is the record path (not a second page).
+    st.markdown("### Play in Logic")
+    # Honest: live stream ≠ region. Record setup lives in this same tab.
     st.caption(
         "Play sends MMC Record + MIDI Start. One click starts the take. "
         "Logic must Listen to MMC Input and MIDI Clock on this IAC bus. "
@@ -1519,7 +1660,7 @@ def _render_play_hero(run_data: dict, *, with_fun_now: bool = False) -> None:
     if not live.available:
         st.warning(
             live.error
-            or "No MIDI ports available. Enable IAC Driver, then Capture → Refresh."
+            or "No MIDI ports available. Enable IAC Driver, then Refresh ports below."
         )
     else:
         port_now = st.session_state.get("live_port") or (ports[0] if ports else None)
@@ -1530,7 +1671,7 @@ def _render_play_hero(run_data: dict, *, with_fun_now: bool = False) -> None:
         play_col, stop_col = st.columns([4, 1])
         with play_col:
             if st.button(
-                "Re-Play" if player.phase == "playing" else "Play into Logic",
+                "Re-Play" if player.phase == "playing" else "Play in Logic",
                 type="primary",
                 use_container_width=True,
                 key="play_logic",
@@ -1698,7 +1839,7 @@ def _render_effects_chips(run_data: dict | None) -> None:
 
 
 def _render_capture_setup() -> None:
-    """Count-in / loop, IAC tip, Refresh, silence checklist (takeover)."""
+    """Count-in / loop, IAC tip, Refresh, silence checklist (Play / Record tab)."""
     _show_iac_tip()
     _render_iac_status_chip(ports)
     st.button(
@@ -1735,12 +1876,12 @@ def _render_capture_setup() -> None:
         if not port_looks_like_iac(ports[0]):
             st.caption("Prefer enabling IAC Driver for Logic — then Refresh ports.")
 
-    st.markdown(AUDITION_CAPTURE_STRIP_HTML, unsafe_allow_html=True)
     st.markdown(SILENCE_CHECKLIST_HTML, unsafe_allow_html=True)
 
-    # Before Record / Capture denser opts (count-in Off; Loop On by default)
-    st.markdown("#### Before Record / Capture")
+    # Before Record denser opts (count-in Off; Loop On by default)
+    st.markdown("#### Record")
     st.caption(
+        "Arm the track in Logic. Play here punches MMC Record + Start. "
         "Lock to Logic: transmit MIDI Clock from Logic to this IAC bus, "
         "then Play here, then Play in Logic. Notes fire on Logic’s downbeat."
     )
@@ -1769,7 +1910,7 @@ def _render_capture_setup() -> None:
         )
     if st.session_state.get("live_soft_click"):
         st.caption(
-            "Soft click is On (Advanced) — click MIDI will be captured "
+            "Soft click is On (Debug) — click MIDI will be captured "
             "if Logic is recording."
         )
     if not _transport_busy:
@@ -1808,7 +1949,7 @@ def _render_advanced_takeover() -> None:
         key="live_soft_click",
         help="Sends metronome notes on the same MIDI port during count-in. "
         "Off by default — count-in stays truly silent. "
-        "Count-in itself is under Capture setup near Play.",
+        "Count-in itself is under Record near Play.",
     )
     if soft_click:
         st.caption(
@@ -1826,6 +1967,16 @@ def _render_geek_takeover(run_data: dict) -> None:
     summary = run_data["summary"]
     path = run_data["path"]
     profile = result.profile
+
+    st.markdown("#### Live MIDI")
+    st.caption(
+        "Live options rewrite the sketch and keep streaming. "
+        "Save only via Download — no chat edit, no note-level mutate."
+    )
+    _render_arp_live(profile)
+    st.markdown("#### Save")
+    _render_download(run_data)
+    st.divider()
 
     st.caption(run_data.get("match_line") or format_match_line(profile))
     st.markdown(
@@ -1908,19 +2059,17 @@ if takeover:
     # Keep Clear IAC reachable if a stream is active while buried in a takeover.
     if run and (player.playing or st.session_state.get("live_was_playing")):
         _render_play_hero(run)
-    if takeover == "browse":
+    if takeover == "more":
+        _render_bars_knobs()
+        _render_sketch_layout()
+        _render_arp_live(recipe.profile if recipe else None)
+        st.divider()
+        st.caption("Catalog pin (optional)")
         _render_featured_styles()
         _render_catalog_selectbox(musician_names)
-    elif takeover == "moods":
-        _render_mood_packs(key_prefix="mood")
-    elif takeover == "length":
-        _render_bars_knobs()
-        _render_arp_live(recipe.profile if recipe else None)
     elif takeover == "effects":
         _render_effects_takeover()
-    elif takeover == "capture":
-        _render_capture_setup()
-    elif takeover == "advanced":
+    elif takeover == "debug":
         _render_advanced_takeover()
     elif takeover == "geek":
         if run:
@@ -1928,7 +2077,7 @@ if takeover:
         else:
             st.info("Generate a sketch first.")
 else:
-    # --- HOME: Search → Generate → Play (sacred chrome stays here) ---
+    # --- HOME: Search + Preview | Play / Record (Logic stack wrapped, not rewritten) ---
     st.markdown(
         """
         <div class="hero">
@@ -1938,68 +2087,83 @@ else:
         """,
         unsafe_allow_html=True,
     )
-    _render_search_feel()
-    _render_section_chips(key_prefix="home_section")
-    _render_extend_chips(key_prefix="home_extend")
-    _render_sketch_layout()
     _render_chrome_row(has_sketch=bool(run))
-    _render_recipe_panel()
-    generate = _render_generate_row()
-    _gen_busy = bool(generate or st.session_state.get("auto_generate"))
 
-    if st.session_state.get("generate_error") and not run:
-        _reject = st.session_state.get("artist_reject_reason")
-        if _reject or st.session_state["generate_error"] == ARTIST_REJECT_DRIP:
-            st.error(artist_reject_drip_copy(_reject))
-        else:
-            st.error(f"Generation failed: {st.session_state['generate_error']}")
-
-    if _gen_busy:
-        _render_generate_loading()
-    elif not run:
-        st.info("Type a feel or open Mood, then Generate — or Surprise me.")
-    else:
-        result = run["result"]
-        options = run["options"]
-        profile = result.profile
-        st.success(result.message)
-        plain = run.get("plain_feel_line") or format_plain_feel_match(profile)
-        st.markdown(f'<p class="post-feel">{plain}</p>', unsafe_allow_html=True)
-        st.caption(
-            f"{options.get('mode')} · {options.get('bpm')} BPM · "
-            f"{options.get('bars')} bars · "
-            f"{len(options.get('chord_progression') or [])} chords · "
-            f"{format_shape_label(options.get('generation_type'))}"
-        )
-        likeness = run.get("likeness_blurb")
-        if not likeness:
-            likeness = format_likeness_blurb(
-                profile, used_cursor_sdk=bool(result.used_cursor_sdk)
+    tab_search, tab_play = st.tabs(["Search + Preview", "Play / Record"])
+    generate = False
+    with tab_search:
+        # Locked order: Search → Mood chips → Preview → compact strip → Generate/Random
+        _render_search_feel()
+        _render_mood_packs(key_prefix="mood")
+        _render_recipe_panel()
+        _gen_busy_early = bool(st.session_state.get("auto_generate"))
+        if _gen_busy_early:
+            _render_generate_loading()
+        elif run:
+            result = run["result"]
+            options = run["options"]
+            profile = result.profile
+            st.success(result.message)
+            plain = run.get("plain_feel_line") or format_plain_feel_match(profile)
+            st.markdown(f'<p class="post-feel">{plain}</p>', unsafe_allow_html=True)
+            st.caption(
+                f"{options.get('mode')} · {options.get('bpm')} BPM · "
+                f"{options.get('bars')} bars · "
+                f"{len(options.get('chord_progression') or [])} chords · "
+                f"{format_generation_mode_label(options.get('generation_mode') or generation_mode_from_type(options.get('generation_type')))}"
             )
-        if likeness:
-            label, body = likeness
-            st.markdown(f"**{label}**")
-            st.write(body)
-        _render_listen(run)
-        # Again + Try instead with Play (Fun Now sacred on main).
-        _render_play_hero(run, with_fun_now=True)
-        _render_download(run)
-        _render_effects_chips(run)
+            likeness = run.get("likeness_blurb")
+            if not likeness:
+                likeness = format_likeness_blurb(
+                    profile, used_cursor_sdk=bool(result.used_cursor_sdk)
+                )
+            if likeness:
+                label, body = likeness
+                st.markdown(f"**{label}**")
+                st.write(body)
+            _render_listen(run)
+        else:
+            st.info("Type a feel or tap a Mood, then Generate — or Random.")
 
-# Auto-generate from Again / Surprise / live tweaks / effects chips
+        _render_compact_controls_strip()
+        generate = _render_generate_row()
+        _gen_busy = bool(generate or st.session_state.get("auto_generate"))
+
+        if st.session_state.get("generate_error") and not run:
+            _reject = st.session_state.get("artist_reject_reason")
+            if _reject or st.session_state["generate_error"] == ARTIST_REJECT_DRIP:
+                st.error(artist_reject_drip_copy(_reject))
+            else:
+                st.error(f"Generation failed: {st.session_state['generate_error']}")
+
+        if run and not _gen_busy:
+            _render_download(run)
+            _render_effects_chips(run)
+
+    with tab_play:
+        # Chrome wrap only — existing Play/IAC/loop/capture stack; no live_midi rewrite.
+        if not run:
+            st.info("Generate a sketch first, then Play in Logic / Record.")
+        else:
+            _render_play_hero(run, with_fun_now=True)
+            _render_capture_setup()
+
+# Auto-generate from Again / Random / live tweaks / effects chips
 if st.session_state.pop("auto_generate", False):
     generate = False if _artist_rejected or not _has_style_intent else True
 
 bars = clamp_bars(int(st.session_state.get("bars", DEFAULT_SKETCH_BARS)))
 chord_count = clamp_chord_count(st.session_state.get("chord_count", DEFAULT_CHORD_COUNT))
-generation_type = clamp_generation_type(
-    st.session_state.get("generation_type", DEFAULT_GENERATION_TYPE)
+generation_mode = clamp_generation_mode(
+    st.session_state.get("generation_mode", DEFAULT_GENERATION_MODE)
 )
 use_sdk = bool(st.session_state.get("use_sdk", _cursor_api_key_present()))
 section_role = st.session_state.get("section_role")
 if section_role is not None and not str(section_role).strip():
     section_role = None
-extend_factor = clamp_extend_factor(st.session_state.get("extend_factor", 1))
+timing_factor = clamp_timing_factor(
+    st.session_state.get("timing_factor", DEFAULT_TIMING_FACTOR)
+)
 
 # --- Generate pipeline ---
 if generate:
@@ -2010,15 +2174,13 @@ if generate:
             "effects_preset": effects_preset,
             "bars": int(bars),
             "chord_count": int(chord_count),
-            "generation_type": generation_type,
+            "generation_mode": generation_mode,
             "debug": False,
         }
-        if generation_type == "drone":
-            overrides["drone_held"] = True
         if section_role:
             overrides["section_role"] = section_role
-        if extend_factor > 1:
-            overrides["extend_factor"] = int(extend_factor)
+        if abs(timing_factor - 1.0) > 1e-9:
+            overrides["timing_factor"] = float(timing_factor)
         if st.session_state.get("arp_mode") in ARP_MODE_LABELS:
             overrides["arp_mode"] = st.session_state["arp_mode"]
         if st.session_state.get("arp_steps") in ARP_STEP_CHOICES:
