@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .arpeggio_generation import resolve_extend_factor, resolve_timing_factor
-from .effects_presets import get_preset, list_presets
+from .effects_presets import format_preset_labels, list_presets, normalize_preset_ids
 from .musician_styles import (
     MUSICIAN_STYLE_CATALOG,
     MusicianStyleProfile,
@@ -61,7 +61,7 @@ GENERATION_MODE_LABELS: Dict[str, str] = {
     "progression": "Progression",
 }
 SEARCH_KINDS: tuple[str, ...] = ("mood", "artist")
-DEFAULT_SEARCH_KIND = "mood"
+DEFAULT_SEARCH_KIND = "artist"
 
 
 # Curated subset spanning the FULL catalog (not only recently enriched profiles).
@@ -447,7 +447,8 @@ def surprise_effects_preset(
     ids = [str(p["id"]) for p in list_presets() if p.get("id")]
     if not ids:
         return "tape_and_human"
-    pool = [i for i in ids if i != (avoid or "").strip()] or ids
+    skip = set(normalize_preset_ids(avoid, default="clean")) if (avoid or "").strip() else set()
+    pool = [i for i in ids if i not in skip] or ids
     picker = rng if rng is not None else random
     return picker.choice(pool)
 
@@ -552,9 +553,9 @@ def format_recipe_one_liner(
         return f"{profile.name} · {role} · {_section_drip_shape(profile)}"
     preset_id = effects_preset or profile.effects_preset
     try:
-        preset_label = get_preset(preset_id)["label"]
+        preset_label = format_preset_labels(preset_id)
     except Exception:
-        preset_label = preset_id
+        preset_label = str(preset_id or "")
     if profile.generation_type == "drone":
         gen = "drone" if profile.drone_held is False else "progression"
     else:
@@ -581,9 +582,9 @@ def format_match_line(
     )
     preset_id = effects_preset or profile.effects_preset
     try:
-        preset_label = get_preset(preset_id)["label"]
+        preset_label = format_preset_labels(preset_id)
     except Exception:
-        preset_label = preset_id
+        preset_label = str(preset_id or "")
     return (
         f"Matched: {profile.name} · {mtype} · {profile.mode} · {preset_label}"
     )
@@ -895,10 +896,11 @@ def vibe_is_different_artist_identity(
 
     Different artist =
       - Spotify type=artist accept whose name is not the who-chip, or
+      - agent artist identity whose name is not the who-chip, or
       - catalog musician *name* hit that is not the who-chip.
 
-    Style aliases / mood chips stay pinned only when Spotify did not return
-    a different artist (genre queries resolve to the Spotify artist).
+    Style aliases / mood chips stay pinned only when the gate did not return
+    a different artist (genre queries resolve to the accepted artist).
     """
     who = (catalog_name or "").strip()
     vibe = (vibe_text or "").strip()
@@ -907,12 +909,17 @@ def vibe_is_different_artist_identity(
     if who and vibe.lower() == who.lower():
         return False
     if gate_accept is not None and getattr(gate_accept, "accepted", False):
-        if getattr(gate_accept, "source", None) == "spotify":
+        source = getattr(gate_accept, "source", None)
+        if source == "spotify":
             artist = getattr(gate_accept, "spotify_artist", None)
             if artist is not None and (artist.type or "") == "artist":
                 artist_name = (artist.name or "").strip()
                 if artist_name and artist_name.lower() != who.lower():
                     return True
+        if source == "agent" and getattr(gate_accept, "agent_kind", None) == "artist":
+            artist_name = str(getattr(gate_accept, "agent_name", "") or "").strip()
+            if artist_name and artist_name.lower() != who.lower():
+                return True
     if _vibe_is_feel_language(vibe):
         return False
     other = _catalog_musician_named(vibe, excluding=who)
@@ -930,7 +937,7 @@ def resolve_lookup_inputs(
 
     Empty vibe → catalog who (catalog stick).
     Feel language / unknown feel → who+feel query, identity stays (Fun Now).
-    Different artist identity (other catalog musician or Spotify stranger ≠ who)
+    Different artist identity (other catalog musician, Spotify, or agent ≠ who)
     → vibe is the query, identity unpinned (no Glass wallpaper).
     """
     vibe = (vibe_text or "").strip()
@@ -938,11 +945,17 @@ def resolve_lookup_inputs(
     if not vibe:
         return who, (who or None)
     if vibe_is_different_artist_identity(who, vibe, gate_accept=gate_accept):
-        if gate_accept is not None and getattr(gate_accept, "source", None) == "spotify":
-            artist = getattr(gate_accept, "spotify_artist", None)
-            artist_name = (getattr(artist, "name", None) or "").strip()
-            if artist_name:
-                return artist_name, None
+        if gate_accept is not None and getattr(gate_accept, "accepted", False):
+            source = getattr(gate_accept, "source", None)
+            if source == "spotify":
+                artist = getattr(gate_accept, "spotify_artist", None)
+                artist_name = (getattr(artist, "name", None) or "").strip()
+                if artist_name:
+                    return artist_name, None
+            if source == "agent" and getattr(gate_accept, "agent_kind", None) == "artist":
+                artist_name = str(getattr(gate_accept, "agent_name", "") or "").strip()
+                if artist_name:
+                    return artist_name, None
         return vibe, None
     # Feel layers on selected artist.
     return resolve_happy_path_query(who, vibe), (who or None)
@@ -978,9 +991,8 @@ def resolve_artist_gate_for_ui(
 
     Typed Search / feel always hits Spotify (force_spotify).
     Empty vibe pins the catalog who so catalog picks stay local.
-
-    Mood combo rows come from Style Lab ``genre_artist_candidates`` (#34)
-    when present — this gate stays the artist path.
+    Does not ask Cursor here — a Spotify outage must reach Generate
+    so the Generating stage is visible.
     """
     from .artist_gate import resolve_artist_query
 
@@ -993,12 +1005,47 @@ def resolve_artist_gate_for_ui(
             identity_name=None,
             spotify_search=spotify_search,
             force_spotify=True,
+            allow_cursor_fallback=False,
         )
     return resolve_artist_query(
         who,
         identity_name=who or None,
         spotify_search=spotify_search,
+        allow_cursor_fallback=False,
     )
+
+
+def artist_gate_blocks_generate(gate, *, cursor_available: bool) -> bool:
+    """
+    True when Sample should drip and skip generate.
+
+    Spotify down + Cursor key → do not drip; generate asks Cursor.
+    """
+    if gate is None:
+        return False
+    if getattr(gate, "accepted", False):
+        return False
+    reason = getattr(gate, "reason", None)
+    if reason in ("spotify_error", "missing_credentials") and cursor_available:
+        return False
+    return True
+
+
+def artist_gate_wipes_sketch(
+    *,
+    blocks_generate: bool,
+    generating: bool,
+    has_sketch: bool,
+) -> bool:
+    """
+    True when a gate reject may clear last_run.
+
+    A finished sketch survives a later rerun reject. A new Search / Generate
+    still wipes.
+    """
+    if not blocks_generate:
+        return False
+    return bool(generating or not has_sketch)
 
 
 def artist_reject_drip_copy(reason: str | None = None) -> str:

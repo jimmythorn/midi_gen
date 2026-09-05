@@ -1,7 +1,7 @@
 """
 Lightweight audio preview from a MIDI file.
 
-Renders a simple sine+noise instrument to WAV so the UI can play results
+Renders a piano-like additive voice to WAV so the UI can play results
 without a DAW or soundfont install. Honors pitch-bend events so tape
 wow/flutter is audible in the quick preview.
 """
@@ -118,13 +118,42 @@ def _collect_notes(path: str) -> Tuple[List[Tuple[float, float, int, int]], floa
     return simple, duration, bpm
 
 
+def _piano_voice(
+    phase: np.ndarray,
+    *,
+    sample_rate: int,
+    velocity: int,
+    pitch: int,
+) -> np.ndarray:
+    """Hammer click + decaying partials. No soundfont."""
+    n = int(phase.shape[0])
+    if n <= 0:
+        return np.zeros(0, dtype=np.float32)
+    t = np.arange(n, dtype=np.float64) / float(sample_rate)
+    vel = max(0.05, min(1.0, velocity / 127.0))
+    amps = np.array([1.00, 0.62, 0.38, 0.22, 0.14, 0.08, 0.04], dtype=np.float64)
+    amps[1:] *= 0.35 + 0.65 * vel
+    decays = np.array([1.8, 3.2, 5.0, 7.5, 10.0, 13.0, 16.0], dtype=np.float64)
+    decays *= 1.0 + max(0, pitch - 60) / 80.0
+    tone = np.zeros(n, dtype=np.float64)
+    for k, (amp, dec) in enumerate(zip(amps, decays), start=1):
+        tone += amp * np.sin(k * phase) * np.exp(-dec * t)
+    rng = np.random.RandomState((int(pitch) * 31 + int(velocity)) & 0xFFFF)
+    hammer_n = max(1, int(0.006 * sample_rate))
+    take = min(hammer_n, n)
+    hammer = np.zeros(n, dtype=np.float64)
+    hammer[:take] = rng.randn(take) * (0.18 * vel)
+    hammer[:take] *= np.linspace(1.0, 0.0, take)
+    return (tone + hammer).astype(np.float32)
+
+
 def render_midi_to_wav_bytes(
     path: str,
     *,
     sample_rate: int = 22050,
-    gain: float = 0.22,
+    gain: float = 0.20,
 ) -> bytes:
-    """Synthesize a mono 16-bit WAV preview of the MIDI file (pitch-bend aware)."""
+    """Synthesize a mono 16-bit piano WAV preview (pitch-bend aware)."""
     notes, bends_by_channel, duration, _bpm = _collect_timeline(path)
     n_samples = max(1, int(duration * sample_rate))
     audio = np.zeros(n_samples, dtype=np.float32)
@@ -137,13 +166,13 @@ def render_midi_to_wav_bytes(
         n = i1 - i0
         bend_pts = bends_by_channel.get(channel) or bends_by_channel.get(0, [])
         cents = _bend_cents_series(start, n, sample_rate, bend_pts)
-        # Phase-accurate FM so wow/flutter is audible (not a static detune)
         freq = _midi_to_hz(pitch) * (2.0 ** (cents / 1200.0))
         phase = np.cumsum(2.0 * np.pi * freq / sample_rate, dtype=np.float64)
-        tone = np.sin(phase).astype(np.float32) + 0.25 * np.sin(2.0 * phase).astype(np.float32)
-        # Simple ADSR-ish envelope
-        attack = max(1, int(0.01 * sample_rate))
-        release = max(1, int(0.08 * sample_rate))
+        tone = _piano_voice(
+            phase, sample_rate=sample_rate, velocity=velocity, pitch=pitch
+        )
+        attack = max(1, int(0.004 * sample_rate))
+        release = max(1, int(0.22 * sample_rate))
         env = np.ones(n, dtype=np.float32)
         a = min(attack, n)
         r = min(release, n)
@@ -193,6 +222,6 @@ def describe_preview(path: str) -> str:
     more = "…" if len(notes) > 12 else ""
     bend_bit = f" · {bend_count} bends" if bend_count else ""
     return (
-        f"Preview synth · {len(notes)} notes · {duration:.1f}s · ~{bpm} BPM"
+        f"Preview piano · {len(notes)} notes · {duration:.1f}s · ~{bpm} BPM"
         f"{bend_bit} · {' '.join(names)}{more}"
     )

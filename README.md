@@ -17,7 +17,7 @@ The Streamlit Style Lab is the primary surface. The CLI (`python -m midi_gen`) r
 - **Recipe preview + match line** before Generate; **Try instead** related styles after.
 - **Play into Logic (IAC)** — Audition→Capture strip; Refresh ports; Count-in / Loop (app-side); All notes off (CC123); Record in Logic to keep a region.
 - **Transport prefs** — count-in / loop / soft-click / last MIDI port persist locally across Streamlit restarts (defaults Off / On / Off — Play loops until Stop).
-- **Listen on home** — sine preview plays in the page after Generate (pitch-bend / tape wow audible). Play into Logic for a real instrument.
+- **Listen on home** — piano preview plays in the page after Generate (pitch-bend / tape wow audible). Play into Logic for a sampled instrument.
 - **Mode color** — characteristic tones (#4 Lydian, nat6/9 Dorian, b7 Mixolydian, …) on weak beats so modes aren’t triad wallpaper.
 - **Effects presets** — Clean / Human feel / Subtle tape / Worn tape / Tape + human.
 - **Cursor SDK hook** — optional; Advanced toggle in the UI (enrich-this-vibe).
@@ -39,7 +39,7 @@ python3 -m midi_gen
 
 Optional Cursor SDK enrichment: `export CURSOR_API_KEY=crsr_...` before `./run_ui.sh`.
 
-Artist gate (reject-before-generate): typed Search / feel always hits Spotify Artist Search via Client Credentials (`SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` — never commit secrets): name search first, then `genre:"query"` if name search is empty. Browse catalog picks with an empty search stay local. Accept `type=artist` with a name. `followers.total >= 10000` applies only when Spotify sends a count (Client Credentials payloads often omit followers/genres). Below that / non-artists fail closed before `create_arp` / SDK enrich. Sample Musician drip copy stays plain ("Not finding a musician…").
+Artist gate (reject-before-generate): typed Search / feel always hits Spotify Artist Search via Client Credentials (`SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` — never commit secrets): name search first, then `genre:"query"` if name search is empty. Browse catalog picks with an empty search stay local. Accept `type=artist` with a name. `followers.total >= 10000` applies only when Spotify sends a count (Client Credentials payloads often omit followers/genres). Spotify down (HTTP / missing credentials) bypasses to the Cursor music-identity agent. Below that / non-artists fail closed before `create_arp` / SDK enrich. Sample Musician drip copy stays plain ("Not finding a musician…").
 
 **Mood path (Sketch UX combo-box):** Style Lab exposes `genre_artist_candidates(genre)` — genre-first Spotify search → ranked artist candidates `(name, id, followers, genres)` for home-search match lists. Mood chips stay UI-owned. Fail closed when the genre has no usable artists. See [MOOD_SEARCH.md](MOOD_SEARCH.md). Does not replace the artist name path or the 10k gate.
 

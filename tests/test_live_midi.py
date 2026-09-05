@@ -602,7 +602,8 @@ def test_ui_crisp_audit_extras_a_through_e():
     assert "MMC Stop" in src
     assert "transport_caption()" in src
     assert "_persist_live_prefs" in src
-    assert "st.columns([4, 1])" in src
+    assert "play-hero-stack" in src
+    assert "port_col, record_col" in src
     assert "panic_col" not in src
     assert 'key="panic_logic"' not in src
 

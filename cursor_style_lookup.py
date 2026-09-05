@@ -37,6 +37,7 @@ from .effects_presets import build_effects_config, get_preset
 
 
 STYLE_PROFILE_JSON_SCHEMA = """
+You are sandboxed to music and musical composition only. Reject non-music.
 Research the query first. Use your knowledge of the musician's recorded work,
 typical harmony, rhythm, texture, tempo range, and studio habits — or, for a
 vibe, the genre/feel it names. Closest local catalog hits are hints only; do
@@ -216,7 +217,7 @@ def lookup_with_cursor_sdk(
     if not cursor_sdk_available():
         return None, None
 
-    from cursor_sdk import Agent, LocalAgentOptions
+    from .music_agent import MUSIC_SANDBOX_RULES, create_music_agent
 
     catalog_hint = ", ".join(p.name for p in find_profiles(query, limit=3)) or "none"
     known_styles = ", ".join(list_styles()[:20])
@@ -230,6 +231,7 @@ def lookup_with_cursor_sdk(
     else:
         head = f"Musician or vibe query: {query!r}\n"
     prompt = (
+        f"{MUSIC_SANDBOX_RULES}\n"
         f"{head}"
         f"Closest local catalog hits (hints only, do not copy unless same person): {catalog_hint}\n"
         f"Known style tags: {known_styles}\n\n"
@@ -237,14 +239,9 @@ def lookup_with_cursor_sdk(
     )
 
     api_key = os.environ["CURSOR_API_KEY"]
-    cwd = os.path.dirname(os.path.abspath(__file__))
 
     try:
-        with Agent.create(
-            model="composer-2.5",
-            api_key=api_key,
-            local=LocalAgentOptions(cwd=cwd),
-        ) as agent:
+        with create_music_agent(api_key=api_key, name="midi-gen-composition") as agent:
             run = agent.send(prompt)
             # Prefer blocking text() API from docs
             raw = run.text() if hasattr(run, "text") else str(run)
@@ -300,7 +297,11 @@ def _strong_local_identity(
 
 
 def _spotify_genre_styles(gate: Optional[ArtistGateAccept]) -> List[str]:
-    if gate is None or gate.spotify_artist is None:
+    if gate is None:
+        return []
+    if gate.agent_genres:
+        return list(gate.agent_genres)
+    if gate.spotify_artist is None:
         return []
     return list(gate.spotify_artist.genres)
 
@@ -311,7 +312,10 @@ def _cousin_seed_query(
 ) -> str:
     """Build find_profiles seed from accepted-artist genres + name + query."""
     parts: List[str] = []
-    if gate is not None and gate.spotify_artist is not None:
+    if gate is not None and gate.agent_name:
+        parts.extend(gate.agent_genres)
+        parts.append(gate.agent_name)
+    elif gate is not None and gate.spotify_artist is not None:
         artist = gate.spotify_artist
         parts.extend(artist.genres)
         if artist.name:
@@ -348,7 +352,12 @@ def _cousin_is_strong(
 
 
 def _style_notes_from_gate(gate: Optional[ArtistGateAccept]) -> str:
-    if gate is None or gate.spotify_artist is None:
+    if gate is None:
+        return ""
+    if gate.source == "agent" and gate.agent_name:
+        genres = ", ".join(gate.agent_genres) if gate.agent_genres else "(no genres)"
+        return f"Agent accept: {gate.agent_name}; kind={gate.agent_kind}; genres=[{genres}]"
+    if gate.spotify_artist is None:
         return ""
     artist = gate.spotify_artist
     genres = ", ".join(artist.genres) if artist.genres else "(no genres)"
@@ -460,7 +469,10 @@ def _resolve_stranger_or_sparse(
 
     if cousins and _cousin_is_strong(query, cousins[0], gate):
         cousin_profile = cousin_recipe_from_neighbors(
-            (gate.spotify_artist.name if gate and gate.spotify_artist else query),
+            (
+                (gate.agent_name if gate and gate.agent_name else None)
+                or (gate.spotify_artist.name if gate and gate.spotify_artist else query)
+            ),
             cousins,
             styles=genres or None,
             style_notes=notes,
@@ -487,7 +499,10 @@ def _resolve_stranger_or_sparse(
             )
 
     sparse = sparse_unknown_profile(
-        (gate.spotify_artist.name if gate and gate.spotify_artist else query),
+        (
+            (gate.agent_name if gate and gate.agent_name else None)
+            or (gate.spotify_artist.name if gate and gate.spotify_artist else query)
+        ),
         styles=genres or None,
         style_notes=notes or "Honest sparse unknown — no strong local cousin.",
     )
@@ -515,7 +530,7 @@ def lookup_musician_style(
     Resolve a musician/style query into a MIDI generation profile.
 
     Resolution order:
-    1. Artist gate (catalog/alias, else Spotify type=artist) — fail closed
+    1. Artist gate (catalog/alias, else Spotify; Cursor if Spotify is down) — fail closed
     2. Local catalog match (identity pin or scored hit)
     3. Optional Cursor SDK enrichment when CURSOR_API_KEY is set
     4. Cousin few-shot from 2–3 nearest catalog recipes (genres/followers bind)

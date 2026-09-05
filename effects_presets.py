@@ -7,7 +7,7 @@ These presets expose intent first; advanced knobs stay available underneath.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 
 EFFECT_PRESETS: Dict[str, Dict[str, Any]] = {
@@ -111,21 +111,73 @@ def get_preset(preset_id: str) -> Dict[str, Any]:
     return EFFECT_PRESETS.get(preset_id, EFFECT_PRESETS["clean"])
 
 
-def build_effects_config(preset_id: str, overrides: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+def normalize_preset_ids(
+    raw: Any,
+    *,
+    default: str = "tape_and_human",
+) -> Tuple[str, ...]:
+    """Accept one id, a comma string, or a sequence. Drop unknown ids."""
+    if raw is None:
+        parts: List[str] = []
+    elif isinstance(raw, (list, tuple, set)):
+        parts = [str(p).strip() for p in raw]
+    else:
+        parts = [
+            p.strip()
+            for p in str(raw).replace(";", ",").split(",")
+            if p.strip()
+        ]
+    seen: List[str] = []
+    for pid in parts:
+        if pid in EFFECT_PRESETS and pid not in seen:
+            seen.append(pid)
+    if "clean" in seen and len(seen) > 1:
+        seen = [pid for pid in seen if pid != "clean"]
+    if not seen:
+        fallback = default if default in EFFECT_PRESETS else "tape_and_human"
+        return (fallback,)
+    return tuple(seen)
+
+
+def serialize_preset_ids(raw: Any, *, default: str = "tape_and_human") -> str:
+    return ",".join(normalize_preset_ids(raw, default=default))
+
+
+def format_preset_labels(raw: Any, *, default: str = "tape_and_human") -> str:
+    ids = normalize_preset_ids(raw, default=default)
+    return " + ".join(str(EFFECT_PRESETS[pid]["label"]) for pid in ids)
+
+
+def build_effects_config(
+    preset_id: Union[str, Sequence[str]],
+    overrides: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
     """
     Build effects_config list for create_arp / EffectRegistry.
+
+    preset_id may be one id, a comma-joined string, or several ids.
+    Same-named effects later in the list replace earlier ones.
 
     overrides can tweak numeric fields on matching effect names, e.g.
     {"tape_wobble": {"wow_depth": 20}}.
     """
-    preset = get_preset(preset_id)
-    configs: List[Dict[str, Any]] = []
-    for effect in preset["effects"]:
-        conf = dict(effect)
-        if overrides and conf["name"] in overrides:
-            conf.update(overrides[conf["name"]])
-        configs.append(conf)
-    return configs
+    ids = normalize_preset_ids(preset_id, default="clean")
+    merged: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for pid in ids:
+        if pid == "clean":
+            continue
+        for effect in get_preset(pid)["effects"]:
+            conf = dict(effect)
+            name = str(conf.get("name") or "")
+            if not name:
+                continue
+            if overrides and name in overrides:
+                conf.update(overrides[name])
+            if name not in merged:
+                order.append(name)
+            merged[name] = conf
+    return [merged[name] for name in order]
 
 
 def explain_effects_config(effects_config: List[Dict[str, Any]]) -> List[str]:

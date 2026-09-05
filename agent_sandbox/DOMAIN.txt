@@ -1,0 +1,8 @@
+Allowed: musicians, bands, composers, DJs, ensembles, music genres and styles,
+harmony, melody, rhythm, meter, tempo, timbre, texture, form, orchestration,
+MIDI, synthesis, studio process as it affects composition.
+
+Forbidden: non-music topics, crime, politics, medical or legal advice,
+biography that is not about recorded or composed work, general knowledge,
+secrets, credentials, filesystem paths outside this folder, code changes,
+shell commands, web browsing.

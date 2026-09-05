@@ -21,7 +21,13 @@ from midi_gen.cursor_style_lookup import (
     generate_midi_for_style,
     load_dotenv_if_present,
 )
-from midi_gen.effects_presets import build_effects_config, explain_effects_config, get_preset
+from midi_gen.effects_presets import (
+    build_effects_config,
+    explain_effects_config,
+    format_preset_labels,
+    get_preset,
+    normalize_preset_ids,
+)
 from midi_gen.musician_styles import find_best_profile, list_styles, profile_from_dict
 from midi_gen.notes import note_str_to_midi, note_to_name
 from midi_gen.preview import summarize_midi_file
@@ -90,6 +96,10 @@ def test_effects_presets_plain_language():
     assert "humanize_velocity" in names
     lines = explain_effects_config(config)
     assert any("Tape" in line or "Human" in line for line in lines)
+    mixed = build_effects_config("human_feel,subtle_tape")
+    assert {c["name"] for c in mixed} == {"humanize_velocity", "tape_wobble"}
+    assert normalize_preset_ids("clean,human_feel") == ("human_feel",)
+    assert format_preset_labels(["human_feel", "subtle_tape"]) == "Human feel + Subtle tape"
 
 
 def test_arpeggio_respects_written_octave():
@@ -159,13 +169,16 @@ def test_wav_preview_renders(tmp_path):
     wav = render_midi_to_wav_bytes(path)
     assert wav[:4] == b"RIFF"
     assert len(wav) > 1000
-    assert "notes" in describe_preview(path)
+    line = describe_preview(path)
+    assert "notes" in line
+    assert "Preview piano" in line
 
 
 def test_sdk_research_prompt_asks_for_style_notes():
     from midi_gen.cursor_style_lookup import STYLE_PROFILE_JSON_SCHEMA
 
     assert "Research the query first" in STYLE_PROFILE_JSON_SCHEMA
+    assert "sandboxed to music" in STYLE_PROFILE_JSON_SCHEMA
     assert "style_notes" in STYLE_PROFILE_JSON_SCHEMA
     assert "likeness_summary" in STYLE_PROFILE_JSON_SCHEMA
     assert "why THIS sketch sounds like" in STYLE_PROFILE_JSON_SCHEMA

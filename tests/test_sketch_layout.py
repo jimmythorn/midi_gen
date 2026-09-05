@@ -121,6 +121,7 @@ def test_ui_wires_sketch_layout_knobs():
     assert "def _render_sketch_layout" in src
     assert "_render_sketch_layout()" in src
     assert 'key="chord_count"' in src
+    assert 'key="home_generate"' in src
     assert '"chord_count": int(chord_count)' in src
     # UI Simplify: Pattern|Progression → generation_mode (wash opt-out via Engine)
     assert '"generation_mode": generation_mode' in src
@@ -131,5 +132,5 @@ def test_ui_wires_sketch_layout_knobs():
     assert "Song part" in src
     assert "Drone (held)" not in src
     assert "Extend (drone)" not in src
-    assert "_render_timing_chips" in src
-    assert "_render_generation_mode_toggle" in src
+    assert "_render_timing_select" in src
+    assert "_render_generation_mode_select" in src

@@ -128,40 +128,91 @@ def test_ui_simplify_home_source_and_apptest():
     assert '"Random"' in src
     assert '"Surprise me"' not in src
     assert "Try instead" not in src or "Try instead dropped" in src
-    assert "Who or vibe" in src
+    assert "Who or vibe" not in src
     assert "Song part" in src
+    assert "Full sketch" not in src
     assert "Play / Record" in src
     assert "Search + Preview" in src
-    assert 'key_prefix="home_timing"' in src
-    assert 'key_prefix="home_mode"' in src
+    assert 'key="home_timing_select"' in src
+    assert 'key="home_mode_select"' in src
     assert "generation_mode" in src
     assert "timing_factor" in src
     assert "Audition → Capture" not in src
     assert "Browse / Mood" in src or '"Browse"' not in src
-    assert '"More"' in src and '"Debug"' in src and '"Geek"' in src
+    assert '"More"' not in src
+    assert '"Effects"' not in src
+    assert '"Debug"' in src and '"Geek"' in src
+    assert "def _render_home_header" in src
+    assert 'key="takeover_debug"' in src[src.index("def _render_home_header") : src.index("def _render_geek_entry")]
     assert "st.tabs" in src
+    assert 'key="home_tabs"' in src
+    assert "_queue_play_record_tab" in src
     assert "_render_play_hero" in src
     assert "player.play_file" in src
     assert "MMC Record" in src
     assert "loops until Stop" in src
     assert "from midi_gen.live_midi import" in src
-    assert "genre_artist_candidates" in src
-    assert "_render_compact_controls_strip" in src
+    assert "genre_artist_candidates" not in src
+    assert "_mood_combo_names" not in src
+    assert "_render_compact_controls_strip" not in src
     # Post-Generate caption: prefer generation_mode, else map type→mode label
     assert "format_generation_mode_label(options.get('generation_mode')" in src
     assert "generation_mode_from_type(options.get('generation_type'))" in src
     assert "format_generation_mode_label(options.get('generation_type'))" not in src
-    # Locked Search+Preview order: search → mood → result/loading → strip → generate
+    # Selects sit in one row inside Search, directly under the text input.
+    search_fn = src[src.index("def _render_search_feel") : src.index("GENERATE_BUSY_COPY")]
+    assert "st.radio" not in search_fn
+    assert '"Mood or Artist"' not in search_fn
+    assert '["Mood", "Artist"]' in search_fn
+    assert 'key="search_kind_tabs"' in search_fn
+    assert search_fn.index('key="search_kind_tabs"') < search_fn.index("_render_search_query")
+    assert '[data-testid="stTab"]' in src
+    assert "font-size: 1.85rem !important" in src
+    assert "min-height: 4.5rem !important" in src
+    assert "st.html(" in src
+    query_fn = src[src.index("def _render_search_query") : src.index("def _render_search_feel")]
+    assert "search_match_pick" not in query_fn
+    assert "st.selectbox" not in query_fn
+    assert "_render_random_button" not in query_fn
+    assert query_fn.index('key="vibe_text"') < query_fn.index("_render_part_and_timing_row")
+    assert search_fn.index("_render_random_button") < search_fn.index("_render_search_query")
+    assert "vertical_alignment=\"bottom\"" in search_fn
+    assert "st-key-search_kind_tabs" in src
+    assert "font-size: 1.15rem !important" in src
+    assert "_render_who_caption" not in search_fn
+    assert "No mood matches for that genre yet" not in src
+    assert 'key="surprise_me"' in src[
+        src.index("def _render_random_button") : src.index("def _render_search_feel")
+    ]
+    assert "_render_generate_row" not in src
+    # Search: feel + sketch. Result/loading/effects sit on Play / Record.
     home = src[src.index("with tab_search:") : src.index("with tab_play:")]
-    assert home.index("_render_search_feel") < home.index("_render_mood_packs")
-    assert home.index("_render_mood_packs") < home.index("_render_generate_loading")
-    assert home.index("_render_generate_loading") < home.index("_render_compact_controls_strip")
-    assert home.index("_render_compact_controls_strip") < home.index("_render_generate_row")
+    assert home.index("_render_search_feel") < home.index("_render_sketch_layout")
+    assert "_render_generate_loading" not in home
+    assert "_render_result_row" not in home
+    assert "_render_effects_chips" not in home
+    sketch_fn = src[
+        src.index("def _render_sketch_layout") : src.index("def _render_featured_styles")
+    ]
+    assert sketch_fn.index('key="bars"') < sketch_fn.index('key="chord_count"')
+    assert sketch_fn.index('key="chord_count"') < sketch_fn.index('key="home_generate"')
+    assert "_render_bars_knobs" not in home
+    assert "_render_mood_packs" not in home
+    assert "_render_arp_live" not in home
+    assert 'key="mood_select"' not in src
+    assert "_MOOD_GROUP_PREFIX" not in src
+    assert "_render_generate_row" not in home
+    assert "_render_compact_controls_strip" not in home
     assert "_render_recipe_panel" not in home
-    # Play tab wraps existing stack only
     play_tab = src[src.index("with tab_play:") : src.index("# Auto-generate")]
-    assert "_render_play_hero" in play_tab
-    assert "_render_capture_setup" in play_tab
+    assert play_tab.index("_render_geek_entry") < play_tab.index("_render_geek_takeover")
+    assert play_tab.index("_render_geek_takeover") < play_tab.index("_render_generate_loading")
+    assert play_tab.index("_render_generate_loading") < play_tab.index("_render_arp_live")
+    assert play_tab.index("_render_arp_live") < play_tab.index("_render_result_row")
+    assert play_tab.index("_render_result_row") < play_tab.index("_render_capture_setup")
+    assert "_render_play_hero" not in play_tab
+    assert "_render_effects_chips" not in play_tab
+    assert "_render_geek_entry" not in home
     assert "live_midi.py" not in play_tab  # no rewrite
 
     from streamlit.testing.v1 import AppTest
@@ -170,59 +221,55 @@ def test_ui_simplify_home_source_and_apptest():
     at.run()
     assert not at.exception, at.exception
     home_keys = {b.key for b in at.button}
-    assert "takeover_more" in home_keys
+    assert "takeover_more" not in home_keys
     assert "takeover_debug" in home_keys
     assert "takeover_geek" in home_keys
     assert "takeover_browse" not in home_keys
     assert "takeover_capture" not in home_keys
     assert "takeover_moods" not in home_keys
-    assert "home_timing_1_0" in home_keys
-    assert "home_timing_0_5" in home_keys
-    assert "home_mode_pattern" in home_keys
-    assert "home_mode_progression" in home_keys
-    assert "home_section_intro" in home_keys
-    assert any(k.startswith("mood_") for k in home_keys)
+    assert "home_timing_1_0" not in home_keys
+    assert "home_timing_0_5" not in home_keys
+    assert "search_kind" not in {s.key for s in at.selectbox}
+    assert at.session_state["search_kind"] == "artist"
+    assert "home_timing_select" in {s.key for s in at.selectbox}
+    assert "home_mode_pattern" not in home_keys
+    assert "home_mode_progression" not in home_keys
+    assert "home_mode_select" in {s.key for s in at.selectbox}
+    assert "home_section_intro" not in home_keys
+    assert "home_section_select" in {s.key for s in at.selectbox}
+    assert "mood_select" not in {s.key for s in at.selectbox}
+    assert "search_match_pick" not in {s.key for s in at.selectbox}
+    at.session_state["search_kind_tabs"] = "Mood"
+    at.run()
+    assert not at.exception, at.exception
+    assert at.session_state["search_kind"] == "mood"
+    assert "search_match_pick" not in {s.key for s in at.selectbox}
+    assert not any(str(k).startswith("mood_") for k in home_keys if k)
     labels = {b.key: b.label for b in at.button if b.key and b.key.startswith("takeover_")}
-    assert labels["takeover_more"] == "More"
+    assert "takeover_effects" not in labels
     assert labels["takeover_debug"] == "Debug"
     assert labels["takeover_geek"] == "Geek"
+    assert "bars_half" not in home_keys
+    assert "bars_double" not in home_keys
+    assert "bars" in {s.key for s in at.slider}
+    assert "chord_count" in {s.key for s in at.slider}
+    gen = next(b for b in at.button if b.key == "home_generate")
+    assert gen.label == "Generate"
+    assert gen.disabled
+    select_keys = {s.key for s in at.selectbox}
+    assert "arp_mode" not in select_keys
     surprise = next(b for b in at.button if b.key == "surprise_me")
     assert surprise.label == "Random"
 
-    at.button(key="home_timing_2_0").click().run()
+    at.selectbox(key="home_timing_select").select(2.0).run()
     assert not at.exception, at.exception
     assert float(at.session_state["timing_factor"]) == 2.0
-    at.button(key="home_mode_pattern").click().run()
+    at.selectbox(key="home_mode_select").select("pattern").run()
     assert not at.exception, at.exception
     assert at.session_state["generation_mode"] == "pattern"
+    select_keys = {s.key for s in at.selectbox}
+    assert "arp_mode" not in select_keys
+    at.selectbox(key="home_section_select").select("verse").run()
+    assert not at.exception, at.exception
+    assert at.session_state["section_role"] == "verse"
 
-
-def test_mood_combo_wires_genre_artist_candidates():
-    """#34 on main → mood combo uses genre_artist_candidates → ranked names."""
-    from midi_gen import ui_app as app
-    from midi_gen.mood_search import ArtistCandidate, GenreArtistCandidates
-
-    fake = GenreArtistCandidates(
-        genre_query="ambient",
-        candidates=(
-            ArtistCandidate(
-                id="a1",
-                name="Brian Eno",
-                followers_total=500_000,
-                genres=("ambient",),
-            ),
-            ArtistCandidate(
-                id="a2",
-                name="Aphex Twin",
-                followers_total=400_000,
-                genres=("ambient", "idm"),
-            ),
-        ),
-        ok=True,
-    )
-    with mock.patch(
-        "midi_gen.mood_search.genre_artist_candidates", return_value=fake
-    ):
-        names = app._mood_combo_names("ambient", limit=10)
-    assert names == ["Brian Eno", "Aphex Twin"]
-    assert "Philip Glass" in catalog_name_matches("Glass", limit=3)

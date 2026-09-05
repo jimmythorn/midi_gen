@@ -23,7 +23,7 @@ from midi_gen.artist_gate import (
     resolve_artist_query,
 )
 from midi_gen.cursor_style_lookup import generate_midi_for_style, lookup_musician_style
-from midi_gen.spotify_client import MIN_SPOTIFY_FOLLOWERS, SpotifyArtist
+from midi_gen.spotify_client import MIN_SPOTIFY_FOLLOWERS, SpotifyArtist, SpotifyClientError
 
 
 def _artist(
@@ -73,6 +73,7 @@ def test_identity_pin_skips_spotify_even_with_odd_feel_query():
         "Philip Glass — zzzz totally unknown vibe 999",
         identity_name="Philip Glass",
         spotify_search=boom,
+        force_spotify=True,
     )
     assert result.accepted
     assert result.source == "catalog"
@@ -210,6 +211,10 @@ def test_missing_env_rejects_unknown_without_create_arp(monkeypatch):
     import midi_gen.arpeggio_generation as ag
 
     monkeypatch.setattr(ag, "create_arp", fake_create_arp)
+    monkeypatch.setattr(
+        "midi_gen.artist_gate.search_artists_with_credentials",
+        lambda _q: [],
+    )
 
     with pytest.raises(ArtistRejected) as caught:
         generate_midi_for_style(
@@ -217,7 +222,7 @@ def test_missing_env_rejects_unknown_without_create_arp(monkeypatch):
             use_cursor_sdk=False,
             overrides={"bars": 2, "debug": False},
         )
-    assert caught.value.result.reason == "missing_credentials"
+    assert caught.value.result.reason == "no_match"
     assert create_calls == []
 
 
@@ -263,8 +268,8 @@ def test_feel_phrase_queries_spotify_not_catalog_tags():
     assert calls == ["classic rock"]
 
     gym = resolve_artist_query("gymnopedie", spotify_search=hit)
-    assert gym.source == "spotify"
-    assert "gymnopedie" in calls
+    assert gym.source == "catalog"
+    assert "gymnopedie" not in calls
 
 
 def test_generate_rejects_before_sdk_and_create_arp(monkeypatch):
@@ -286,12 +291,34 @@ def test_generate_rejects_before_sdk_and_create_arp(monkeypatch):
         "midi_gen.arpeggio_generation.create_arp",
         lambda options: create_calls.append(options) or "/tmp/no.mid",
     )
+    monkeypatch.setattr(
+        "midi_gen.artist_gate.search_artists_with_credentials",
+        lambda _q: [],
+    )
 
     with pytest.raises(ArtistRejected) as caught:
         generate_midi_for_style("Ted Bundy", use_cursor_sdk=True)
-    assert caught.value.result.reason == "missing_credentials"
+    assert caught.value.result.reason == "no_match"
     assert sdk_calls == []
     assert create_calls == []
+
+
+def test_generate_when_spotify_429_and_identity_unavailable(monkeypatch):
+    monkeypatch.setattr(
+        "midi_gen.artist_gate.search_artists_with_credentials",
+        lambda _q: (_ for _ in ()).throw(SpotifyClientError("HTTP 429")),
+    )
+    monkeypatch.setattr(
+        "midi_gen.artist_gate._default_music_identity",
+        lambda _q: None,
+    )
+    path, result, _options = generate_midi_for_style(
+        "DIIV",
+        use_cursor_sdk=False,
+        overrides={"bars": 2, "effects_preset": "clean", "debug": False},
+    )
+    assert Path(path).exists()
+    assert result.profile.name
 
 
 def test_lookup_catalog_does_not_need_spotify(monkeypatch):
