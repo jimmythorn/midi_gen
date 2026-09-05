@@ -51,6 +51,14 @@ def test_section_chip_toggle_default_off_and_mutual_exclusive():
         "outro",
         "pre-chorus",
     }
+    assert list(SECTION_CHIP_ROLES) == [
+        "intro",
+        "verse",
+        "pre-chorus",
+        "chorus",
+        "bridge",
+        "outro",
+    ]
     assert [role for role, _label in SECTION_CHIP_LABELS] == list(SECTION_CHIP_ROLES)
 
 

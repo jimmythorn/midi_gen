@@ -261,13 +261,14 @@ def _apply_generation_mode(mode: str) -> None:
 
 
 def _apply_search_match(name: str) -> None:
-    """Pin a combo-box match — Mood keeps vibe; Artist pins who."""
+    """Pin a combo-box match — Mood pins Spotify artist name; Artist pins who."""
     kind = clamp_search_kind(st.session_state.get("search_kind"))
     if kind == "artist":
         st.session_state["catalog_pick"] = name
-        # Prefer named who; leave vibe as optional layer if already set.
     else:
+        # Style Lab mood candidates → existing gate via force_spotify on name.
         st.session_state["vibe_text"] = name
+        st.session_state["catalog_pick"] = None
     _reset_arp_knobs()
 
 
@@ -275,6 +276,38 @@ def _on_search_match_pick() -> None:
     name = str(st.session_state.get("search_match_pick") or "").strip()
     if name:
         _apply_search_match(name)
+
+
+def _mood_combo_names(query: str, *, limit: int = 10) -> list[str]:
+    """
+    Mood match rows via Style Lab ``genre_artist_candidates`` when #34 is on base.
+
+    Until that API lands: empty list (artist path + catalog still work).
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+    try:
+        from midi_gen.mood_search import (
+            candidates_as_combo_rows,
+            genre_artist_candidates,
+        )
+    except ImportError:
+        # TODO(Sketch UX): wire when Style Lab #34 merges — genre_artist_candidates
+        return []
+    try:
+        result = genre_artist_candidates(q, limit=limit)
+    except Exception:
+        return []
+    if not getattr(result, "ok", False):
+        return []
+    rows = candidates_as_combo_rows(result)
+    names: list[str] = []
+    for row in rows:
+        name = str((row or {}).get("name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
 
 
 # --- One-page chrome: home stays sacred; extras are full-screen takeovers ---
@@ -589,7 +622,7 @@ def _render_bars_knobs() -> None:
 
 
 def _render_section_chips(*, key_prefix: str = "section") -> None:
-    """Verse / Chorus / Bridge / Intro / Outro / Pre-chorus — default off."""
+    """Intro / Verse / Pre-chorus / Chorus / Bridge / Outro — default off."""
     current = st.session_state.get("section_role")
     st.markdown(
         '<p class="feel-path-label">Song part</p>',
@@ -647,7 +680,7 @@ def _render_timing_chips(*, key_prefix: str = "timing") -> None:
 
 
 def _render_generation_mode_toggle(*, key_prefix: str = "gen_mode") -> None:
-    """Pattern | Progression home toggle → Engine apply_generation_mode."""
+    """Pattern | Progression → Engine apply_generation_mode (recipe default)."""
     current = clamp_generation_mode(
         st.session_state.get("generation_mode", DEFAULT_GENERATION_MODE)
     )
@@ -667,11 +700,21 @@ def _render_generation_mode_toggle(*, key_prefix: str = "gen_mode") -> None:
                 type="primary" if on else "secondary",
                 help=(
                     "Pattern walks an arpeggio. Progression holds each chord. "
+                    "Does not rewrite who / fingerprint. "
                     "Wash recipes that opt out of held chords still win."
                 ),
                 on_click=_apply_generation_mode,
                 args=(mode,),
             )
+
+
+def _render_compact_controls_strip() -> None:
+    """Song part · Timing · Pattern|Progression under Preview (locked order)."""
+    st.markdown('<div class="compact-controls">', unsafe_allow_html=True)
+    _render_section_chips(key_prefix="home_section")
+    _render_timing_chips(key_prefix="home_timing")
+    _render_generation_mode_toggle(key_prefix="home_mode")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _render_sketch_layout() -> None:
@@ -1106,6 +1149,16 @@ st.markdown(
         max-width: 28rem;
         margin: 0.15rem 0 0.65rem 0;
       }
+      .compact-controls {
+        max-width: 48rem;
+        margin: 0.5rem 0 0.85rem 0;
+        padding: 0.55rem 0 0.15rem 0;
+        border-top: 1px solid var(--line);
+      }
+      .compact-controls .feel-path-label {
+        font-size: 0.95rem;
+        margin: 0.45rem 0 0.25rem 0;
+      }
 
       .chrome-row {
         max-width: 56rem;
@@ -1448,7 +1501,8 @@ def _render_search_feel() -> None:
         key="search_kind",
         horizontal=True,
         help=(
-            "Mood searches Spotify genres. Artist uses the musician gate / catalog."
+            "Mood = Spotify genre candidates (Style Lab). "
+            "Artist = musician gate / catalog."
         ),
         label_visibility="collapsed",
     )
@@ -1470,18 +1524,16 @@ def _render_search_feel() -> None:
         width="stretch",
     )
     _render_who_caption()
-    # Combo / match list — catalog for Artist; vibe text itself for Mood genre path.
     q = str(st.session_state.get("vibe_text") or "").strip()
     matches: list[str] = []
     if kind == "artist":
         matches = catalog_name_matches(q, limit=8)
-        # Also surface exact catalog when catalog_pick already set.
         pick = str(st.session_state.get("catalog_pick") or "").strip()
         if pick and pick not in matches:
             matches = [pick] + matches
     elif q:
-        # Mood: offer catalog soft-matches as optional pins; typed genre stays first-class.
-        matches = catalog_name_matches(q, limit=6)
+        # Prefer Style Lab genre_artist_candidates (#34); empty until that merges.
+        matches = _mood_combo_names(q, limit=10)
     if matches:
         st.selectbox(
             "Matches",
@@ -1491,6 +1543,11 @@ def _render_search_feel() -> None:
             key="search_match_pick",
             help="Potential matches — tap to pin.",
             on_change=_on_search_match_pick,
+        )
+    elif kind == "mood" and q:
+        st.caption(
+            "Mood matches need Style Lab genre search (#34). "
+            "Artist search still works."
         )
 
 
@@ -1920,8 +1977,13 @@ def _render_geek_takeover(run_data: dict) -> None:
     profile = result.profile
 
     st.markdown("#### Live MIDI")
-    st.caption("Mess with arp knobs while Playing — sketch rewrites and keeps streaming. Save only via Download.")
+    st.caption(
+        "Live options rewrite the sketch and keep streaming. "
+        "Save only via Download — no chat edit, no note-level mutate."
+    )
     _render_arp_live(profile)
+    st.markdown("#### Save")
+    _render_download(run_data)
     st.divider()
 
     st.caption(run_data.get("match_line") or format_match_line(profile))
@@ -2038,27 +2100,14 @@ else:
     tab_search, tab_play = st.tabs(["Search + Preview", "Play / Record"])
     generate = False
     with tab_search:
+        # Locked order: Search → Mood chips → Preview → compact strip → Generate/Random
         _render_search_feel()
         _render_mood_packs(key_prefix="mood")
-        _render_section_chips(key_prefix="home_section")
-        _render_timing_chips(key_prefix="home_timing")
-        _render_generation_mode_toggle(key_prefix="home_mode")
         _render_recipe_panel()
-        generate = _render_generate_row()
-        _gen_busy = bool(generate or st.session_state.get("auto_generate"))
-
-        if st.session_state.get("generate_error") and not run:
-            _reject = st.session_state.get("artist_reject_reason")
-            if _reject or st.session_state["generate_error"] == ARTIST_REJECT_DRIP:
-                st.error(artist_reject_drip_copy(_reject))
-            else:
-                st.error(f"Generation failed: {st.session_state['generate_error']}")
-
-        if _gen_busy:
+        _gen_busy_early = bool(st.session_state.get("auto_generate"))
+        if _gen_busy_early:
             _render_generate_loading()
-        elif not run:
-            st.info("Type a feel or tap a Mood, then Generate — or Random.")
-        else:
+        elif run:
             result = run["result"]
             options = run["options"]
             profile = result.profile
@@ -2081,10 +2130,26 @@ else:
                 st.markdown(f"**{label}**")
                 st.write(body)
             _render_listen(run)
+        else:
+            st.info("Type a feel or tap a Mood, then Generate — or Random.")
+
+        _render_compact_controls_strip()
+        generate = _render_generate_row()
+        _gen_busy = bool(generate or st.session_state.get("auto_generate"))
+
+        if st.session_state.get("generate_error") and not run:
+            _reject = st.session_state.get("artist_reject_reason")
+            if _reject or st.session_state["generate_error"] == ARTIST_REJECT_DRIP:
+                st.error(artist_reject_drip_copy(_reject))
+            else:
+                st.error(f"Generation failed: {st.session_state['generate_error']}")
+
+        if run and not _gen_busy:
             _render_download(run)
             _render_effects_chips(run)
 
     with tab_play:
+        # Chrome wrap only — existing Play/IAC/loop/capture stack; no live_midi rewrite.
         if not run:
             st.info("Generate a sketch first, then Play in Logic / Record.")
         else:

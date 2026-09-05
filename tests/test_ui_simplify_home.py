@@ -136,8 +136,6 @@ def test_ui_simplify_home_source_and_apptest():
     assert 'key_prefix="home_mode"' in src
     assert "generation_mode" in src
     assert "timing_factor" in src
-    assert "AUDITION_CAPTURE_STRIP_HTML" in src
-    # Strip content must not render in Play path
     assert "Audition → Capture" not in src
     assert "Browse / Mood" in src or '"Browse"' not in src
     assert '"More"' in src and '"Debug"' in src and '"Geek"' in src
@@ -146,8 +144,20 @@ def test_ui_simplify_home_source_and_apptest():
     assert "player.play_file" in src
     assert "MMC Record" in src
     assert "loops until Stop" in src
-    # Must not rewrite live_midi stack from UI
     assert "from midi_gen.live_midi import" in src
+    assert "genre_artist_candidates" in src
+    assert "_render_compact_controls_strip" in src
+    # Locked Search+Preview order: search → mood → preview → strip → generate
+    home = src[src.index("with tab_search:") : src.index("with tab_play:")]
+    assert home.index("_render_search_feel") < home.index("_render_mood_packs")
+    assert home.index("_render_mood_packs") < home.index("_render_recipe_panel")
+    assert home.index("_render_recipe_panel") < home.index("_render_compact_controls_strip")
+    assert home.index("_render_compact_controls_strip") < home.index("_render_generate_row")
+    # Play tab wraps existing stack only
+    play_tab = src[src.index("with tab_play:") : src.index("# Auto-generate")]
+    assert "_render_play_hero" in play_tab
+    assert "_render_capture_setup" in play_tab
+    assert "live_midi.py" not in play_tab  # no rewrite
 
     from streamlit.testing.v1 import AppTest
 
@@ -165,7 +175,7 @@ def test_ui_simplify_home_source_and_apptest():
     assert "home_timing_0_5" in home_keys
     assert "home_mode_pattern" in home_keys
     assert "home_mode_progression" in home_keys
-    # Mood chips on home (not takeover)
+    assert "home_section_intro" in home_keys
     assert any(k.startswith("mood_") for k in home_keys)
     labels = {b.key: b.label for b in at.button if b.key and b.key.startswith("takeover_")}
     assert labels["takeover_more"] == "More"
@@ -174,10 +184,20 @@ def test_ui_simplify_home_source_and_apptest():
     surprise = next(b for b in at.button if b.key == "surprise_me")
     assert surprise.label == "Random"
 
-    # Timing chip wires session
     at.button(key="home_timing_2_0").click().run()
     assert not at.exception, at.exception
     assert float(at.session_state["timing_factor"]) == 2.0
     at.button(key="home_mode_pattern").click().run()
     assert not at.exception, at.exception
     assert at.session_state["generation_mode"] == "pattern"
+
+
+def test_mood_combo_stub_without_style_lab_api():
+    """#34 not on base → empty mood rows; artist catalog matches still work."""
+    from midi_gen import ui_app as app
+
+    # Force missing mood_search module path
+    names = app._mood_combo_names("ambient", limit=5)
+    assert names == []
+    assert catalog_name_matches("Glass", limit=3)
+    assert "Philip Glass" in catalog_name_matches("Glass", limit=3)

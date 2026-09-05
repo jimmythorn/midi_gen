@@ -25,22 +25,22 @@ from .musician_styles import (
     resolve_section_recipe,
 )
 
-# Home section chips — default off (None) = full sketch as today.
+# Home section chips — display order locked for Sketch UX.
 SECTION_CHIP_ROLES: tuple[str, ...] = (
+    "intro",
     "verse",
+    "pre-chorus",
     "chorus",
     "bridge",
-    "intro",
     "outro",
-    "pre-chorus",
 )
 SECTION_CHIP_LABELS: tuple[tuple[str, str], ...] = (
+    ("intro", "Intro"),
     ("verse", "Verse"),
+    ("pre-chorus", "Pre-chorus"),
     ("chorus", "Chorus"),
     ("bridge", "Bridge"),
-    ("intro", "Intro"),
     ("outro", "Outro"),
-    ("pre-chorus", "Pre-chorus"),
 )
 # Legacy Extend stretch factors (Length takeover / older tests). Prefer timing chips.
 EXTEND_CHIP_FACTORS: tuple[int, ...] = (2, 4)
@@ -977,29 +977,27 @@ def resolve_artist_gate_for_ui(
     Run ``resolve_artist_query`` for pre-Generate drip.
 
     Typed Search / feel always hits Spotify (force_spotify).
-    Mood prefers genre:\"query\"; Artist uses name-first lookup / catalog who.
     Empty vibe pins the catalog who so catalog picks stay local.
+
+    Mood combo rows come from Style Lab ``genre_artist_candidates`` (#34)
+    when present — this gate stays the artist path.
     """
     from .artist_gate import resolve_artist_query
-    from .spotify_client import search_artists_with_credentials
 
+    _ = clamp_search_kind(search_kind)  # reserved for Sketch UX mood vs artist
     vibe = (vibe_text or "").strip()
     who = (catalog_name or "").strip()
-    kind = clamp_search_kind(search_kind)
-    search_fn = spotify_search
-    if search_fn is None and vibe and kind == "mood":
-        search_fn = lambda q: search_artists_with_credentials(q, mood_genre_first=True)
     if vibe:
         return resolve_artist_query(
             vibe,
             identity_name=None,
-            spotify_search=search_fn,
+            spotify_search=spotify_search,
             force_spotify=True,
         )
     return resolve_artist_query(
         who,
         identity_name=who or None,
-        spotify_search=search_fn,
+        spotify_search=spotify_search,
     )
 
 
