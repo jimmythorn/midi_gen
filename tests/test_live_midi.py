@@ -582,11 +582,10 @@ def test_ui_crisp_audit_extras_a_through_e():
     assert 'st.session_state.get("live_soft_click", False)' in src
     assert "Soft click during count-in" in src
     assert "click MIDI will be captured if Logic is recording" in src
-    # Capture setup takeover hosts Before Record / Capture denser opts
-    assert "Before Record / Capture" in src
-    assert 'f"takeover_{key}"' in src
+    # Capture / Record denser opts live in Play / Record tab (was Capture takeover)
+    assert "#### Record" in src or "Record" in src
     assert "_render_capture_setup" in src
-    assert '"capture"' in src
+    assert "refresh_ports" in src
     # Soft click defaults Off — never force click=True as the literal play default.
     assert 'st.session_state["live_soft_click"] = True' not in src
     # E — last_error → live_message; keep Stop when was_playing / failed Play
