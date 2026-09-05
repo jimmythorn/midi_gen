@@ -459,6 +459,10 @@ def test_one_page_chrome_takeovers_source_and_nav():
     assert "port_col, record_col" in src[cap:adv]
     play = src[src.index("def _render_play_hero") : src.index("def _render_download")]
     assert "AUDITION_CAPTURE_STRIP_HTML" not in play
+    assert 'st.session_state.get("auto_generate")' in play
+    assert "_render_generate_loading()" in play
+    assert "play-resolve-overlay" not in src
+    assert "overlay=True" not in src
 
     at = _apptest()
     assert _takeover_is_closed(at)

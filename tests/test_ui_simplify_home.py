@@ -207,8 +207,8 @@ def test_ui_simplify_home_source_and_apptest():
     play_tab = src[src.index("with tab_play:") : src.index("# Auto-generate")]
     assert play_tab.index("_render_geek_entry") < play_tab.index("_render_geek_takeover")
     assert play_tab.index("_render_geek_takeover") < play_tab.index("_render_generate_loading")
-    assert play_tab.index("_render_generate_loading") < play_tab.index("_render_arp_live")
-    assert play_tab.index("_render_arp_live") < play_tab.index("_render_result_row")
+    assert play_tab.index("_render_generate_loading") < play_tab.index("_render_result_row")
+    assert "if _gen_busy and not run" in play_tab
     assert play_tab.index("_render_result_row") < play_tab.index("_render_capture_setup")
     assert "_render_play_hero" not in play_tab
     assert "_render_effects_chips" not in play_tab

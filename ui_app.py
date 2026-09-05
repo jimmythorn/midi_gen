@@ -955,6 +955,16 @@ st.markdown(
         max-width: 16rem;
         margin: 0 0 0.25rem 0;
       }
+      @keyframes play-logic-pulse {
+        0%, 100% {
+          transform: scale(1);
+          box-shadow: 0 0 0 1px rgba(18, 21, 26, 0);
+        }
+        50% {
+          transform: scale(1.018);
+          box-shadow: 0 0 0 1px rgba(18, 21, 26, 0.1);
+        }
+      }
       div.st-key-play_logic button,
       div.st-key-play_logic button p,
       div.st-key-play_logic button span {
@@ -967,6 +977,13 @@ st.markdown(
         min-height: 7.25rem !important;
         aspect-ratio: 1 / 1;
         border-radius: 14px !important;
+        transform-origin: center center;
+        animation: play-logic-pulse 2.8s ease-in-out infinite;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        div.st-key-play_logic button {
+          animation: none;
+        }
       }
       div.st-key-stop_logic button {
         min-height: 2.6rem !important;
@@ -1126,6 +1143,16 @@ st.markdown(
         font-size: 0.82rem;
         margin: 0.15rem 0 0.45rem 0;
       }
+      div.st-key-left_controls {
+        margin-top: 1.75rem;
+        padding-top: 0.35rem;
+      }
+      div.st-key-left_controls .feel-path-label {
+        margin: 0 0 0.9rem 0;
+      }
+      div.st-key-left_controls .effect-lite {
+        margin: 1.6rem 0 0.85rem 0;
+      }
       .featured-blurb {
         color: var(--muted);
         font-size: 0.82rem;
@@ -1283,6 +1310,16 @@ st.html(
         padding: 0 !important;
         min-height: 0 !important;
       }
+      @keyframes play-logic-pulse {
+        0%, 100% {
+          transform: scale(1);
+          box-shadow: 0 0 0 1px rgba(18, 21, 26, 0);
+        }
+        50% {
+          transform: scale(1.018);
+          box-shadow: 0 0 0 1px rgba(18, 21, 26, 0.1);
+        }
+      }
       div.st-key-play_logic button,
       div.st-key-play_logic button p,
       div.st-key-play_logic button span {
@@ -1295,6 +1332,13 @@ st.html(
         min-height: 7.25rem !important;
         aspect-ratio: 1 / 1;
         border-radius: 14px !important;
+        transform-origin: center center;
+        animation: play-logic-pulse 2.8s ease-in-out infinite;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        div.st-key-play_logic button {
+          animation: none;
+        }
       }
     </style>
     """
@@ -1624,7 +1668,7 @@ GENERATE_BUSY_COPY = "Resolving style and writing MIDI…"
 
 
 def _render_generate_loading() -> None:
-    """Replace last-run results so Generate always shows a busy state."""
+    """Original Generating callout. Replaces Play / Clear IAC while busy."""
     st.markdown(
         f"""
         <div class="recipe-preview generate-loading">
@@ -1676,67 +1720,71 @@ def _render_play_hero(run_data: dict) -> None:
         if port_now:
             st.caption(f"Port · **{port_now}**")
 
-        st.markdown('<div class="play-hero-stack">', unsafe_allow_html=True)
-        if st.button(
-            "Re-Play" if player.phase == "playing" else "Play in Logic",
-            type="primary",
-            use_container_width=True,
-            key="play_logic",
-        ):
-            try:
-                sketch_bpm = float(options.get("bpm") or 120)
-                count_in = bool(st.session_state.get("live_count_in", False))
-                loop_play = bool(st.session_state.get("live_loop", True))
-                use_click = bool(st.session_state.get("live_soft_click", False))
-                lock_logic = bool(st.session_state.get("live_sync_logic", False))
-                player.play_file(
-                    path,
-                    st.session_state.get("live_port"),
-                    count_in_bars=0.0 if lock_logic else (1.0 if count_in else 0.0),
-                    bpm=sketch_bpm,
-                    bars=float(options.get("bars") or 8),
-                    loop=loop_play,
-                    click=False if lock_logic else (use_click if count_in else False),
-                    sync="follow" if lock_logic else "internal",
-                    send_clock=not lock_logic,
+        _gen_lock = bool(st.session_state.get("auto_generate"))
+        if _gen_lock:
+            _render_generate_loading()
+        else:
+            st.markdown('<div class="play-hero-stack">', unsafe_allow_html=True)
+            if st.button(
+                "Re-Play" if player.phase == "playing" else "Play in Logic",
+                type="primary",
+                use_container_width=True,
+                key="play_logic",
+            ):
+                try:
+                    sketch_bpm = float(options.get("bpm") or 120)
+                    count_in = bool(st.session_state.get("live_count_in", False))
+                    loop_play = bool(st.session_state.get("live_loop", True))
+                    use_click = bool(st.session_state.get("live_soft_click", False))
+                    lock_logic = bool(st.session_state.get("live_sync_logic", False))
+                    player.play_file(
+                        path,
+                        st.session_state.get("live_port"),
+                        count_in_bars=0.0 if lock_logic else (1.0 if count_in else 0.0),
+                        bpm=sketch_bpm,
+                        bars=float(options.get("bars") or 8),
+                        loop=loop_play,
+                        click=False if lock_logic else (use_click if count_in else False),
+                        sync="follow" if lock_logic else "internal",
+                        send_clock=not lock_logic,
+                    )
+                    bits = [f"Streaming to {player.port_name}"]
+                    if lock_logic:
+                        bits.append("waiting for Logic Play")
+                    else:
+                        bits.append("MIDI Start + clock")
+                        if count_in:
+                            bits.append(
+                                "1-bar count-in + soft click"
+                                if use_click
+                                else "1-bar count-in"
+                            )
+                    if loop_play:
+                        bits.append("loops until Stop")
+                    st.session_state["live_message"] = " · ".join(bits) + "."
+                    st.session_state["live_was_playing"] = True
+                    st.session_state["iac_tip_dismissed"] = True
+                    _persist_live_prefs()
+                    st.rerun()
+                except Exception as exc:
+                    st.session_state["live_message"] = f"Live MIDI failed: {exc}"
+                    st.session_state["live_was_playing"] = bool(player.playing)
+            clear_port = st.session_state.get("live_port") or player.port_name
+            if st.button(
+                "Clear IAC",
+                use_container_width=True,
+                disabled=not bool(clear_port),
+                key="stop_logic",
+                help="Stop the stream, flush hanging notes, and stop Logic "
+                "(MMC Stop + MIDI Stop). Works while Playing or idle.",
+            ):
+                player.stop(wait=True, port_name=clear_port)
+                st.session_state["live_was_playing"] = False
+                st.session_state["live_message"] = (
+                    f"Cleared IAC · Logic stopped ({clear_port})."
                 )
-                bits = [f"Streaming to {player.port_name}"]
-                if lock_logic:
-                    bits.append("waiting for Logic Play")
-                else:
-                    bits.append("MIDI Start + clock")
-                    if count_in:
-                        bits.append(
-                            "1-bar count-in + soft click"
-                            if use_click
-                            else "1-bar count-in"
-                        )
-                if loop_play:
-                    bits.append("loops until Stop")
-                st.session_state["live_message"] = " · ".join(bits) + "."
-                st.session_state["live_was_playing"] = True
-                st.session_state["iac_tip_dismissed"] = True
-                _persist_live_prefs()
                 st.rerun()
-            except Exception as exc:
-                st.session_state["live_message"] = f"Live MIDI failed: {exc}"
-                st.session_state["live_was_playing"] = bool(player.playing)
-        clear_port = st.session_state.get("live_port") or player.port_name
-        if st.button(
-            "Clear IAC",
-            use_container_width=True,
-            disabled=not bool(clear_port),
-            key="stop_logic",
-            help="Stop the stream, flush hanging notes, and stop Logic "
-            "(MMC Stop + MIDI Stop). Works while Playing or idle.",
-        ):
-            player.stop(wait=True, port_name=clear_port)
-            st.session_state["live_was_playing"] = False
-            st.session_state["live_message"] = (
-                f"Cleared IAC · Logic stopped ({clear_port})."
-            )
-            st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
         if player.playing or st.session_state.get("live_was_playing"):
 
@@ -1848,8 +1896,9 @@ def _render_result_row(run_data: dict) -> None:
         with preview_col:
             _render_listen(run_data)
             _render_download(run_data)
-        _render_arp_live(profile)
-        _render_effects_chips(run_data)
+        with st.container(key="left_controls"):
+            _render_arp_live(profile)
+            _render_effects_chips(run_data)
     with play_col:
         _render_play_hero(run_data)
 
@@ -2097,11 +2146,9 @@ else:
                 _render_geek_takeover(run)
             else:
                 st.info("Generate a sketch first.")
-        if _gen_busy:
+        if _gen_busy and not run:
             _render_generate_loading()
-            if run:
-                _render_arp_live(run["result"].profile)
-        elif run:
+        if run:
             _render_result_row(run)
         if st.session_state.get("generate_error") and not run:
             _reject = st.session_state.get("artist_reject_reason")
