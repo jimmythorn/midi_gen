@@ -422,6 +422,20 @@ def test_one_page_chrome_takeovers_source_and_nav():
     assert "_render_search_feel" in home_src
     geek = src[src.index("def _render_geek_takeover") : src.index("# --- Takeover OR home")]
     assert "_render_arp_live" in geek
+    assert "note_editor" in geek
+    assert "geek_roll" in geek
+    assert "st.scatter_chart" not in geek
+    assert "_render_effects_chips" in geek
+    assert "no note-level mutate" not in src
+    arp_live = src[src.index("def _render_arp_live") : src.index("def _render_section_select")]
+    assert "arp_seq" in arp_live
+    chips = src[src.index("def _render_effects_chips") : src.index("def _render_capture_setup")]
+    assert "effects_overrides" in chips
+    assert "build_effects_config" in chips
+    commit = src[src.index("def _commit_note_edits") : src.index("def _reset_generated_notes")]
+    assert "auto_generate" not in commit
+    assert '"edit_notes"' in src
+    assert '"generated_notes"' in src
     assert "def _render_listen" in src
     result_row = src[src.index("def _render_result_row") : src.index("def _render_effects_chips")]
     assert "st.columns" in result_row
@@ -480,3 +494,21 @@ def test_one_page_chrome_takeovers_source_and_nav():
     assert at.session_state["ui_takeover"] == "debug"
     at.button(key="takeover_back").click().run()
     assert _takeover_is_closed(at)
+
+
+def test_effect_level_slider_live_tweak_clears_notes_dirty():
+    at = _apptest()
+    at.session_state["catalog_pick"] = "Philip Glass"
+    at.session_state["auto_generate"] = True
+    at.run()
+    assert not at.exception, at.exception
+    last_run = at.session_state["last_run"]
+    assert last_run.get("edit_notes") is not None
+    assert last_run.get("notes_dirty") is False
+    key = "fx_lvl_humanize_velocity_humanization_range"
+    sliders = [s for s in at.slider if s.key == key]
+    if not sliders:
+        return
+    sliders[0].set_value(20).run()
+    assert not at.exception, at.exception
+    assert at.session_state["last_run"]["notes_dirty"] is False

@@ -32,11 +32,19 @@ from midi_gen.audio_preview import render_midi_to_wav_bytes
 from midi_gen.artist_gate import ArtistRejected
 from midi_gen.cursor_style_lookup import cursor_sdk_available, generate_midi_for_style
 from midi_gen.effects_presets import (
+    EFFECT_PARAM_HELP,
+    build_effects_config,
     explain_effects_config,
     list_presets,
     normalize_preset_ids,
     serialize_preset_ids,
 )
+from midi_gen.note_edit import (
+    list_note_events,
+    refresh_last_run_after_note_write,
+    write_note_events,
+)
+from midi_gen.note_editor import note_editor
 from midi_gen.live_midi import (
     get_shared_player,
     has_iac_port,
@@ -45,7 +53,7 @@ from midi_gen.live_midi import (
     refresh_output_ports,
 )
 from midi_gen.musician_styles import list_musicians, list_styles
-from midi_gen.preview import events_to_roll_rows, format_summary_text, summarize_midi_file
+from midi_gen.preview import format_summary_text, summarize_midi_file
 from midi_gen import style_prompting as _style_prompting
 
 importlib.reload(_style_prompting)
@@ -102,7 +110,17 @@ _ARP_KEYS = (
     "arp_evolve",
     "arp_repeat",
     "sketch_bpm",
+    "arp_gates",
+    "arp_pitches",
 )
+_FX_SLIDER_SPEC = {
+    "wow_rate_hz": (0.05, 2.0, 0.05),
+    "wow_depth": (0, 50, 1),
+    "flutter_rate_hz": (1.0, 16.0, 0.5),
+    "flutter_depth": (0, 16, 1),
+    "randomness": (0.0, 1.0, 0.05),
+    "humanization_range": (0, 32, 1),
+}
 
 
 def _load_repo_dotenv() -> None:
@@ -196,6 +214,10 @@ def _seed_live_port(ports: list[str]) -> None:
 def _reset_arp_knobs() -> None:
     for key in _ARP_KEYS:
         st.session_state.pop(key, None)
+    st.session_state.pop("effects_overrides", None)
+    for key in list(st.session_state.keys()):
+        if str(key).startswith("fx_lvl_"):
+            st.session_state.pop(key, None)
 
 
 def _on_generate_click() -> None:
@@ -484,6 +506,53 @@ def _apply_arp_live() -> None:
         st.session_state["pending_replay"] = True
 
 
+def _parse_fx_lvl_key(key: str) -> tuple[str, str] | None:
+    if not str(key).startswith("fx_lvl_"):
+        return None
+    rest = str(key)[len("fx_lvl_") :]
+    for param in _FX_SLIDER_SPEC:
+        suffix = "_" + param
+        if rest.endswith(suffix):
+            return rest[: -len(suffix)], param
+    return None
+
+
+def _apply_effect_level() -> None:
+    overrides: dict[str, dict[str, Any]] = {}
+    for key in list(st.session_state.keys()):
+        parsed = _parse_fx_lvl_key(str(key))
+        if not parsed:
+            continue
+        name, param = parsed
+        overrides.setdefault(name, {})[param] = st.session_state[key]
+    st.session_state["effects_overrides"] = overrides
+    st.session_state["_live_param_tweak"] = True
+    st.session_state["auto_generate"] = True
+    if get_shared_player().playing:
+        st.session_state["pending_replay"] = True
+
+
+def _commit_note_edits(notes: list) -> None:
+    last_run = st.session_state.get("last_run")
+    if not last_run:
+        return
+    refresh_last_run_after_note_write(last_run, notes, dirty=True)
+    if get_shared_player().playing:
+        st.session_state["pending_replay"] = True
+
+
+def _reset_generated_notes() -> None:
+    last_run = st.session_state.get("last_run")
+    if not last_run:
+        return
+    generated = last_run.get("generated_notes") or []
+    refresh_last_run_after_note_write(
+        last_run, [dict(n) for n in generated], dirty=False
+    )
+    if get_shared_player().playing:
+        st.session_state["pending_replay"] = True
+
+
 def _seed_arp_knobs(profile: Any) -> None:
     """Fill arp widgets from the current recipe until the user touches them."""
     mode = getattr(profile, "arp_mode", "up_down")
@@ -610,6 +679,31 @@ def _render_arp_live(profile: Any) -> None:
             on_change=_apply_arp_live,
             help="How repetitive the cell stays. 10 = most locked.",
         )
+    steps = int(st.session_state.get("arp_steps") or 8)
+    gates = st.session_state.get("arp_gates")
+    if not isinstance(gates, list) or len(gates) != steps:
+        prev = list(gates) if isinstance(gates, list) else []
+        st.session_state["arp_gates"] = (prev + [True] * steps)[:steps]
+    pitches = st.session_state.get("arp_pitches")
+    if not isinstance(pitches, list) or len(pitches) != steps:
+        prev = list(pitches) if isinstance(pitches, list) else []
+        st.session_state["arp_pitches"] = (prev + [None] * steps)[:steps]
+    payload = note_editor(
+        mode="steps",
+        steps=steps,
+        gates=list(st.session_state["arp_gates"]),
+        pitches=list(st.session_state["arp_pitches"]),
+        key="arp_seq",
+    )
+    if (
+        payload
+        and payload.get("mode") == "steps"
+        and payload != st.session_state.get("_arp_seq_last")
+    ):
+        st.session_state["_arp_seq_last"] = payload
+        st.session_state["arp_gates"] = list(payload.get("gates") or [])
+        st.session_state["arp_pitches"] = list(payload.get("pitches") or [])
+        _apply_arp_live()
 
 
 def _render_section_select(*, key: str = "home_section_select") -> None:
@@ -794,6 +888,11 @@ def _apply_effects_preset(pid: str) -> None:
         chosen = [item for item in current if item != "clean"] + [pid]
     st.session_state["effects_presets"] = chosen
     st.session_state["effects_preset"] = serialize_preset_ids(chosen, default="clean")
+    if chosen == ["clean"] or pid == "clean":
+        st.session_state["effects_overrides"] = {}
+        for key in list(st.session_state.keys()):
+            if str(key).startswith("fx_lvl_"):
+                st.session_state.pop(key, None)
 
 
 def _apply_refresh_ports() -> None:
@@ -1897,8 +1996,9 @@ def _render_result_row(run_data: dict) -> None:
             _render_listen(run_data)
             _render_download(run_data)
         with st.container(key="left_controls"):
-            _render_arp_live(profile)
-            _render_effects_chips(run_data)
+            if takeover != "geek":
+                _render_arp_live(profile)
+                _render_effects_chips(run_data)
     with play_col:
         _render_play_hero(run_data)
 
@@ -1928,6 +2028,49 @@ def _render_effects_chips(run_data: dict | None) -> None:
                 on_click=_apply_effects_preset,
                 args=(pid,),
             )
+    cfg = build_effects_config(
+        current_ids,
+        overrides=st.session_state.get("effects_overrides"),
+    )
+    for effect in cfg:
+        name = str(effect.get("name") or "")
+        if not name:
+            continue
+        for param, spec in _FX_SLIDER_SPEC.items():
+            if param not in effect:
+                continue
+            lo, hi, step = spec
+            key = f"fx_lvl_{name}_{param}"
+            current = effect.get(param, lo)
+            if isinstance(step, float):
+                lo, hi, step = float(lo), float(hi), float(step)
+                current = float(current)
+            else:
+                lo, hi, step = int(lo), int(hi), int(step)
+                current = int(current)
+            if key not in st.session_state:
+                st.session_state[key] = current
+            st.slider(
+                param.replace("_", " "),
+                min_value=lo,
+                max_value=hi,
+                step=step,
+                key=key,
+                help=EFFECT_PARAM_HELP.get(param, param),
+                on_change=_apply_effect_level,
+            )
+    last_run = run_data or st.session_state.get("last_run") or {}
+    if last_run.get("notes_dirty"):
+        st.caption("Recipe rewrite replaces piano-roll edits.")
+        st.caption(
+            "Piano-roll edits will be replaced if you change Arp, Steps grid, or Effects."
+        )
+    st.button(
+        "Reset to generated",
+        key="reset_generated_notes",
+        disabled=not last_run.get("notes_dirty"),
+        on_click=_reset_generated_notes,
+    )
 
 
 def _render_capture_setup() -> None:
@@ -2063,10 +2206,10 @@ def _render_geek_takeover(run_data: dict) -> None:
 
     st.markdown("#### Live MIDI")
     st.caption(
-        "Live options rewrite the sketch and keep streaming. "
-        "Save only via Download — no chat edit, no note-level mutate."
+        "Live options rewrite the sketch and keep streaming."
     )
     _render_arp_live(profile)
+    _render_effects_chips(run_data)
     st.markdown("#### Save")
     _render_download(run_data)
     st.divider()
@@ -2097,18 +2240,16 @@ def _render_geek_takeover(run_data: dict) -> None:
         st.caption("Also considered: " + ", ".join(c.name for c in result.candidates))
 
     st.code(format_summary_text(summary))
-    roll = events_to_roll_rows(summary)
-    if roll:
-        st.scatter_chart(
-            {
-                "beat": [r["beat"] for r in roll],
-                "midi": [r["midi"] for r in roll],
-            },
-            x="beat",
-            y="midi",
-            height=280,
-        )
-        st.dataframe(roll, use_container_width=True, hide_index=True, height=240)
+    payload = note_editor(
+        notes=run_data.get("edit_notes") or [],
+        mode="roll",
+        ticks_per_beat=int((run_data.get("summary") or {}).get("ticks_per_beat") or 480),
+        key="geek_roll",
+    )
+    if payload and payload.get("mode") == "roll" and payload.get("notes") is not None:
+        if payload != st.session_state.get("_geek_roll_last"):
+            st.session_state["_geek_roll_last"] = payload
+            _commit_note_edits(list(payload["notes"]))
 
     st.markdown("**Raw generator options**")
     st.json(options)
@@ -2206,6 +2347,12 @@ if generate:
             overrides["repetition_factor"] = int(st.session_state["arp_repeat"])
         if "sketch_bpm" in st.session_state:
             overrides["bpm"] = int(st.session_state["sketch_bpm"])
+        if "arp_gates" in st.session_state:
+            overrides["arp_gates"] = list(st.session_state["arp_gates"])
+        if "arp_pitches" in st.session_state:
+            overrides["arp_pitches"] = list(st.session_state["arp_pitches"])
+        if st.session_state.get("effects_overrides"):
+            overrides["effects_overrides"] = dict(st.session_state["effects_overrides"])
         if "gen_seed" in st.session_state:
             overrides["seed"] = int(st.session_state.pop("gen_seed"))
         live_tweak = bool(st.session_state.pop("_live_param_tweak", False))
@@ -2221,6 +2368,7 @@ if generate:
             )
             summary = summarize_midi_file(path)
             wav_bytes = render_midi_to_wav_bytes(path)
+            notes = list_note_events(path)
             plain = format_plain_feel_match(result.profile)
             likeness = format_likeness_blurb(
                 result.profile, used_cursor_sdk=bool(result.used_cursor_sdk)
@@ -2234,6 +2382,9 @@ if generate:
                 "wav_bytes": wav_bytes,
                 "plain_feel_line": plain,
                 "likeness_blurb": likeness,
+                "edit_notes": notes,
+                "generated_notes": [dict(n) for n in notes],
+                "notes_dirty": False,
                 "match_line": format_match_line(
                     result.profile,
                     effects_preset=options.get("effects_preset") or effects_preset,
