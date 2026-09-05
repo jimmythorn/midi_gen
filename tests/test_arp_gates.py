@@ -15,6 +15,7 @@ if "midi_gen" not in sys.modules:
 
 from midi_gen.arpeggio_generation import apply_arp_step_mask, create_arp
 from midi_gen.note_edit import list_note_events
+from midi_gen.note_editor import preview_step_index
 
 
 def test_apply_arp_step_mask_rests_even_steps():
@@ -53,3 +54,10 @@ def test_create_arp_gates_even_rests(tmp_path):
     starts = [n["start_tick"] for n in list_note_events(path)]
     assert all(not (480 <= t < 960) for t in starts)
     assert all(not (1440 <= t < 1920) for t in starts)
+
+
+def test_preview_step_index_eighths_wraps_each_bar():
+    assert preview_step_index(0.0, 120, 8) == 0
+    assert preview_step_index(0.25, 120, 8) == 1
+    assert preview_step_index(2.0, 120, 8) == 0
+    assert preview_step_index(0.0, 108, 16) == 0

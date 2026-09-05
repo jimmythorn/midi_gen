@@ -36,12 +36,46 @@
     const canvas = document.getElementById("c");
     const hint = document.getElementById("hint");
     const ctx = canvas.getContext("2d");
-    let args = { notes: [], mode: "roll", steps: 8, ticks_per_beat: 480 };
+    let args = { notes: [], mode: "roll", steps: 8, ticks_per_beat: 480, bpm: 120 };
     let notes = [];
     let gates = [];
     let pitches = [];
     let drag = null;
     let painted = false;
+    let dirty = false;
+    let emitTimer = null;
+    let lastEmitted = null;
+    let playheadCol = -1;
+    let clock = { t: 0, playing: false, at: 0 };
+    const EMIT_DEBOUNCE_MS = 1500;
+    const PREVIEW_CH = "midi_gen_preview_clock";
+    try {
+      const previewCh = new BroadcastChannel(PREVIEW_CH);
+      previewCh.onmessage = function (ev) {
+        clock = ev.data || clock;
+      };
+    } catch (e) {}
+
+    function previewStepIndex(t, bpm, steps) {
+      steps = Math.max(1, steps | 0);
+      const beats = Number(t) * Number(bpm) / 60;
+      return Math.floor(beats * steps / 4) % steps;
+    }
+
+    function tickPlayhead() {
+      if (args.mode === "steps") {
+        const bpm = Number(args.bpm) || 120;
+        const steps = Math.max(1, Number(args.steps) || 8);
+        let t = Number(clock.t) || 0;
+        if (clock.playing) t += (performance.now() - (Number(clock.at) || 0)) / 1000;
+        const col = clock.playing ? previewStepIndex(t, bpm, steps) : -1;
+        if (col !== playheadCol) {
+          playheadCol = col;
+          draw();
+        }
+      }
+      requestAnimationFrame(tickPlayhead);
+    }
 
     function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
     function cloneNotes(src) {
@@ -195,6 +229,12 @@
           ctx.fillRect(x + 2, top + row * rh + 1, cw - 4, rh - 2);
         }
       }
+      if (playheadCol >= 0 && playheadCol < cols) {
+        ctx.fillStyle = "rgba(255, 210, 70, 0.22)";
+        ctx.fillRect(left + playheadCol * cw, top, cw, h - top - 8);
+        ctx.strokeStyle = "#e8c04a";
+        ctx.strokeRect(left + playheadCol * cw + 0.5, top + 0.5, cw - 1, h - top - 9);
+      }
     }
 
     function draw() {
@@ -204,16 +244,71 @@
 
     function emit() {
       if (args.mode === "steps") {
-        Streamlit.setComponentValue({ mode: "steps", gates: gates.slice(), pitches: pitches.slice() });
+        lastEmitted = { mode: "steps", gates: gates.slice(), pitches: pitches.slice() };
+        Streamlit.setComponentValue(lastEmitted);
       } else {
         Streamlit.setComponentValue({ mode: "roll", notes: cloneNotes(notes) });
       }
     }
 
+    function scheduleEmit() {
+      dirty = true;
+      if (emitTimer) clearTimeout(emitTimer);
+      emitTimer = setTimeout(function () {
+        emitTimer = null;
+        emit();
+      }, EMIT_DEBOUNCE_MS);
+    }
+
+    function padGrid(steps) {
+      if (gates.length === steps) return;
+      const nextG = [];
+      const nextP = [];
+      for (let i = 0; i < steps; i++) {
+        nextG.push(i < gates.length ? !!gates[i] : true);
+        nextP.push(i < pitches.length ? pitches[i] : null);
+      }
+      gates = nextG;
+      pitches = nextP;
+    }
+
+    function sameGrid(a, b) {
+      if (!a || !b || a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) return false;
+      }
+      return true;
+    }
+
     function onRender(event) {
       args = event.detail.args || args;
-      notes = cloneNotes(args.notes);
       const steps = Math.max(1, Number(args.steps) || 8);
+      const h = args.mode === "steps" ? 220 : 320;
+      hint.textContent = args.mode === "steps"
+        ? "Paint gates · applies 1.5s after you pause"
+        : "Drag notes · right edge changes length";
+      if (args.mode === "steps" && (drag || dirty)) {
+        padGrid(steps);
+        if (
+          !drag
+          && dirty
+          && lastEmitted
+          && Array.isArray(args.gates)
+          && sameGrid(args.gates.map(Boolean), lastEmitted.gates)
+          && Array.isArray(args.pitches)
+          && sameGrid(
+            args.pitches.map(function (p) { return (typeof p === "number") ? p : null; }),
+            lastEmitted.pitches
+          )
+        ) {
+          dirty = false;
+        } else {
+          resize(h);
+          draw();
+          return;
+        }
+      }
+      notes = cloneNotes(args.notes);
       if (!gates.length || gates.length !== steps) {
         gates = [];
         pitches = [];
@@ -223,9 +318,7 @@
       if (Array.isArray(args.pitches) && args.pitches.length === steps) {
         pitches = args.pitches.map(function (p) { return (typeof p === "number") ? p : null; });
       }
-      const h = args.mode === "steps" ? 220 : 320;
       resize(h);
-      hint.textContent = args.mode === "steps" ? "Paint gates · drag a lit cell vertically to set pitch" : "Drag notes · right edge changes length";
       draw();
     }
 
@@ -299,7 +392,10 @@
         painted = true;
       }
       drag = null;
-      if (painted) emit();
+      if (painted) {
+        if (args.mode === "steps") scheduleEmit();
+        else emit();
+      }
       painted = false;
       draw();
     });
@@ -307,6 +403,7 @@
     Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
     Streamlit.setComponentReady();
     Streamlit.setFrameHeight(320);
+    requestAnimationFrame(tickPlayhead);
   </script>
 </body>
 </html>

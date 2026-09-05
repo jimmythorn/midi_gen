@@ -125,6 +125,7 @@ LOOKUP_STICKY_OVERRIDE_KEYS = frozenset(
         "generation_mode",
         "drone_held",
         "chord_count",
+        "octave_shift",
     }
 )
 

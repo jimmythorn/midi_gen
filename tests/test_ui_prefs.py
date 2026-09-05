@@ -358,16 +358,82 @@ def test_arp_live_knobs_present_and_override_steps():
     at.selectbox(key="arp_steps").select(16).run()
     assert not at.exception, at.exception
     assert at.session_state["arp_steps"] == 16
+    assert "sketch_bpm" in [s.key for s in at.slider]
     _open_takeover(at, "debug")
-    assert "sketch_bpm" in [n.key for n in at.number_input]
+    assert "sketch_bpm" in [s.key for s in at.slider]
     src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
     assert "pending_replay" in src
     assert "on_change=_apply_arp_live" in src
+    assert "on_change=_apply_bpm_live" in src
+    assert "_schedule_live_generate" in src[
+        src.index("def _apply_arp_live") : src.index("def _parse_fx_lvl_key")
+    ]
+    assert "auto_generate" not in src[
+        src.index("def _apply_arp_live") : src.index("def _parse_fx_lvl_key")
+    ]
+    assert "auto_generate" not in src[
+        src.index("def _apply_bpm_live") : src.index("def _flush_bpm_write")
+    ]
+    assert "pending_replay" not in src[
+        src.index("def _apply_bpm_live") : src.index("def _flush_bpm_write")
+    ]
+    assert "set_bpm" in src[
+        src.index("def _apply_bpm_live") : src.index("def _flush_bpm_write")
+    ]
+    assert "_flush_live_generate_debounce" in src
+    assert "_live_generate_watchdog" in src
+    assert "_LIVE_GENERATE_DEBOUNCE_SEC = 1.5" in src
+    flush = src[
+        src.index("def _flush_live_generate_debounce") : src.index(
+            "def _live_generate_watchdog"
+        )
+    ]
+    assert "time.sleep" not in flush
     assert 'overrides["arp_mode"]' in src
     assert 'key="sketch_bpm"' in src
     assert 'overrides["bpm"]' in src
     assert "live_tweak=" in src
     assert "_pending_profile_knobs" in src
+
+
+def test_register_octave_up_transposes_without_generate():
+    at = _apptest()
+    at.session_state["use_sdk"] = False
+    at.session_state["catalog_pick"] = "Philip Glass"
+    at.session_state["auto_generate"] = True
+    at.run()
+    assert not at.exception, at.exception
+    run = at.session_state["last_run"]
+    before = [n["note"] for n in run["edit_notes"]]
+    min_before = int((run.get("options") or {}).get("min_octave") or 3)
+    assert before
+    assert "prog_oct_up" in [b.key for b in at.button]
+    at.button(key="prog_oct_up").click().run()
+    assert not at.exception, at.exception
+    assert "auto_generate" not in at.session_state
+    after = [n["note"] for n in at.session_state["last_run"]["edit_notes"]]
+    assert after == [note + 12 for note in before]
+    assert at.session_state["prog_octave_shift"] == 1
+    assert at.session_state["last_run"]["notes_dirty"] is True
+    assert at.session_state["last_run"]["options"]["min_octave"] == min_before + 1
+
+
+def test_bpm_slider_rewrites_tempo_without_generate():
+    at = _apptest()
+    at.session_state["use_sdk"] = False
+    at.session_state["catalog_pick"] = "Philip Glass"
+    at.session_state["auto_generate"] = True
+    at.run()
+    assert not at.exception, at.exception
+    run = at.session_state["last_run"]
+    pitches = [n["note"] for n in run["edit_notes"]]
+    sliders = [s for s in at.slider if s.key == "sketch_bpm"]
+    assert sliders
+    sliders[0].set_value(90).run()
+    assert not at.exception, at.exception
+    assert "auto_generate" not in at.session_state
+    assert at.session_state["last_run"]["options"]["bpm"] == 90
+    assert [n["note"] for n in at.session_state["last_run"]["edit_notes"]] == pitches
 
 
 def test_sdk_status_follows_toggle_and_key():
@@ -429,9 +495,63 @@ def test_one_page_chrome_takeovers_source_and_nav():
     assert "no note-level mutate" not in src
     arp_live = src[src.index("def _render_arp_live") : src.index("def _render_section_select")]
     assert "arp_seq" in arp_live
+    assert "bpm=" in arp_live
+    assert "_apply_arp_live()" in arp_live
+    assert "_render_register_live" in arp_live
+    assert "_render_bpm_live" in arp_live
+    assert "_render_register_live()" in arp_live[
+        arp_live.index('key="arp_range_octaves"') : arp_live.index("note_editor")
+    ]
+    reg = src[
+        src.index("def _render_register_live") : src.index("def _render_section_select")
+    ]
+    assert '"−"' in reg
+    assert '"+"' in reg
+    assert "Octave down" not in reg
+    assert "Octave up" not in reg
+    assert "Register" not in reg
+    html = (_ROOT / "note_editor" / "frontend" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    assert "const EMIT_DEBOUNCE_MS = 1500" in html
+    assert "function scheduleEmit()" in html
+    assert 'if (args.mode === "steps") scheduleEmit();' in html
+    assert "if (args.mode === \"steps\" && (drag || dirty))" in html
+    assert "!drag" in html
+    assert "function previewStepIndex" in html
+    assert "midi_gen_preview_clock" in html
+    assert "playheadCol" in html
+    assert "prog_oct_up" in src
+    assert "auto_generate" not in src[
+        src.index("def _apply_register_shift") : src.index("def _schedule_live_generate")
+    ]
+    assert "pending_replay" not in src[
+        src.index("def _apply_register_shift") : src.index("def _schedule_live_generate")
+    ]
+    listen = src[src.index("def _render_listen") : src.index("def _render_play_hero")]
+    assert "preview_audio" in listen
+    assert "st.audio" not in listen
+    assert '"_preview_rev"' in src[
+        src.index("def _on_generate_click") : src.index("def _apply_search_kind")
+    ]
+    html = (_ROOT / "preview_audio" / "frontend" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    assert "audio.paused" in html
+    assert "pendingB64" in html
+    assert "audio.loop = true" in html
+    assert "midi_gen_preview_clock" in html
     chips = src[src.index("def _render_effects_chips") : src.index("def _render_capture_setup")]
     assert "effects_overrides" in chips
     assert "build_effects_config" in chips
+    assert "st.columns(4)" in chips
+    assert "fx_sliders" in chips
+    assert "_schedule_live_generate" in src[
+        src.index("def _apply_effect_level") : src.index("def _commit_note_edits")
+    ]
+    assert "auto_generate" not in src[
+        src.index("def _apply_effect_level") : src.index("def _commit_note_edits")
+    ]
     commit = src[src.index("def _commit_note_edits") : src.index("def _reset_generated_notes")]
     assert "auto_generate" not in commit
     assert '"edit_notes"' in src

@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .arpeggio_generation import resolve_extend_factor, resolve_timing_factor
 from .effects_presets import format_preset_labels, list_presets, normalize_preset_ids
+from .notes import shift_midi_by_octaves, shift_note_name_octave
 from .musician_styles import (
     MUSICIAN_STYLE_CATALOG,
     MusicianStyleProfile,
@@ -279,12 +280,76 @@ def resize_chord_progression(
     return [src[i % len(src)] for i in range(n)]
 
 
+OCTAVE_SHIFT_MIN = -3
+OCTAVE_SHIFT_MAX = 3
+WRITTEN_OCTAVE_MIN = 0
+WRITTEN_OCTAVE_MAX = 8
+
+
+def clamp_octave_shift(raw: Any) -> int:
+    """User register offset in octaves. Identity 0 when unset."""
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        n = 0
+    return max(OCTAVE_SHIFT_MIN, min(OCTAVE_SHIFT_MAX, n))
+
+
+def shift_progression_octave(
+    roots: Optional[Sequence[Any]],
+    delta: int,
+) -> List[Any]:
+    """Move each root up/down by ``delta`` octaves. Names stay names; MIDI stays MIDI."""
+    if not delta:
+        return list(roots or [])
+    out: List[Any] = []
+    for item in roots or []:
+        if isinstance(item, int):
+            out.append(shift_midi_by_octaves(item, delta))
+            continue
+        try:
+            out.append(shift_note_name_octave(str(item), delta))
+        except (ValueError, TypeError):
+            out.append(item)
+    return out
+
+
+def apply_octave_shift(options: Dict[str, Any], delta: int) -> Dict[str, Any]:
+    """Shift progression roots and the min/max written-octave window."""
+    out = dict(options)
+    step = clamp_octave_shift(delta)
+    if step == 0:
+        return out
+    if out.get("chord_progression"):
+        out["chord_progression"] = shift_progression_octave(
+            out.get("chord_progression"), step
+        )
+    if out.get("root_notes"):
+        out["root_notes"] = shift_progression_octave(out.get("root_notes"), step)
+    try:
+        min_oct = int(out.get("min_octave") or 3)
+    except (TypeError, ValueError):
+        min_oct = 3
+    try:
+        max_oct = int(out.get("max_octave") or 5)
+    except (TypeError, ValueError):
+        max_oct = 5
+    min_oct = max(WRITTEN_OCTAVE_MIN, min(WRITTEN_OCTAVE_MAX, min_oct + step))
+    max_oct = max(WRITTEN_OCTAVE_MIN, min(WRITTEN_OCTAVE_MAX, max_oct + step))
+    if max_oct < min_oct:
+        max_oct = min_oct
+    out["min_octave"] = min_oct
+    out["max_octave"] = max_oct
+    return out
+
+
 def apply_user_sketch_layout(options: Dict[str, Any]) -> Dict[str, Any]:
     """
     Apply user bars/chords/shape knobs onto Engine options.
 
     ``chord_count`` resizes ``chord_progression`` / ``root_notes``.
     User ``drone`` without an explicit held flag becomes held chords.
+    ``octave_shift`` moves roots and the min/max octave window after resize.
     No-op when those keys are absent.
     """
     out = dict(options)
@@ -299,6 +364,11 @@ def apply_user_sketch_layout(options: Dict[str, Any]) -> Dict[str, Any]:
         out["chord_progression"] = resized
         out["root_notes"] = list(resized)
         out["chord_count"] = count
+    if "octave_shift" in out and out["octave_shift"] is not None:
+        shift = clamp_octave_shift(out.get("octave_shift"))
+        out["octave_shift"] = shift
+        if shift:
+            out = apply_octave_shift(out, shift)
     return out
 
 

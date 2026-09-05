@@ -68,3 +68,13 @@ def midi_octave_bounds(min_octave: int, max_octave: int) -> tuple[int, int]:
     low = pitch_class_at_octave(0, min_octave)  # C at min octave
     high = pitch_class_at_octave(11, max_octave)  # B at max octave
     return low, high
+
+
+def shift_midi_by_octaves(midi: int, delta: int) -> int:
+    """Move a MIDI note by ``delta`` octaves. Clamp to 1–127 (never C-1)."""
+    return max(1, min(127, int(midi) + 12 * int(delta)))
+
+
+def shift_note_name_octave(name: str, delta: int) -> str:
+    """Move a written note name by ``delta`` octaves. Sharp spelling out."""
+    return note_to_name(shift_midi_by_octaves(note_str_to_midi(str(name)), delta))

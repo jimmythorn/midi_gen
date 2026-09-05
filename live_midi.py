@@ -322,6 +322,19 @@ class LiveMidiPlayer:
         self._count_in_end: Optional[float] = None  # perf_counter deadline
         self._count_in_bpm: float = 120.0
         self._count_in_beats_per_bar: int = 4
+        self._follow = False
+        self._session_start: Optional[float] = None
+        self._play_bpm: float = 120.0
+        self._tpb: int = 480
+        self._pass_ticks: int = 1
+        self._pass_len: float = 1.0
+        self._clock_dt: float = clock_period_sec(120.0)
+        self._tick_schedule: List[Tuple[int, mido.Message]] = []
+        self._schedule: List[ScheduledMsg] = []
+        self._i: int = 0
+        self._pass_index: int = 0
+        self._next_clock_n: int = 1
+        self._tempo_epoch: int = 0
 
     @property
     def playing(self) -> bool:
@@ -413,6 +426,47 @@ class LiveMidiPlayer:
         if phase == "playing":
             return "Playing"
         return "Idle"
+
+    def set_bpm(self, bpm: float) -> bool:
+        """Retune the playing clock from the current tick. No restart.
+
+        Returns False when idle, locked to Logic, or still in count-in.
+        """
+        new_bpm = max(40.0, min(240.0, float(bpm)))
+        now = time.perf_counter()
+        with self._lock:
+            if self._phase != "playing" or self._follow:
+                return False
+            if self._session_start is None or not self._tick_schedule:
+                return False
+            old = max(1.0, float(self._play_bpm or 120.0))
+            if abs(old - new_bpm) < 1e-6:
+                return True
+            tpb = max(1, int(self._tpb or 480))
+            pass_ticks = max(1, int(self._pass_ticks or 1))
+            elapsed = max(0.0, now - float(self._session_start))
+            ticks_total = elapsed * old / 60.0 * tpb
+            elapsed_new = ticks_total * 60.0 / new_bpm / tpb
+            looping = bool(self._looping)
+            if looping:
+                pass_index = int(ticks_total // pass_ticks)
+                local_tick = ticks_total - pass_index * pass_ticks
+            else:
+                pass_index = 0
+                local_tick = ticks_total
+            self._session_start = now - elapsed_new
+            self._play_bpm = new_bpm
+            self._count_in_bpm = new_bpm
+            self._schedule = seconds_schedule_at_bpm(
+                self._tick_schedule, new_bpm, tpb
+            )
+            self._pass_len = tick_to_seconds(pass_ticks, new_bpm, tpb)
+            self._clock_dt = clock_period_sec(new_bpm)
+            self._pass_index = pass_index
+            self._i = due_index(self._tick_schedule, 0, local_tick)
+            self._next_clock_n = int(elapsed_new / self._clock_dt + 1e-9) + 1
+            self._tempo_epoch += 1
+        return True
 
     @property
     def looping(self) -> bool:
@@ -556,6 +610,19 @@ class LiveMidiPlayer:
             self._error = None
             self._port_name = target
             self._playing = True
+            self._follow = follow
+            self._play_bpm = play_bpm
+            self._tpb = tpb
+            self._pass_ticks = pass_ticks
+            self._pass_len = pass_len
+            self._clock_dt = clock_dt
+            self._tick_schedule = tick_schedule
+            self._schedule = schedule
+            self._i = 0
+            self._pass_index = 0
+            self._next_clock_n = 1
+            self._session_start = None
+            self._tempo_epoch = 0
             self._phase = (
                 "syncing"
                 if follow
@@ -629,11 +696,28 @@ class LiveMidiPlayer:
             # click=False: truly silent — wait only, no notes.
             return _wait_until(start + count_in_sec)
 
+        def _wait_play(deadline: float, epoch: int) -> str:
+            """stop | due | tempo — abort the wait when set_bpm retunes the clock."""
+            while True:
+                if stop_flag.is_set():
+                    return "stop"
+                if self._tempo_epoch != epoch:
+                    return "tempo"
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0:
+                    return "due" if not stop_flag.is_set() else "stop"
+                if remaining > 0.0015:
+                    time.sleep(min(0.002, remaining - 0.001))
+
         def _run_timed(port) -> None:
             """Wall-clock notes at sketch BPM. Optional outbound clock as slave master."""
             with self._lock:
                 self._phase = "playing"
                 self._count_in_end = None
+                self._session_start = time.perf_counter()
+                self._i = 0
+                self._pass_index = 0
+                self._next_clock_n = 1
             if use_mmc:
                 try:
                     _send(port, mmc_sysex(_MMC_RECORD_STROBE))
@@ -645,48 +729,63 @@ class LiveMidiPlayer:
                 except Exception:
                     pass
                 _send(port, mido.Message("start"))
-            session_start = time.perf_counter()
             # Downbeat is MIDI Start. First clock is 1/24 after, not at t=0.
-            next_clock_n = 1
-            pass_index = 0
-            i = 0
             while True:
                 if stop_flag.is_set():
                     return
-                pass_end = (pass_index + 1) * pass_len
+                with self._lock:
+                    session_start = float(self._session_start or time.perf_counter())
+                    pass_len_now = float(self._pass_len)
+                    schedule_now = self._schedule
+                    clock_dt_now = float(self._clock_dt)
+                    pass_index = int(self._pass_index)
+                    i = int(self._i)
+                    next_clock_n = int(self._next_clock_n)
+                    epoch = int(self._tempo_epoch)
+                pass_end = (pass_index + 1) * pass_len_now
                 note_t: Optional[float] = None
-                if i < len(schedule):
-                    candidate = pass_index * pass_len + schedule[i][0]
+                if i < len(schedule_now):
+                    candidate = pass_index * pass_len_now + schedule_now[i][0]
                     if candidate <= pass_end + 1e-9:
                         note_t = candidate
-                clock_t = next_clock_n * clock_dt
+                clock_t = next_clock_n * clock_dt_now
                 due: List[float] = [pass_end]
                 if note_t is not None:
                     due.append(note_t)
                 if use_clock_out and clock_t <= pass_end + 1e-9:
                     due.append(clock_t)
                 t = min(due)
-                if _wait_until(session_start + t):
+                waited = _wait_play(session_start + t, epoch)
+                if waited == "stop":
                     return
+                if waited == "tempo":
+                    continue
                 if use_clock_out and abs(clock_t - t) <= 1e-9:
                     elapsed = time.perf_counter() - session_start
-                    now_n = int(elapsed / clock_dt + 1e-9)
+                    now_n = int(elapsed / clock_dt_now + 1e-9)
                     if now_n > next_clock_n:
-                        next_clock_n = now_n
+                        with self._lock:
+                            if self._tempo_epoch == epoch:
+                                self._next_clock_n = now_n
                         continue
                     _send(port, mido.Message("clock"))
-                    next_clock_n += 1
+                    with self._lock:
+                        if self._tempo_epoch == epoch:
+                            self._next_clock_n = next_clock_n + 1
                     continue
                 if note_t is not None and abs(note_t - t) <= 1e-9:
-                    _send(port, schedule[i][1])
-                    i += 1
+                    _send(port, schedule_now[i][1])
+                    with self._lock:
+                        if self._tempo_epoch == epoch:
+                            self._i = i + 1
                     continue
                 with self._lock:
                     should_loop = self._looping
+                    if should_loop and self._tempo_epoch == epoch:
+                        self._pass_index = pass_index + 1
+                        self._i = 0
                 if not should_loop or stop_flag.is_set():
                     return
-                pass_index += 1
-                i = 0
 
         def _run_follow(port, sync_in) -> None:
             """Fire notes on Logic MIDI Start, then chase incoming clock."""

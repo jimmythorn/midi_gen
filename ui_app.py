@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+import time
 import types
 from datetime import timedelta
 from pathlib import Path
@@ -45,6 +46,7 @@ from midi_gen.note_edit import (
     write_note_events,
 )
 from midi_gen.note_editor import note_editor
+from midi_gen.preview_audio import preview_audio
 from midi_gen.live_midi import (
     get_shared_player,
     has_iac_port,
@@ -69,10 +71,12 @@ from midi_gen.style_prompting import (
     DEFAULT_CHORD_COUNT,
     DEFAULT_GENERATION_TYPE,
     DEFAULT_SKETCH_BARS,
+    apply_octave_shift,
     clamp_bars,
     clamp_chord_count,
     clamp_extend_factor,
     clamp_generation_mode,
+    clamp_octave_shift,
     clamp_generation_type,
     clamp_search_kind,
     clamp_timing_factor,
@@ -92,6 +96,7 @@ from midi_gen.style_prompting import (
     toggle_section_chip,
     toggle_timing_factor,
 )
+from midi_gen.notes import shift_midi_by_octaves
 from midi_gen.ui_prefs import load_prefs, prefs_for_session, save_prefs
 
 ARP_MODE_LABELS = {
@@ -103,6 +108,11 @@ ARP_MODE_LABELS = {
 }
 ARP_STEP_CHOICES = [4, 8, 16]
 ARP_OCTAVE_CHOICES = [1, 2, 3]
+PROG_OCTAVE_SHIFT_MIN = -3
+PROG_OCTAVE_SHIFT_MAX = 3
+_LIVE_GENERATE_DEBOUNCE_SEC = 1.5
+_LIVE_GENERATE_WATCH_SEC = 0.25
+_BPM_WRITE_DEBOUNCE_SEC = 0.4
 _ARP_KEYS = (
     "arp_mode",
     "arp_steps",
@@ -223,8 +233,10 @@ def _reset_arp_knobs() -> None:
 def _on_generate_click() -> None:
     """User Generate — the only home path that writes a sketch."""
     _reset_arp_knobs()
+    st.session_state.pop("_live_generate_after", None)
     if st.session_state.get("last_run"):
         st.session_state["_live_param_tweak"] = True
+    st.session_state["_preview_rev"] = int(st.session_state.get("_preview_rev") or 0) + 1
     st.session_state["auto_generate"] = True
 
 
@@ -239,11 +251,16 @@ def _on_search_kind_tabs() -> None:
     st.session_state["search_kind"] = "artist" if label == "Artist" else "mood"
 
 
+def _reset_register_shift() -> None:
+    st.session_state.pop("prog_octave_shift", None)
+
+
 def _apply_featured_style(name: str) -> None:
     """Select a featured catalog name. Feel stays layered on."""
     st.session_state["catalog_pick"] = name
     _apply_search_kind("artist")
     _reset_arp_knobs()
+    _reset_register_shift()
     st.session_state.pop("spotify_artist_name", None)
     st.session_state.pop("ui_takeover", None)
 
@@ -251,6 +268,7 @@ def _apply_featured_style(name: str) -> None:
 def _on_catalog_pick_change() -> None:
     """Artist change keeps the current feel (additive)."""
     _reset_arp_knobs()
+    _reset_register_shift()
     st.session_state.pop("spotify_artist_name", None)
 
 
@@ -494,16 +512,99 @@ def _apply_surprise(name: str, profile_id: str, effects_preset: str) -> None:
     st.session_state["effects_presets"] = chosen
     st.session_state["effects_preset"] = serialize_preset_ids(chosen)
     _reset_arp_knobs()
+    _reset_register_shift()
 
 
-def _apply_arp_live() -> None:
-    """Rewrite the sketch from arp knobs; keep streaming if already Playing."""
+def _apply_bpm_live() -> None:
+    """Retune the live clock now. Write the file after the slider pauses."""
+    bpm = max(40, min(240, int(st.session_state.get("sketch_bpm") or 120)))
+    st.session_state["sketch_bpm"] = bpm
+    last_run = st.session_state.get("last_run")
+    if not last_run:
+        return
+    opts = dict(last_run.get("options") or {})
+    opts["bpm"] = bpm
+    last_run["options"] = opts
+    get_shared_player().set_bpm(bpm)
+    st.session_state["_bpm_write_after"] = time.monotonic() + _BPM_WRITE_DEBOUNCE_SEC
+
+
+def _flush_bpm_write() -> bool:
+    """Write tempo to disk once the BPM slider is quiet. No Play restart."""
+    due = st.session_state.get("_bpm_write_after")
+    if due is None:
+        return False
+    if time.monotonic() < float(due):
+        return False
+    st.session_state.pop("_bpm_write_after", None)
+    last_run = st.session_state.get("last_run")
+    if not last_run:
+        return False
+    notes = list(last_run.get("edit_notes") or [])
+    refresh_last_run_after_note_write(
+        last_run, notes, dirty=bool(last_run.get("notes_dirty"))
+    )
+    return True
+
+
+def _apply_register_shift(delta: int) -> None:
+    """Move the current sketch ±N octaves. No generate."""
+    cur = clamp_octave_shift(st.session_state.get("prog_octave_shift") or 0)
+    nxt = clamp_octave_shift(cur + int(delta))
+    step = nxt - cur
+    if step == 0:
+        return
+    st.session_state["prog_octave_shift"] = nxt
+    last_run = st.session_state.get("last_run")
+    if not last_run:
+        return
+    notes = [dict(n) for n in (last_run.get("edit_notes") or [])]
+    for note in notes:
+        note["note"] = shift_midi_by_octaves(note.get("note", 0), step)
+    opts = apply_octave_shift(dict(last_run.get("options") or {}), step)
+    opts["octave_shift"] = nxt
+    last_run["options"] = opts
+    refresh_last_run_after_note_write(last_run, notes, dirty=True)
+
+
+def _schedule_live_generate() -> None:
+    """Arm one regenerate 1.5s after the last live knob / slider move."""
     if not st.session_state.get("last_run"):
         return
     st.session_state["_live_param_tweak"] = True
+    st.session_state["_live_generate_after"] = (
+        time.monotonic() + _LIVE_GENERATE_DEBOUNCE_SEC
+    )
+
+
+def _flush_live_generate_debounce() -> None:
+    """Fire the pending live generate once the debounce window is quiet."""
+    due = st.session_state.get("_live_generate_after")
+    if due is None:
+        return
+    if time.monotonic() < float(due):
+        return
+    st.session_state.pop("_live_generate_after", None)
     st.session_state["auto_generate"] = True
     if get_shared_player().playing:
         st.session_state["pending_replay"] = True
+
+
+@st.fragment(run_every=timedelta(seconds=_LIVE_GENERATE_WATCH_SEC))
+def _live_generate_watchdog() -> None:
+    """Tick while a live debounce is armed so the UI stays interactive."""
+    wrote_bpm = _flush_bpm_write()
+    due = st.session_state.get("_live_generate_after")
+    if due is not None and time.monotonic() >= float(due):
+        _flush_live_generate_debounce()
+        st.rerun(scope="app")
+    elif wrote_bpm:
+        st.rerun(scope="app")
+
+
+def _apply_arp_live() -> None:
+    """Queue a sketch rewrite from arp knobs after the debounce window."""
+    _schedule_live_generate()
 
 
 def _parse_fx_lvl_key(key: str) -> tuple[str, str] | None:
@@ -526,10 +627,7 @@ def _apply_effect_level() -> None:
         name, param = parsed
         overrides.setdefault(name, {})[param] = st.session_state[key]
     st.session_state["effects_overrides"] = overrides
-    st.session_state["_live_param_tweak"] = True
-    st.session_state["auto_generate"] = True
-    if get_shared_player().playing:
-        st.session_state["pending_replay"] = True
+    _schedule_live_generate()
 
 
 def _commit_note_edits(notes: list) -> None:
@@ -618,46 +716,63 @@ def _knobs_from_profile(profile: Any) -> dict[str, Any]:
 
 
 def _render_arp_live(profile: Any) -> None:
-    """Play / Record arp knobs when Pattern is selected. BPM lives in Debug."""
+    """Play / Record tempo, register, and Pattern arp knobs."""
     _ = profile
     mode = clamp_generation_mode(
         st.session_state.get("generation_mode")
         or st.session_state.get("home_mode_select")
         or DEFAULT_GENERATION_MODE
     )
+    _render_bpm_live()
     if mode != "pattern":
+        with st.container(key="arp_knob_row"):
+            _lab, bump_col = st.columns([3, 1.4], gap="small")
+            with _lab:
+                st.markdown(
+                    '<p class="feel-path-label">Octaves</p>',
+                    unsafe_allow_html=True,
+                )
+            with bump_col:
+                _render_register_live()
         return
     st.markdown(
         '<p class="feel-path-label">Arp</p>',
         unsafe_allow_html=True,
     )
-    st.caption("Mess with these while Playing — sketch rewrites and keeps streaming.")
-    dir_col, step_col, oct_col = st.columns(3)
-    with dir_col:
-        st.selectbox(
-            "Direction",
-            options=list(ARP_MODE_LABELS.keys()),
-            format_func=lambda key: ARP_MODE_LABELS.get(key, key),
-            key="arp_mode",
-            on_change=_apply_arp_live,
-            help="Note order inside the cell.",
+    st.caption("Mess with these while Playing — sketch rewrites 1.5s after you pause.")
+    if st.session_state.get("_live_generate_after"):
+        st.caption("Applying when you pause…")
+    with st.container(key="arp_knob_row"):
+        dir_col, step_col, oct_col, bump_col = st.columns(
+            [3, 2, 2, 1.4], gap="small"
         )
-    with step_col:
-        st.selectbox(
-            "Steps",
-            options=ARP_STEP_CHOICES,
-            key="arp_steps",
-            on_change=_apply_arp_live,
-            help="4 = quarters, 8 = 8ths, 16 = 16ths per bar.",
-        )
-    with oct_col:
-        st.selectbox(
-            "Octaves",
-            options=ARP_OCTAVE_CHOICES,
-            key="arp_range_octaves",
-            on_change=_apply_arp_live,
-            help="How far the pattern climbs from the root.",
-        )
+        with dir_col:
+            st.selectbox(
+                "Direction",
+                options=list(ARP_MODE_LABELS.keys()),
+                format_func=lambda key: ARP_MODE_LABELS.get(key, key),
+                key="arp_mode",
+                on_change=_apply_arp_live,
+                help="Note order inside the cell.",
+            )
+        with step_col:
+            st.selectbox(
+                "Steps",
+                options=ARP_STEP_CHOICES,
+                key="arp_steps",
+                on_change=_apply_arp_live,
+                help="4 = quarters, 8 = 8ths, 16 = 16ths per bar.",
+            )
+        with oct_col:
+            st.selectbox(
+                "Octaves",
+                options=ARP_OCTAVE_CHOICES,
+                key="arp_range_octaves",
+                on_change=_apply_arp_live,
+                help="How far the pattern climbs from the root.",
+            )
+        with bump_col:
+            _render_register_live()
     ev_col, lock_col = st.columns(2)
     with ev_col:
         st.slider(
@@ -688,9 +803,12 @@ def _render_arp_live(profile: Any) -> None:
     if not isinstance(pitches, list) or len(pitches) != steps:
         prev = list(pitches) if isinstance(pitches, list) else []
         st.session_state["arp_pitches"] = (prev + [None] * steps)[:steps]
+    opts = (st.session_state.get("last_run") or {}).get("options") or {}
+    bpm = int(st.session_state.get("sketch_bpm") or opts.get("bpm") or 120)
     payload = note_editor(
         mode="steps",
         steps=steps,
+        bpm=max(40, min(240, bpm)),
         gates=list(st.session_state["arp_gates"]),
         pitches=list(st.session_state["arp_pitches"]),
         key="arp_seq",
@@ -704,6 +822,53 @@ def _render_arp_live(profile: Any) -> None:
         st.session_state["arp_gates"] = list(payload.get("gates") or [])
         st.session_state["arp_pitches"] = list(payload.get("pitches") or [])
         _apply_arp_live()
+
+
+def _render_bpm_live() -> None:
+    """Play / Record tempo. Same key as Debug."""
+    if "sketch_bpm" not in st.session_state:
+        opts = (st.session_state.get("last_run") or {}).get("options") or {}
+        bpm = int(opts.get("bpm") or 120)
+        st.session_state["sketch_bpm"] = max(40, min(240, bpm))
+    st.markdown(
+        '<p class="feel-path-label">Tempo</p>',
+        unsafe_allow_html=True,
+    )
+    st.slider(
+        "BPM",
+        min_value=40,
+        max_value=240,
+        step=1,
+        key="sketch_bpm",
+        on_change=_apply_bpm_live,
+        help="Tempo while Playing stays on the current beat. File writes after you pause.",
+    )
+
+
+def _render_register_live() -> None:
+    """Octave − / + bumper. No generate."""
+    shift = clamp_octave_shift(st.session_state.get("prog_octave_shift") or 0)
+    down_col, up_col = st.columns(2, gap="small")
+    with down_col:
+        st.button(
+            "−",
+            key="prog_oct_down",
+            use_container_width=True,
+            disabled=shift <= PROG_OCTAVE_SHIFT_MIN,
+            on_click=_apply_register_shift,
+            args=(-1,),
+            help="Transpose the sketch and chord roots down 12 semitones.",
+        )
+    with up_col:
+        st.button(
+            "+",
+            key="prog_oct_up",
+            use_container_width=True,
+            disabled=shift >= PROG_OCTAVE_SHIFT_MAX,
+            on_click=_apply_register_shift,
+            args=(1,),
+            help="Transpose the sketch and chord roots up 12 semitones.",
+        )
 
 
 def _render_section_select(*, key: str = "home_section_select") -> None:
@@ -1292,6 +1457,18 @@ st.markdown(
         font-size: 0.95rem;
         margin: 0.45rem 0 0.25rem 0;
       }
+      div.st-key-arp_knob_row [data-testid="stHorizontalBlock"] {
+        align-items: end;
+      }
+      div.st-key-prog_oct_down button,
+      div.st-key-prog_oct_up button {
+        min-height: 2.15rem !important;
+        height: 2.15rem !important;
+        padding: 0 0.35rem !important;
+        font-size: 1.15rem !important;
+        font-weight: 700 !important;
+        line-height: 1 !important;
+      }
 
       .geek-entry {
         max-width: 56rem;
@@ -1598,6 +1775,8 @@ if _artist_rejected:
         st.session_state.get("artist_reject_reason")
     )
     st.session_state.pop("auto_generate", None)
+    st.session_state.pop("_live_generate_after", None)
+    st.session_state.pop("_bpm_write_after", None)
     st.session_state.pop("pending_replay", False)
     st.session_state.pop("spotify_artist_name", None)
     if _had_last_run:
@@ -1782,8 +1961,13 @@ def _render_generate_loading() -> None:
 def _render_listen(run_data: dict) -> None:
     """In-browser piano preview — Search + Preview hero."""
     st.markdown("### Preview")
-    if run_data.get("wav_bytes"):
-        st.audio(run_data["wav_bytes"], format="audio/wav")
+    wav = run_data.get("wav_bytes")
+    if wav:
+        preview_audio(
+            wav_bytes=wav,
+            rev=int(st.session_state.get("_preview_rev") or 0),
+            key="preview_wav",
+        )
     else:
         st.caption("No preview audio for this sketch.")
 
@@ -2032,6 +2216,7 @@ def _render_effects_chips(run_data: dict | None) -> None:
         current_ids,
         overrides=st.session_state.get("effects_overrides"),
     )
+    fx_sliders: list[tuple[str, str, float | int, float | int, float | int]] = []
     for effect in cfg:
         name = str(effect.get("name") or "")
         if not name:
@@ -2050,16 +2235,24 @@ def _render_effects_chips(run_data: dict | None) -> None:
                 current = int(current)
             if key not in st.session_state:
                 st.session_state[key] = current
-            st.slider(
-                param.replace("_", " "),
-                min_value=lo,
-                max_value=hi,
-                step=step,
-                key=key,
-                help=EFFECT_PARAM_HELP.get(param, param),
-                on_change=_apply_effect_level,
-            )
+            fx_sliders.append((key, param, lo, hi, step))
+    for row_start in range(0, len(fx_sliders), 4):
+        row = fx_sliders[row_start : row_start + 4]
+        cols = st.columns(4)
+        for col, (key, param, lo, hi, step) in zip(cols, row):
+            with col:
+                st.slider(
+                    param.replace("_", " "),
+                    min_value=lo,
+                    max_value=hi,
+                    step=step,
+                    key=key,
+                    help=EFFECT_PARAM_HELP.get(param, param),
+                    on_change=_apply_effect_level,
+                )
     last_run = run_data or st.session_state.get("last_run") or {}
+    if st.session_state.get("_live_generate_after"):
+        st.caption("Applying when you pause…")
     if last_run.get("notes_dirty"):
         st.caption("Recipe rewrite replaces piano-roll edits.")
         st.caption(
@@ -2154,14 +2347,14 @@ def _render_advanced_takeover() -> None:
         st.caption("Matched: —")
     else:
         st.caption(recipe.match_line)
-    st.number_input(
+    st.slider(
         "BPM",
         min_value=40,
         max_value=240,
         step=1,
         key="sketch_bpm",
-        on_change=_apply_arp_live,
-        help="Sketch tempo for Generate. Lock to Logic clock follows Logic’s MIDI Start, not this number.",
+        on_change=_apply_bpm_live,
+        help="Sketch tempo while Playing stays on the current beat. Lock to Logic follows Logic’s clock.",
     )
     st.toggle(
         "Cursor SDK enrichment",
@@ -2303,6 +2496,13 @@ else:
             _render_capture_setup()
 
 # Auto-generate from Random / live tweaks / effects chips
+if (
+    st.session_state.get("_live_generate_after") is not None
+    or st.session_state.get("_bpm_write_after") is not None
+):
+    _live_generate_watchdog()
+_flush_live_generate_debounce()
+_flush_bpm_write()
 if st.session_state.pop("auto_generate", False):
     generate = False if _artist_rejected or not _has_style_intent else True
 
@@ -2355,6 +2555,10 @@ if generate:
             overrides["effects_overrides"] = dict(st.session_state["effects_overrides"])
         if "gen_seed" in st.session_state:
             overrides["seed"] = int(st.session_state.pop("gen_seed"))
+        if st.session_state.get("prog_octave_shift"):
+            overrides["octave_shift"] = clamp_octave_shift(
+                st.session_state.get("prog_octave_shift")
+            )
         live_tweak = bool(st.session_state.pop("_live_param_tweak", False))
         try:
             path, result, options = generate_midi_for_style(

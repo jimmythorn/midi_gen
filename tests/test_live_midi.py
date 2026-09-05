@@ -19,7 +19,7 @@ if "midi_gen" not in sys.modules:
     _pkg.__file__ = str(_ROOT / "__init__.py")
     sys.modules["midi_gen"] = _pkg
 
-from midi_gen.midi_tempo import tick_to_seconds
+from midi_gen.midi_tempo import seconds_schedule_at_bpm, tick_to_seconds
 from midi_gen.live_midi import (
     PORT_LOST_MESSAGE,
     LiveMidiPlayer,
@@ -530,6 +530,39 @@ def test_ui_count_in_default_is_false():
     )
     # Must not hard-default count-in On.
     assert 'st.session_state["live_count_in"] = True' not in src
+
+
+def test_set_bpm_retimes_from_current_tick():
+    player = LiveMidiPlayer()
+    tpb = 480
+    tick_schedule = [
+        (0, mido.Message("note_on", note=60, velocity=90)),
+        (1920, mido.Message("note_off", note=60, velocity=0)),
+    ]
+    player._phase = "playing"
+    player._follow = False
+    player._session_start = time.perf_counter() - 2.0
+    player._play_bpm = 120.0
+    player._tpb = tpb
+    player._pass_ticks = 100000
+    player._tick_schedule = tick_schedule
+    player._schedule = seconds_schedule_at_bpm(tick_schedule, 120.0, tpb)
+    player._pass_len = tick_to_seconds(100000, 120.0, tpb)
+    player._clock_dt = clock_period_sec(120.0)
+    player._i = 1
+    player._pass_index = 0
+    player._looping = False
+    player._tempo_epoch = 0
+    assert player.set_bpm(60) is True
+    elapsed = time.perf_counter() - player._session_start
+    assert abs(elapsed - 4.0) < 0.08
+    assert player._play_bpm == 60.0
+    assert player._tempo_epoch == 1
+    assert abs(player._schedule[1][0] - 4.0) < 0.01
+
+
+def test_set_bpm_idle_is_false():
+    assert LiveMidiPlayer().set_bpm(90) is False
 
 
 def test_play_file_loop_default_is_true():
