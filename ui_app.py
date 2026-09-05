@@ -196,12 +196,19 @@ def _reset_arp_knobs() -> None:
         st.session_state.pop(key, None)
 
 
+def _on_vibe_search_submit() -> None:
+    """Typed Search / feel submit — generate if the artist gate accepts."""
+    _reset_arp_knobs()
+    st.session_state["pending_search_generate"] = True
+
+
 def _apply_vibe_text(chip: str) -> None:
     """Set vibe from a chip. Must run as on_click (before the text_input binds)."""
     st.session_state["vibe_text"] = chip
     st.session_state["search_kind"] = "mood"
     _reset_arp_knobs()
     st.session_state.pop("ui_takeover", None)
+    st.session_state["pending_search_generate"] = True
 
 
 def _apply_featured_style(name: str) -> None:
@@ -1341,6 +1348,7 @@ if _artist_rejected:
         st.session_state.get("artist_reject_reason")
     )
     st.session_state.pop("auto_generate", None)
+    st.session_state.pop("pending_search_generate", None)
     st.session_state.pop("pending_replay", False)
     st.session_state.pop("spotify_artist_name", None)
     if _had_last_run:
@@ -1354,6 +1362,17 @@ else:
         st.session_state["spotify_artist_name"] = _spotify_hit.name
     else:
         st.session_state.pop("spotify_artist_name", None)
+
+_pending_search = bool(st.session_state.pop("pending_search_generate", False))
+_last_search = str(st.session_state.get("_last_search_generate_vibe") or "")
+if (
+    _pending_search
+    and not _artist_rejected
+    and _vibe_now
+    and _vibe_now != _last_search
+):
+    st.session_state["auto_generate"] = True
+    st.session_state["_last_search_generate_vibe"] = _vibe_now
 
 # Identity pin: feel layers on who; only Spotify/other-catalog artists unpin.
 if _has_style_intent:
@@ -1431,59 +1450,6 @@ _transport_busy = bool(player.playing)
 generate = False
 
 
-def _render_recipe_panel() -> None:
-    if not _has_style_intent:
-        st.markdown(
-            """
-            <div class="recipe-preview">
-              <div class="label">Preview here</div>
-              <div class="line">Search a feel or musician.</div>
-              <div class="feel">Nothing is selected yet.</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        return
-    if _artist_rejected:
-        st.markdown(
-            f"""
-            <div class="recipe-preview">
-              <div class="label">Artist gate</div>
-              <div class="line">{ARTIST_REJECT_DRIP}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        return
-    path_note = (
-        "artist + feel (feel layers on)"
-        if recipe.path == "both"
-        else ("feel only" if recipe.path == "vibe" else "who path (named catalog)")
-    )
-    layout = (
-        f"{st.session_state.get('bars')} bars · "
-        f"{st.session_state.get('chord_count')} chords · "
-        f"{format_generation_mode_label(st.session_state.get('generation_mode'))}"
-    )
-    timing = clamp_timing_factor(st.session_state.get("timing_factor", DEFAULT_TIMING_FACTOR))
-    timing_note = ""
-    if abs(timing - 1.0) > 1e-9:
-        for factor, label in TIMING_CHIP_LABELS:
-            if abs(timing - factor) < 1e-9:
-                timing_note = f" · {label}"
-                break
-    st.markdown(
-        f"""
-        <div class="recipe-preview">
-          <div class="label">Preview here · {path_note}</div>
-          <div class="line">{recipe.one_liner}</div>
-          <div class="feel">{recipe.plain_feel_line} · {layout}{timing_note}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def _render_search_feel() -> None:
     st.markdown(
         '<p class="feel-path-label">Who or vibe</p>',
@@ -1515,6 +1481,7 @@ def _render_search_feel() -> None:
             "Pick a match below when the list fills in."
         ),
         key="vibe_text",
+        on_change=_on_vibe_search_submit,
         label_visibility="collapsed",
         width="stretch",
     )
@@ -2092,10 +2059,9 @@ else:
     tab_search, tab_play = st.tabs(["Search + Preview", "Play / Record"])
     generate = False
     with tab_search:
-        # Locked order: Search → Mood chips → Preview → compact strip → Generate/Random
+        # Locked order: Search → Mood chips → result/loading → compact strip → Generate/Random
         _render_search_feel()
         _render_mood_packs(key_prefix="mood")
-        _render_recipe_panel()
         _gen_busy_early = bool(st.session_state.get("auto_generate"))
         if _gen_busy_early:
             _render_generate_loading()
@@ -2123,7 +2089,7 @@ else:
                 st.write(body)
             _render_listen(run)
         else:
-            st.info("Type a feel or tap a Mood, then Generate — or Random.")
+            st.info("Type a feel or tap a Mood — or Random.")
 
         _render_compact_controls_strip()
         generate = _render_generate_row()

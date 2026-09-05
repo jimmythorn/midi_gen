@@ -151,12 +151,13 @@ def test_ui_simplify_home_source_and_apptest():
     assert "format_generation_mode_label(options.get('generation_mode')" in src
     assert "generation_mode_from_type(options.get('generation_type'))" in src
     assert "format_generation_mode_label(options.get('generation_type'))" not in src
-    # Locked Search+Preview order: search → mood → preview → strip → generate
+    # Locked Search+Preview order: search → mood → result/loading → strip → generate
     home = src[src.index("with tab_search:") : src.index("with tab_play:")]
     assert home.index("_render_search_feel") < home.index("_render_mood_packs")
-    assert home.index("_render_mood_packs") < home.index("_render_recipe_panel")
-    assert home.index("_render_recipe_panel") < home.index("_render_compact_controls_strip")
+    assert home.index("_render_mood_packs") < home.index("_render_generate_loading")
+    assert home.index("_render_generate_loading") < home.index("_render_compact_controls_strip")
     assert home.index("_render_compact_controls_strip") < home.index("_render_generate_row")
+    assert "_render_recipe_panel" not in home
     # Play tab wraps existing stack only
     play_tab = src[src.index("with tab_play:") : src.index("# Auto-generate")]
     assert "_render_play_hero" in play_tab

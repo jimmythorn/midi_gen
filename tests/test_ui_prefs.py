@@ -105,6 +105,7 @@ def _apptest():
     at = AppTest.from_file(str(_ROOT / "ui_app.py"), default_timeout=30)
     at.run()
     assert not at.exception, at.exception
+    at.session_state["use_sdk"] = False
     return at
 
 
@@ -158,7 +159,8 @@ def test_no_artist_preselected_until_search_or_pick():
     assert "Philip Glass" not in captions
     assert "Aphex Twin" not in captions
     markdown = " ".join(getattr(m, "value", "") or "" for m in at.markdown)
-    assert "Nothing is selected yet" in markdown
+    assert "Nothing is selected yet" not in markdown
+    assert "About to generate" not in markdown
     at.text_input(key="vibe_text").set_value("ambient drone").run()
     assert not at.exception, at.exception
     assert at.session_state["vibe_text"] == "ambient drone"
@@ -270,6 +272,10 @@ def test_ui_widget_mutations_use_callbacks():
     assert "on_click=_apply_refresh_ports" in src
     assert "on_click=_apply_again" in src
     assert "on_click=_apply_surprise" in src
+    assert "on_change=_on_vibe_search_submit" in src
+    assert "pending_search_generate" in src
+    assert "_render_recipe_panel" not in src
+    assert "About to generate" not in src
     assert "surprise_roll(" in src
     assert 'st.session_state["effects_preset"] = effects_preset' in src
     assert "on_click=_apply_effects_preset" in src
@@ -360,6 +366,7 @@ def test_one_page_chrome_takeovers_source_and_nav():
     assert "Re-Play" in src
     assert "def _render_generate_loading" in src
     assert "GENERATE_BUSY_COPY" in src
+    assert "_render_recipe_panel" not in home_src
     cap = src.index("def _render_capture_setup")
     adv = src.index("def _render_advanced_takeover")
     assert "Audition → Capture" not in src[cap:adv]
