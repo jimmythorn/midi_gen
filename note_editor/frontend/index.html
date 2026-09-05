@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    html, body { margin: 0; padding: 0; background: #111; color: #ddd; font: 12px/1.3 system-ui, sans-serif; }
+    #root { position: relative; overflow: hidden; }
+    canvas { display: block; width: 100%; touch-action: none; }
+    .hint { position: absolute; left: 8px; top: 4px; opacity: 0.55; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <canvas id="c"></canvas>
+    <div class="hint" id="hint"></div>
+  </div>
+  <script>
+    const Streamlit = {
+      RENDER_EVENT: "streamlit:render",
+      events: { _fns: [], addEventListener: function (type, fn) { this._fns.push(fn); } },
+      _send: function (msg) {
+        window.parent.postMessage(Object.assign({ isStreamlitMessage: true }, msg), "*");
+      },
+      setComponentReady: function () { this._send({ type: "streamlit:componentReady", apiVersion: 1 }); },
+      setFrameHeight: function (height) { this._send({ type: "streamlit:setFrameHeight", height: height }); },
+      setComponentValue: function (value) { this._send({ type: "streamlit:setComponentValue", value: value, dataType: "json" }); }
+    };
+    window.addEventListener("message", function (event) {
+      const data = event.data || {};
+      if (data.type !== "streamlit:render") return;
+      Streamlit.events._fns.forEach(function (fn) {
+        fn({ detail: { args: data.args || {} } });
+      });
+    });
+
+    const canvas = document.getElementById("c");
+    const hint = document.getElementById("hint");
+    const ctx = canvas.getContext("2d");
+    let args = { notes: [], mode: "roll", steps: 8, ticks_per_beat: 480 };
+    let notes = [];
+    let gates = [];
+    let pitches = [];
+    let drag = null;
+    let painted = false;
+
+    function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
+    function cloneNotes(src) {
+      return (src || []).map(function (n, i) {
+        return {
+          id: n.id != null ? n.id : i,
+          start_tick: Number(n.start_tick) || 0,
+          duration_tick: Math.max(1, Number(n.duration_tick) || 1),
+          note: clamp(Number(n.note) || 0, 0, 127),
+          velocity: clamp(Number(n.velocity) || 64, 1, 127),
+          channel: clamp(Number(n.channel) || 0, 0, 15)
+        };
+      });
+    }
+
+    function resize(h) {
+      const w = Math.max(320, document.body.clientWidth || window.innerWidth || 640);
+      canvas.width = w * devicePixelRatio;
+      canvas.height = h * devicePixelRatio;
+      canvas.style.height = h + "px";
+      ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+      Streamlit.setFrameHeight(h);
+    }
+
+    function rollMetrics() {
+      const tpb = args.ticks_per_beat || 480;
+      let maxTick = tpb * 4;
+      let lo = 48, hi = 72;
+      notes.forEach(function (n) {
+        maxTick = Math.max(maxTick, n.start_tick + n.duration_tick);
+        lo = Math.min(lo, n.note);
+        hi = Math.max(hi, n.note);
+      });
+      lo = clamp(lo - 4, 0, 127);
+      hi = clamp(hi + 4, 0, 127);
+      if (hi - lo < 23) { hi = clamp(lo + 23, 0, 127); lo = clamp(hi - 23, 0, 127); }
+      return { tpb: tpb, maxTick: maxTick, lo: lo, hi: hi, left: 28, top: 8, w: canvas.width / devicePixelRatio, h: canvas.height / devicePixelRatio };
+    }
+
+    function tickToX(m, tick) {
+      return m.left + (tick / m.maxTick) * (m.w - m.left - 8);
+    }
+    function xToTick(m, x) {
+      return Math.max(0, Math.round(((x - m.left) / Math.max(1, m.w - m.left - 8)) * m.maxTick));
+    }
+    function noteToY(m, note) {
+      const span = m.hi - m.lo + 1;
+      return m.top + ((m.hi - note) / span) * (m.h - m.top - 8);
+    }
+    function yToNote(m, y) {
+      const span = m.hi - m.lo + 1;
+      const rowH = (m.h - m.top - 8) / span;
+      return clamp(Math.round(m.hi - (y - m.top) / rowH), 0, 127);
+    }
+    function noteRect(m, n) {
+      const x = tickToX(m, n.start_tick);
+      const y = noteToY(m, n.note);
+      const w = Math.max(4, tickToX(m, n.start_tick + n.duration_tick) - x);
+      const h = Math.max(4, (m.h - m.top - 8) / (m.hi - m.lo + 1) - 1);
+      return { x: x, y: y, w: w, h: h };
+    }
+
+    function drawRoll() {
+      const m = rollMetrics();
+      ctx.fillStyle = "#111";
+      ctx.fillRect(0, 0, m.w, m.h);
+      const span = m.hi - m.lo + 1;
+      const rowH = (m.h - m.top - 8) / span;
+      for (let n = m.lo; n <= m.hi; n++) {
+        const y = noteToY(m, n);
+        ctx.fillStyle = [1, 3, 6, 8, 10].indexOf(n % 12) >= 0 ? "#1a1a1a" : "#161616";
+        ctx.fillRect(m.left, y, m.w - m.left - 8, rowH);
+        if (n % 12 === 0) {
+          ctx.fillStyle = "#666";
+          ctx.fillText("C" + (Math.floor(n / 12) - 1), 2, y + rowH - 2);
+        }
+      }
+      const beats = Math.ceil(m.maxTick / m.tpb);
+      for (let b = 0; b <= beats; b++) {
+        const x = tickToX(m, b * m.tpb);
+        ctx.strokeStyle = b % 4 === 0 ? "#333" : "#222";
+        ctx.beginPath(); ctx.moveTo(x, m.top); ctx.lineTo(x, m.h - 8); ctx.stroke();
+      }
+      const light = notes.length <= 400;
+      notes.forEach(function (n) {
+        const r = noteRect(m, n);
+        ctx.fillStyle = "#6ea8ff";
+        ctx.fillRect(r.x, r.y, r.w, r.h);
+        if (light) {
+          ctx.fillStyle = "#cfe3ff";
+          ctx.fillRect(r.x + r.w - 5, r.y, 5, r.h);
+        }
+      });
+    }
+
+    function hitRoll(x, y) {
+      const m = rollMetrics();
+      for (let i = notes.length - 1; i >= 0; i--) {
+        const r = noteRect(m, notes[i]);
+        if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
+          const edge = x >= r.x + r.w - 6;
+          return { index: i, edge: edge, ox: x - r.x, start: notes[i].start_tick, dur: notes[i].duration_tick, pitch: notes[i].note };
+        }
+      }
+      return null;
+    }
+
+    function stepCell(x, y) {
+      const w = canvas.width / devicePixelRatio;
+      const h = canvas.height / devicePixelRatio;
+      const cols = Math.max(1, args.steps || 8);
+      const rows = 12;
+      const left = 28, top = 8;
+      const cw = (w - left - 8) / cols;
+      const rh = (h - top - 8) / rows;
+      const col = Math.floor((x - left) / cw);
+      const row = Math.floor((y - top) / rh);
+      if (col < 0 || col >= cols || row < 0 || row >= rows) return null;
+      return { col: col, row: row, pitch: 71 - row, left: left, top: top, cw: cw, rh: rh };
+    }
+
+    function drawSteps() {
+      const w = canvas.width / devicePixelRatio;
+      const h = canvas.height / devicePixelRatio;
+      const cols = Math.max(1, args.steps || 8);
+      const rows = 12;
+      const left = 28, top = 8;
+      const cw = (w - left - 8) / cols;
+      const rh = (h - top - 8) / rows;
+      ctx.fillStyle = "#111";
+      ctx.fillRect(0, 0, w, h);
+      for (let r = 0; r < rows; r++) {
+        const pitch = 71 - r;
+        const y = top + r * rh;
+        ctx.fillStyle = [1, 3, 6, 8, 10].indexOf(pitch % 12) >= 0 ? "#1a1a1a" : "#161616";
+        ctx.fillRect(left, y, w - left - 8, rh);
+        if (pitch % 12 === 0) {
+          ctx.fillStyle = "#666";
+          ctx.fillText("C" + (Math.floor(pitch / 12) - 1), 2, y + rh - 2);
+        }
+      }
+      for (let c = 0; c < cols; c++) {
+        const x = left + c * cw;
+        ctx.strokeStyle = "#222";
+        ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, h - 8); ctx.stroke();
+        const on = !!gates[c];
+        const p = pitches[c];
+        if (on) {
+          const row = p == null ? 7 : clamp(71 - p, 0, 11);
+          ctx.fillStyle = "#6ea8ff";
+          ctx.fillRect(x + 2, top + row * rh + 1, cw - 4, rh - 2);
+        }
+      }
+    }
+
+    function draw() {
+      if (args.mode === "steps") drawSteps();
+      else drawRoll();
+    }
+
+    function emit() {
+      if (args.mode === "steps") {
+        Streamlit.setComponentValue({ mode: "steps", gates: gates.slice(), pitches: pitches.slice() });
+      } else {
+        Streamlit.setComponentValue({ mode: "roll", notes: cloneNotes(notes) });
+      }
+    }
+
+    function onRender(event) {
+      args = event.detail.args || args;
+      notes = cloneNotes(args.notes);
+      const steps = Math.max(1, Number(args.steps) || 8);
+      if (!gates.length || gates.length !== steps) {
+        gates = [];
+        pitches = [];
+        for (let i = 0; i < steps; i++) { gates.push(true); pitches.push(null); }
+      }
+      if (Array.isArray(args.gates) && args.gates.length === steps) gates = args.gates.map(Boolean);
+      if (Array.isArray(args.pitches) && args.pitches.length === steps) {
+        pitches = args.pitches.map(function (p) { return (typeof p === "number") ? p : null; });
+      }
+      const h = args.mode === "steps" ? 220 : 320;
+      resize(h);
+      hint.textContent = args.mode === "steps" ? "Paint gates · drag a lit cell vertically to set pitch" : "Drag notes · right edge changes length";
+      draw();
+    }
+
+    canvas.addEventListener("pointerdown", function (ev) {
+      const rect = canvas.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+      painted = false;
+      if (args.mode === "steps") {
+        const cell = stepCell(x, y);
+        if (!cell) return;
+        drag = { kind: "steps", startCol: cell.col, startRow: cell.row, startPitch: 71 - cell.row, lit: !!gates[cell.col] };
+        if (!gates[cell.col]) {
+          gates[cell.col] = true;
+          pitches[cell.col] = cell.pitch;
+          painted = true;
+        } else {
+          drag.kind = "steps-pitch";
+        }
+        canvas.setPointerCapture(ev.pointerId);
+        draw();
+        return;
+      }
+      const hit = hitRoll(x, y);
+      if (!hit) return;
+      drag = Object.assign({ kind: hit.edge ? "dur" : "move" }, hit);
+      canvas.setPointerCapture(ev.pointerId);
+    });
+
+    canvas.addEventListener("pointermove", function (ev) {
+      if (!drag) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+      if (drag.kind === "steps") {
+        const cell = stepCell(x, y);
+        if (!cell) return;
+        gates[cell.col] = true;
+        if (pitches[cell.col] == null) pitches[cell.col] = cell.pitch;
+        painted = true;
+        draw();
+        return;
+      }
+      if (drag.kind === "steps-pitch") {
+        const cell = stepCell(x, y);
+        if (!cell) return;
+        pitches[drag.startCol] = cell.pitch;
+        gates[drag.startCol] = true;
+        painted = true;
+        draw();
+        return;
+      }
+      const m = rollMetrics();
+      const n = notes[drag.index];
+      if (drag.kind === "dur") {
+        n.duration_tick = Math.max(1, xToTick(m, x) - n.start_tick);
+      } else {
+        n.note = yToNote(m, y);
+        n.start_tick = Math.max(0, xToTick(m, x) - drag.ox * (m.maxTick / Math.max(1, m.w - m.left - 8)));
+        n.start_tick = Math.max(0, Math.round(n.start_tick));
+      }
+      painted = true;
+      draw();
+    });
+
+    canvas.addEventListener("pointerup", function () {
+      if (!drag) return;
+      if (drag.kind === "steps" && !painted && drag.lit) {
+        gates[drag.startCol] = false;
+        pitches[drag.startCol] = null;
+        painted = true;
+      }
+      drag = null;
+      if (painted) emit();
+      painted = false;
+      draw();
+    });
+
+    Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
+    Streamlit.setComponentReady();
+    Streamlit.setFrameHeight(320);
+  </script>
+</body>
+</html>
