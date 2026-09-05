@@ -147,6 +147,10 @@ def test_ui_simplify_home_source_and_apptest():
     assert "from midi_gen.live_midi import" in src
     assert "genre_artist_candidates" in src
     assert "_render_compact_controls_strip" in src
+    # Post-Generate caption: prefer generation_mode, else map type→mode label
+    assert "format_generation_mode_label(options.get('generation_mode')" in src
+    assert "generation_mode_from_type(options.get('generation_type'))" in src
+    assert "format_generation_mode_label(options.get('generation_type'))" not in src
     # Locked Search+Preview order: search → mood → preview → strip → generate
     home = src[src.index("with tab_search:") : src.index("with tab_play:")]
     assert home.index("_render_search_feel") < home.index("_render_mood_packs")

@@ -2110,7 +2110,7 @@ else:
                 f"{options.get('mode')} · {options.get('bpm')} BPM · "
                 f"{options.get('bars')} bars · "
                 f"{len(options.get('chord_progression') or [])} chords · "
-                f"{format_generation_mode_label(options.get('generation_type'))}"
+                f"{format_generation_mode_label(options.get('generation_mode') or generation_mode_from_type(options.get('generation_type')))}"
             )
             likeness = run.get("likeness_blurb")
             if not likeness:
