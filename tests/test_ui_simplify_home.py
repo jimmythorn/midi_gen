@@ -133,8 +133,13 @@ def test_ui_simplify_home_source_and_apptest():
     assert "Full sketch" not in src
     assert "Play / Record" in src
     assert "Search + Preview" in src
-    assert 'key="home_timing_select"' in src
-    assert 'key="home_mode_select"' in src
+    assert 'key="home_timing_0_5"' in src or "home_timing_" in src
+    assert 'key="home_mode_pattern"' in src or "home_mode_" in src
+    assert "home_timing_select" not in src
+    assert "home_mode_select" not in src
+    assert "_render_timing_chips" in src
+    assert "_render_generation_mode_toggle" in src
+    assert "_render_section_chips" in src
     assert "generation_mode" in src
     assert "timing_factor" in src
     assert "Audition → Capture" not in src
@@ -159,13 +164,19 @@ def test_ui_simplify_home_source_and_apptest():
     assert "format_generation_mode_label(options.get('generation_mode')" in src
     assert "generation_mode_from_type(options.get('generation_type'))" in src
     assert "format_generation_mode_label(options.get('generation_type'))" not in src
-    # Selects sit in one row inside Search, directly under the text input.
+    # Chips sit under Search text input (on_click; no selectbox value fights).
     search_fn = src[src.index("def _render_search_feel") : src.index("GENERATE_BUSY_COPY")]
     assert "st.radio" not in search_fn
     assert '"Mood or Artist"' not in search_fn
     assert '["Mood", "Artist"]' in search_fn
     assert 'key="search_kind_tabs"' in search_fn
     assert search_fn.index('key="search_kind_tabs"') < search_fn.index("_render_search_query")
+    assert "_render_part_and_timing_row" in src[
+        src.index("def _render_search_query") : src.index("def _render_search_feel")
+    ] or "_render_part_and_timing_row" in search_fn
+    assert "on_click=_apply_timing_factor" in src
+    assert "on_click=_apply_generation_mode" in src
+    assert "on_click=_apply_section_chip" in src
     assert '[data-testid="stTab"]' in src
     assert "font-size: 1.85rem !important" in src
     assert "min-height: 4.5rem !important" in src
@@ -227,16 +238,16 @@ def test_ui_simplify_home_source_and_apptest():
     assert "takeover_browse" not in home_keys
     assert "takeover_capture" not in home_keys
     assert "takeover_moods" not in home_keys
-    assert "home_timing_1_0" not in home_keys
-    assert "home_timing_0_5" not in home_keys
+    assert "home_timing_1_0" in home_keys
+    assert "home_timing_0_5" in home_keys
     assert "search_kind" not in {s.key for s in at.selectbox}
     assert at.session_state["search_kind"] == "artist"
-    assert "home_timing_select" in {s.key for s in at.selectbox}
-    assert "home_mode_pattern" not in home_keys
-    assert "home_mode_progression" not in home_keys
-    assert "home_mode_select" in {s.key for s in at.selectbox}
-    assert "home_section_intro" not in home_keys
-    assert "home_section_select" in {s.key for s in at.selectbox}
+    assert "home_timing_select" not in {s.key for s in at.selectbox}
+    assert "home_mode_pattern" in home_keys
+    assert "home_mode_progression" in home_keys
+    assert "home_mode_select" not in {s.key for s in at.selectbox}
+    assert "home_section_intro" in home_keys
+    assert "home_section_select" not in {s.key for s in at.selectbox}
     assert "mood_select" not in {s.key for s in at.selectbox}
     assert "search_match_pick" not in {s.key for s in at.selectbox}
     at.session_state["search_kind_tabs"] = "Mood"
@@ -261,15 +272,15 @@ def test_ui_simplify_home_source_and_apptest():
     surprise = next(b for b in at.button if b.key == "surprise_me")
     assert surprise.label == "Random"
 
-    at.selectbox(key="home_timing_select").select(2.0).run()
+    at.button(key="home_timing_2_0").click().run()
     assert not at.exception, at.exception
     assert float(at.session_state["timing_factor"]) == 2.0
-    at.selectbox(key="home_mode_select").select("pattern").run()
+    at.button(key="home_mode_pattern").click().run()
     assert not at.exception, at.exception
     assert at.session_state["generation_mode"] == "pattern"
     select_keys = {s.key for s in at.selectbox}
     assert "arp_mode" not in select_keys
-    at.selectbox(key="home_section_select").select("verse").run()
+    at.button(key="home_section_verse").click().run()
     assert not at.exception, at.exception
     assert at.session_state["section_role"] == "verse"
 

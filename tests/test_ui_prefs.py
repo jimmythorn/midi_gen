@@ -181,7 +181,7 @@ def test_surprise_me_populates_artist_and_effects():
     assert at.session_state["home_tabs"] == "Play / Record"
 
 
-def test_pattern_select_regenerates_after_progression():
+def test_pattern_chip_stages_until_generate():
     from midi_gen.style_prompting import generation_mode_from_type
 
     at = _apptest()
@@ -195,9 +195,14 @@ def test_pattern_select_regenerates_after_progression():
         opts.get("generation_type")
     )
     assert mode == "progression"
-    at.selectbox(key="home_mode_select").select("pattern").run()
+    prior = at.session_state["last_run"]
+    prior_wav = prior.get("wav_bytes")
+    at.button(key="home_mode_pattern").click().run()
     assert not at.exception, at.exception
     assert at.session_state["generation_mode"] == "pattern"
+    assert at.session_state.get("last_run") is prior
+    assert at.session_state["last_run"].get("wav_bytes") is prior_wav
+    assert not at.session_state.get("auto_generate")
     opts = at.session_state["last_run"]["options"]
     stale = opts.get("generation_mode") or generation_mode_from_type(
         opts.get("generation_type")
@@ -211,6 +216,73 @@ def test_pattern_select_regenerates_after_progression():
     )
     assert mode == "pattern"
     assert opts.get("generation_type") == "arpeggio"
+
+
+def test_timing_and_pattern_chips_keep_last_run_sticky():
+    """Bar: Timing Half / Pattern must not clear session run or Preview wav."""
+    at = _apptest()
+    at.session_state["use_sdk"] = False
+    at.session_state["catalog_pick"] = "Philip Glass"
+    at.session_state["auto_generate"] = True
+    at.run()
+    assert not at.exception, at.exception
+    run = at.session_state["last_run"]
+    assert run and run.get("wav_bytes")
+    wav_before = run["wav_bytes"]
+    path_before = run["path"]
+
+    at.button(key="home_timing_0_5").click().run()
+    assert not at.exception, at.exception
+    assert float(at.session_state["timing_factor"]) == 0.5
+    assert at.session_state.get("last_run") is run
+    assert at.session_state["last_run"]["wav_bytes"] is wav_before
+    assert at.session_state["last_run"]["path"] == path_before
+    assert not at.session_state.get("auto_generate")
+
+    at.button(key="home_mode_pattern").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["generation_mode"] == "pattern"
+    assert at.session_state.get("last_run") is run
+    assert at.session_state["last_run"]["wav_bytes"] is wav_before
+    assert not at.session_state.get("auto_generate")
+
+    # Busy path keeps prior preview keys (do not wipe last_run to stage generate).
+    at.session_state["auto_generate"] = True
+    assert at.session_state.get("last_run") is run
+    assert at.session_state["last_run"]["wav_bytes"] is wav_before
+    assert "wav_bytes" in at.session_state["last_run"]
+    assert at.session_state["last_run"]["path"] == path_before
+
+
+def test_generate_busy_keeps_prior_preview_keys_in_source():
+    src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
+    gen_click = src[
+        src.index("def _on_generate_click") : src.index("def _apply_search_kind")
+    ]
+    assert 'st.session_state["auto_generate"] = True' in gen_click
+    assert 'st.session_state.pop("last_run"' not in gen_click
+    assert 'st.session_state["last_run"] = None' not in gen_click
+    # Preview remount only after new MIDI lands — not at Generate click.
+    assert '"_preview_rev"' not in gen_click
+    assert 'st.session_state["_preview_rev"]' in src[
+        src.index('st.session_state["last_run"] = {') : src.index(
+            'st.session_state.pop("generate_error", None)'
+        )
+    ]
+    play_tab = src[src.index("with tab_play:") : src.index("# Auto-generate")]
+    assert "if _gen_busy and not run" in play_tab
+    assert "if run:" in play_tab
+    assert play_tab.index("if _gen_busy and not run") < play_tab.index("_render_result_row")
+    apply_timing = src[
+        src.index("def _apply_timing_factor") : src.index("def _apply_generation_mode")
+    ]
+    apply_mode = src[
+        src.index("def _apply_generation_mode") : src.index("TAKEOVER_LABELS")
+    ]
+    assert "auto_generate" not in apply_timing
+    assert "auto_generate" not in apply_mode
+    assert "last_run" not in apply_timing
+    assert "last_run" not in apply_mode
 
 
 def test_featured_card_sets_catalog_without_widget_exception():
@@ -324,10 +396,14 @@ def test_ui_widget_mutations_use_callbacks():
     assert "surprise_roll(" in src
     assert 'st.session_state["effects_preset"] = effects_preset' in src
     assert "on_click=_apply_effects_preset" in src
-    assert "on_change=_on_timing_select" in src
-    assert "on_change=_on_generation_mode_select" in src
+    assert "on_click=_apply_timing_factor" in src
+    assert "on_click=_apply_generation_mode" in src
+    assert "on_click=_apply_section_chip" in src
+    assert "on_change=_on_timing_select" not in src
+    assert "on_change=_on_generation_mode_select" not in src
+    assert "on_change=_on_section_select" not in src
     assert 'st.session_state["auto_generate"] = True' not in src[
-        src.index("def _apply_generation_mode") : src.index("def _on_generation_mode_select")
+        src.index("def _apply_generation_mode") : src.index("TAKEOVER_LABELS")
     ]
     assert 'st.session_state["auto_generate"] = True' in src[
         src.index("def _on_generate_click") : src.index("def _apply_featured_style")
@@ -343,7 +419,7 @@ def test_arp_live_knobs_present_and_override_steps():
     at.session_state["use_sdk"] = False
     keys = [s.key for s in at.selectbox]
     assert "arp_mode" not in keys
-    at.selectbox(key="home_mode_select").select("pattern").run()
+    at.button(key="home_mode_pattern").click().run()
     assert not at.exception, at.exception
     keys = [s.key for s in at.selectbox]
     assert "arp_mode" not in keys
@@ -493,7 +569,7 @@ def test_one_page_chrome_takeovers_source_and_nav():
     assert "st.scatter_chart" not in geek
     assert "_render_effects_chips" in geek
     assert "no note-level mutate" not in src
-    arp_live = src[src.index("def _render_arp_live") : src.index("def _render_section_select")]
+    arp_live = src[src.index("def _render_arp_live") : src.index("def _render_section_chips")]
     assert "arp_seq" in arp_live
     assert "bpm=" in arp_live
     assert "_apply_arp_live()" in arp_live
@@ -503,7 +579,7 @@ def test_one_page_chrome_takeovers_source_and_nav():
         arp_live.index('key="arp_range_octaves"') : arp_live.index("note_editor")
     ]
     reg = src[
-        src.index("def _render_register_live") : src.index("def _render_section_select")
+        src.index("def _render_register_live") : src.index("def _render_section_chips")
     ]
     assert '"−"' in reg
     assert '"+"' in reg
@@ -531,8 +607,11 @@ def test_one_page_chrome_takeovers_source_and_nav():
     listen = src[src.index("def _render_listen") : src.index("def _render_play_hero")]
     assert "preview_audio" in listen
     assert "st.audio" not in listen
-    assert '"_preview_rev"' in src[
+    assert '"_preview_rev"' not in src[
         src.index("def _on_generate_click") : src.index("def _apply_search_kind")
+    ]
+    assert 'st.session_state["_preview_rev"]' in src[
+        src.index('st.session_state["last_run"] = {') : src.index("_queue_play_record_tab()")
     ]
     html = (_ROOT / "preview_audio" / "frontend" / "index.html").read_text(
         encoding="utf-8"

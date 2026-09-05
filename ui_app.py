@@ -235,8 +235,10 @@ def _on_generate_click() -> None:
     _reset_arp_knobs()
     st.session_state.pop("_live_generate_after", None)
     if st.session_state.get("last_run"):
+        # Keep prior last_run / wav until success; sticky overrides on rewrite.
         st.session_state["_live_param_tweak"] = True
-    st.session_state["_preview_rev"] = int(st.session_state.get("_preview_rev") or 0) + 1
+    # Do not bump _preview_rev here — remounting Preview before new MIDI lands
+    # blanks the player. Rev advances only when a new sketch succeeds.
     st.session_state["auto_generate"] = True
 
 
@@ -288,38 +290,26 @@ def _render_catalog_selectbox(names: list[str]) -> None:
 
 
 def _apply_section_chip(role: str) -> None:
+    """Stage Song part only — does not clear last_run or auto-generate."""
     st.session_state["section_role"] = toggle_section_chip(
         st.session_state.get("section_role"), role
     )
 
 
-def _on_section_select() -> None:
-    raw = st.session_state.get("home_section_select")
-    st.session_state["section_role"] = raw or None
-
-
 def _apply_timing_factor(factor: float) -> None:
+    """Stage Timing only — does not clear last_run or auto-generate."""
     st.session_state["timing_factor"] = toggle_timing_factor(
         st.session_state.get("timing_factor", DEFAULT_TIMING_FACTOR), factor
     )
 
 
-def _on_timing_select() -> None:
-    st.session_state["timing_factor"] = clamp_timing_factor(
-        st.session_state.get("home_timing_select")
-    )
-
-
 def _apply_generation_mode(mode: str) -> None:
+    """Stage Pattern|Progression only — does not clear last_run or auto-generate."""
     st.session_state["generation_mode"] = clamp_generation_mode(mode)
     # Keep legacy shape key aligned for Length takeover / sketch layout.
     st.session_state["generation_type"] = (
         "arpeggio" if st.session_state["generation_mode"] == "pattern" else "drone"
     )
-
-
-def _on_generation_mode_select() -> None:
-    _apply_generation_mode(st.session_state.get("home_mode_select"))
 
 
 # --- One-page chrome: home stays sacred; extras are full-screen takeovers ---
@@ -719,9 +709,7 @@ def _render_arp_live(profile: Any) -> None:
     """Play / Record tempo, register, and Pattern arp knobs."""
     _ = profile
     mode = clamp_generation_mode(
-        st.session_state.get("generation_mode")
-        or st.session_state.get("home_mode_select")
-        or DEFAULT_GENERATION_MODE
+        st.session_state.get("generation_mode") or DEFAULT_GENERATION_MODE
     )
     _render_bpm_live()
     if mode != "pattern":
@@ -871,79 +859,99 @@ def _render_register_live() -> None:
         )
 
 
-def _render_section_select(*, key: str = "home_section_select") -> None:
-    """Intro / Verse / Pre-chorus / Chorus / Bridge / Outro. Off until picked."""
-    labels = {role: name for role, name in SECTION_CHIP_LABELS}
-    options = [role for role, _ in SECTION_CHIP_LABELS]
-    current = str(st.session_state.get("section_role") or "")
-    if current not in options:
-        current = None
-    if key not in st.session_state:
-        st.session_state[key] = current
-    st.selectbox(
-        "Song part",
-        options=options,
-        format_func=lambda role: labels.get(role, role),
-        key=key,
-        on_change=_on_section_select,
-        help="Sketch a section fingerprint when the catalog has one. Typed “ELO bridge” still works.",
+def _render_section_chips(*, key_prefix: str = "home_section") -> None:
+    """Intro / Verse / Pre-chorus / Chorus / Bridge / Outro — on_click only."""
+    current = st.session_state.get("section_role")
+    st.markdown(
+        '<p class="feel-path-label">Song part</p>',
+        unsafe_allow_html=True,
     )
+    st.markdown('<div class="section-chip-row">', unsafe_allow_html=True)
+    cols = st.columns(len(SECTION_CHIP_LABELS))
+    for col, (role, label) in zip(cols, SECTION_CHIP_LABELS):
+        with col:
+            on = current == role
+            st.button(
+                f"{'● ' if on else ''}{label}",
+                key=f"{key_prefix}_{role}",
+                use_container_width=True,
+                type="primary" if on else "secondary",
+                help=(
+                    f"Sketch a {role} fingerprint when the catalog has one. "
+                    "Off = full sketch. Typed “ELO bridge” still works."
+                ),
+                on_click=_apply_section_chip,
+                args=(role,),
+            )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
-def _render_timing_select(*, key: str = "home_timing_select") -> None:
-    """Double / 1× / Half / Quarter → Engine timing_factor."""
+def _render_timing_chips(*, key_prefix: str = "home_timing") -> None:
+    """Double / 1× / Half / Quarter → Engine timing_factor. Stage until Generate."""
     current = clamp_timing_factor(
         st.session_state.get("timing_factor", DEFAULT_TIMING_FACTOR)
     )
-    factors = [factor for factor, _ in TIMING_CHIP_LABELS]
-    labels = {factor: name for factor, name in TIMING_CHIP_LABELS}
-    if key not in st.session_state:
-        st.session_state[key] = current
-    st.selectbox(
-        "Timing",
-        options=factors,
-        format_func=lambda factor: labels.get(factor, str(factor)),
-        key=key,
-        on_change=_on_timing_select,
-        help=(
-            "Double = faster (half bars per chord). "
-            "Half / Quarter hold each chord longer. "
-            "1× = normal."
-        ),
+    st.session_state["timing_factor"] = current
+    st.markdown(
+        '<p class="feel-path-label">Timing</p>',
+        unsafe_allow_html=True,
     )
+    st.markdown('<div class="extend-chip-row">', unsafe_allow_html=True)
+    cols = st.columns(len(TIMING_CHIP_LABELS))
+    for col, (factor, label) in zip(cols, TIMING_CHIP_LABELS):
+        with col:
+            on = abs(current - factor) < 1e-9
+            st.button(
+                f"{'● ' if on else ''}{label}",
+                key=f"{key_prefix}_{str(factor).replace('.', '_')}",
+                use_container_width=True,
+                type="primary" if on else "secondary",
+                help=(
+                    "Double = faster (half bars per chord). "
+                    "Half / Quarter hold each chord longer. "
+                    "1× = normal."
+                ),
+                on_click=_apply_timing_factor,
+                args=(factor,),
+            )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
-def _render_generation_mode_select(*, key: str = "home_mode_select") -> None:
-    """Pattern | Progression → Engine apply_generation_mode."""
+def _render_generation_mode_toggle(*, key_prefix: str = "home_mode") -> None:
+    """Pattern | Progression → apply_generation_mode. Stage until Generate."""
     current = clamp_generation_mode(
         st.session_state.get("generation_mode", DEFAULT_GENERATION_MODE)
     )
-    if key not in st.session_state:
-        st.session_state[key] = current
-    st.selectbox(
-        "Pattern | Progression",
-        options=list(GENERATION_MODES),
-        format_func=format_generation_mode_label,
-        key=key,
-        on_change=_on_generation_mode_select,
-        help=(
-            "Pattern walks an arpeggio. Progression holds each chord. "
-            "Does not rewrite who / fingerprint. "
-            "Wash recipes that opt out of held chords still win."
-        ),
+    st.session_state["generation_mode"] = current
+    st.markdown(
+        '<p class="feel-path-label">Pattern | Progression</p>',
+        unsafe_allow_html=True,
     )
+    cols = st.columns(len(GENERATION_MODES))
+    for col, mode in zip(cols, GENERATION_MODES):
+        with col:
+            on = current == mode
+            st.button(
+                f"{'● ' if on else ''}{format_generation_mode_label(mode)}",
+                key=f"{key_prefix}_{mode}",
+                use_container_width=True,
+                type="primary" if on else "secondary",
+                help=(
+                    "Pattern walks an arpeggio. Progression holds each chord. "
+                    "Does not rewrite who / fingerprint. "
+                    "Wash recipes that opt out of held chords still win."
+                ),
+                on_click=_apply_generation_mode,
+                args=(mode,),
+            )
 
 
 def _render_part_and_timing_row() -> None:
-    """Song part + Timing + Pattern|Progression in one row under Search."""
+    """Song part + Timing + Pattern|Progression chips under Search (on_click)."""
     st.markdown('<div class="search-control-row">', unsafe_allow_html=True)
-    part_col, timing_col, shape_col = st.columns(3, gap="small")
-    with part_col:
-        _render_section_select(key="home_section_select")
-    with timing_col:
-        _render_timing_select(key="home_timing_select")
-    with shape_col:
-        _render_generation_mode_select(key="home_mode_select")
+    _render_section_chips(key_prefix="home_section")
+    _render_timing_chips(key_prefix="home_timing")
+    _render_generation_mode_toggle(key_prefix="home_mode")
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -1439,10 +1447,14 @@ st.markdown(
         max-width: 52rem;
         margin: 0.35rem 0 0.65rem 0;
       }
+      .search-control-row .section-chip-row,
+      .search-control-row .extend-chip-row {
+        max-width: 100%;
+      }
       .search-control-row [data-testid="stHorizontalBlock"] {
-        align-items: end;
+        align-items: stretch;
         flex-wrap: nowrap !important;
-        gap: 0.65rem;
+        gap: 0.35rem;
       }
       .search-control-row [data-testid="column"] {
         min-width: 0 !important;
@@ -1946,7 +1958,7 @@ GENERATE_BUSY_COPY = "Resolving style and writing MIDI…"
 
 
 def _render_generate_loading() -> None:
-    """Original Generating callout. Replaces Play / Clear IAC while busy."""
+    """Busy callout beside / instead of Play while Generate runs. Never clears last_run."""
     st.markdown(
         f"""
         <div class="recipe-preview generate-loading">
@@ -2005,6 +2017,7 @@ def _render_play_hero(run_data: dict) -> None:
 
         _gen_lock = bool(st.session_state.get("auto_generate"))
         if _gen_lock:
+            # Keep last Preview in the listen column; busy state lives here.
             _render_generate_loading()
         else:
             st.markdown('<div class="play-hero-stack">', unsafe_allow_html=True)
@@ -2473,6 +2486,8 @@ else:
         _render_sketch_layout()
 
     with tab_play:
+        # Prefer session last_run so tab flips / busy path never drop the sketch.
+        run = st.session_state.get("last_run") or run
         _gen_busy = bool(st.session_state.get("auto_generate"))
         _render_geek_entry(has_sketch=bool(run) and not _gen_busy)
         if takeover == "geek":
@@ -2480,6 +2495,7 @@ else:
                 _render_geek_takeover(run)
             else:
                 st.info("Generate a sketch first.")
+        # Keep prior Preview / recipe while busy; loading only when nothing to show.
         if _gen_busy and not run:
             _render_generate_loading()
         if run:
@@ -2596,6 +2612,9 @@ if generate:
                     used_cursor_sdk=result.used_cursor_sdk,
                 ),
             }
+            st.session_state["_preview_rev"] = int(
+                st.session_state.get("_preview_rev") or 0
+            ) + 1
             if result.used_cursor_sdk and not live_tweak:
                 st.session_state["_pending_profile_knobs"] = _knobs_from_profile(
                     result.profile
