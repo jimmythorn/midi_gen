@@ -192,12 +192,32 @@ def test_ui_simplify_home_source_and_apptest():
     assert at.session_state["generation_mode"] == "pattern"
 
 
-def test_mood_combo_stub_without_style_lab_api():
-    """#34 not on base → empty mood rows; artist catalog matches still work."""
+def test_mood_combo_wires_genre_artist_candidates():
+    """#34 on main → mood combo uses genre_artist_candidates → ranked names."""
     from midi_gen import ui_app as app
+    from midi_gen.mood_search import ArtistCandidate, GenreArtistCandidates
 
-    # Force missing mood_search module path
-    names = app._mood_combo_names("ambient", limit=5)
-    assert names == []
-    assert catalog_name_matches("Glass", limit=3)
+    fake = GenreArtistCandidates(
+        genre_query="ambient",
+        candidates=(
+            ArtistCandidate(
+                id="a1",
+                name="Brian Eno",
+                followers_total=500_000,
+                genres=("ambient",),
+            ),
+            ArtistCandidate(
+                id="a2",
+                name="Aphex Twin",
+                followers_total=400_000,
+                genres=("ambient", "idm"),
+            ),
+        ),
+        ok=True,
+    )
+    with mock.patch(
+        "midi_gen.mood_search.genre_artist_candidates", return_value=fake
+    ):
+        names = app._mood_combo_names("ambient", limit=10)
+    assert names == ["Brian Eno", "Aphex Twin"]
     assert "Philip Glass" in catalog_name_matches("Glass", limit=3)

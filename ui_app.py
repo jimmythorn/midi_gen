@@ -279,11 +279,7 @@ def _on_search_match_pick() -> None:
 
 
 def _mood_combo_names(query: str, *, limit: int = 10) -> list[str]:
-    """
-    Mood match rows via Style Lab ``genre_artist_candidates`` when #34 is on base.
-
-    Until that API lands: empty list (artist path + catalog still work).
-    """
+    """Mood match rows via Style Lab ``genre_artist_candidates`` (#34)."""
     q = (query or "").strip()
     if not q:
         return []
@@ -293,7 +289,6 @@ def _mood_combo_names(query: str, *, limit: int = 10) -> list[str]:
             genre_artist_candidates,
         )
     except ImportError:
-        # TODO(Sketch UX): wire when Style Lab #34 merges — genre_artist_candidates
         return []
     try:
         result = genre_artist_candidates(q, limit=limit)
@@ -1545,10 +1540,7 @@ def _render_search_feel() -> None:
             on_change=_on_search_match_pick,
         )
     elif kind == "mood" and q:
-        st.caption(
-            "Mood matches need Style Lab genre search (#34). "
-            "Artist search still works."
-        )
+        st.caption("No mood matches for that genre yet — try another feel or Artist search.")
 
 
 GENERATE_BUSY_COPY = "Resolving style and writing MIDI…"
