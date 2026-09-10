@@ -16,6 +16,7 @@ The Streamlit Style Lab is the primary surface. The CLI (`python -m midi_gen`) r
 - **Flexible matching** — aliases (gymnopédie → Satie, sheets of sound → Coltrane, …) + richer vibe tags across the full catalog.
 - **Recipe preview + match line** before Generate; **Try instead** related styles after.
 - **Play into Logic (IAC)** — Audition→Capture strip; Refresh ports; Count-in / Loop (app-side); All notes off (CC123); Record in Logic to keep a region.
+- **Logic MCP Record (optional)** — fail-closed arm + `transport.record` via Logic Pro MCP; notes still stream over IAC (never MCP MIDI import).
 - **Transport prefs** — count-in / loop / soft-click / last MIDI port persist locally across Streamlit restarts (defaults Off / On / Off — Play loops until Stop).
 - **Listen on home** — piano preview plays in the page after Generate (pitch-bend / tape wow audible). Play into Logic for a sampled instrument.
 - **Mode color** — characteristic tones (#4 Lydian, nat6/9 Dorian, b7 Mixolydian, …) on weak beats so modes aren’t triad wallpaper.
@@ -52,6 +53,64 @@ Artist gate (reject-before-generate): typed Search / feel always hits Spotify Ar
 5. If you enabled IAC mid-session, hit **Refresh ports** — no relaunch needed.
 
 Requires `python-rtmidi` (installed with the package). Silence checklist under Play covers MIDI In match / track hears input / instrument loaded.
+
+### Optional: Logic Record via Logic Pro MCP (record-only spike)
+
+Style Lab can optionally **arm a track and punch Record** through [Logic Pro MCP](https://github.com/MongLong0214/logic-pro-mcp) (stdio JSON-RPC), then stream the sketch over the **existing IAC** path so notes land while Logic is recording.
+
+**This does not replace IAC.** MCP is never used for MIDI import, `record_sequence`, or note send. Notes always travel IAC → Logic MIDI In.
+
+#### Install (Mac)
+
+Prefer Homebrew, Logic Pro MCP **≥ 3.12** (ideally **3.16**):
+
+```bash
+brew tap MongLong0214/logic-pro-mcp https://github.com/MongLong0214/logic-pro-mcp
+brew trust monglong0214/logic-pro-mcp   # Homebrew 6.0+
+brew install logic-pro-mcp
+```
+
+Binary on `PATH` as `LogicProMCP`, or set `LOGIC_PRO_MCP_BIN` to an absolute path.
+
+#### Jimmy’s one-time TCC clicks (launcher app)
+
+Grant these to the app that launches Style Lab / the bridge (Terminal, Cursor, etc.) under **System Settings → Privacy & Security**:
+
+1. **Accessibility** — enable the launcher app.
+2. **Automation → Logic Pro** — allow control.
+3. **Automation → System Events** — separate target; required (Logic grant alone is not enough).
+4. **PostEvent** (Input Monitoring / Accessibility PostEvent) — needed for CGEvent fallbacks.
+
+Then: open **Logic Pro** with a project document.
+
+#### Doctor + optional arm key
+
+```bash
+LogicProMCP doctor --profile core
+# machine-readable:
+LogicProMCP doctor --profile core --json
+```
+
+Optional one-time (consent required) for reliable coordinate-free arm:
+
+```bash
+# Via MCP client / tool: logic_system.setup_arm_key with consent: true
+# Only after you intentionally approve Key Commands mutation in Logic.
+```
+
+#### In Style Lab
+
+- MCP status chip: **Ready** / **Offline** (fail-closed). Offline copy: *Logic Record control offline — arm & Record in Logic manually, then Play.*
+- **Record in Logic** (secondary to **Play in Logic**): when Ready → MCP `arm_only` (explicit selected or sole track; ambiguous multi-track fails closed) → MCP `transport.record` (State A only) → existing **Play into Logic** IAC stream (`send_mmc=False` so MMC does not toggle MCP Record off).
+- **Clear IAC** still stops/panics the IAC stream; if this session used MCP Record, also best-effort MCP `transport.stop`.
+
+Honest Contract: **State A confirmed** = success. State B uncertain or State C failure → fail closed (UI never pretends a take was recorded).
+
+#### Out of scope for this spike
+
+- **MCU control surface** setup (mixer Later).
+- **Scripter** insert (plugin params Later).
+- MIDI Clock emit-to-Logic changes, generator/musicality changes, MCP MIDI composition/import.
 
 ## Style lookup
 
