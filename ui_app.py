@@ -2130,7 +2130,7 @@ def _render_play_hero(run_data: dict) -> None:
             if st.button(
                 "Record in Logic",
                 use_container_width=True,
-                disabled=not live.available,
+                disabled=not (live.available and mcp_ready),
                 key="record_logic_mcp",
                 help=(
                     "Arm explicit track via Logic MCP → transport.record (State A) → "
