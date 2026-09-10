@@ -297,6 +297,7 @@ def test_ui_source_guards_record_chip_and_iac_play_unchanged():
 
     assert "from midi_gen.logic_mcp_bridge import" in src
     assert 'key="record_logic_mcp"' in src
+    assert "disabled=not (live.available and mcp_ready)" in src
     assert "_start_mcp_record_then_iac_play" in src
     assert "_render_mcp_status_chip" in src
     assert "OFFLINE_MUSICIAN_COPY" in src
