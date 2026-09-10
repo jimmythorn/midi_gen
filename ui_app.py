@@ -1725,6 +1725,7 @@ def _render_mcp_status_chip() -> None:
             unsafe_allow_html=True,
         )
         st.session_state["logic_mcp_ready"] = False
+        # Honesty copy lives on the Offline chip only — no extra layout chrome.
         st.caption(OFFLINE_MUSICIAN_COPY)
 
 
@@ -2145,8 +2146,6 @@ def _render_play_hero(run_data: dict) -> None:
                     options=options,
                 )
                 st.rerun()
-            if not mcp_ready:
-                st.caption(OFFLINE_MUSICIAN_COPY)
             st.markdown("</div>", unsafe_allow_html=True)
 
         if player.playing or st.session_state.get("live_was_playing"):
@@ -2482,9 +2481,7 @@ def _render_capture_setup() -> None:
     with record_col:
         st.markdown("#### Record")
         st.caption(
-            "Play punches MMC Record + Start. Optional **Record in Logic** (above) "
-            "arms via Logic MCP then records before the IAC stream — "
-            "notes still travel over IAC, never MCP MIDI import. "
+            "Arm the track in Logic. Play here punches MMC Record + Start. "
             "Lock to Logic: transmit MIDI Clock from Logic to this IAC bus, "
             "then Play here, then Play in Logic. Notes fire on Logic’s downbeat."
         )
