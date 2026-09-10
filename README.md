@@ -10,6 +10,8 @@ Honest baseline: output is musically usable as a starting sketch, not a finished
 
 The Streamlit Style Lab is the primary surface. The CLI (`python -m midi_gen`) remains for power/dev use.
 
+**Musician guide:** [docs/USER_GUIDE.md](docs/USER_GUIDE.md) — Logic track setup, Cursor API key, basic usage.
+
 ## What's new
 
 - **Musician / style lab** — catalog pick (**who**) or free-text vibe (**feel**); featured cards + vibe chips are entry points, not a closed set.
