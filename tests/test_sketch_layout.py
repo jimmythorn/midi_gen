@@ -213,5 +213,8 @@ def test_ui_wires_sketch_layout_knobs():
     assert "Song part" in src
     assert "Drone (held)" not in src
     assert "Extend (drone)" not in src
-    assert "_render_timing_select" in src
-    assert "_render_generation_mode_select" in src
+    assert "_render_timing_chips" in src
+    assert "_render_generation_mode_toggle" in src
+    assert "_render_section_chips" in src
+    assert "_render_timing_select" not in src
+    assert "_render_generation_mode_select" not in src

@@ -12,7 +12,7 @@ or Streamlit layout.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Literal, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Literal, MutableMapping, Optional, Sequence, Tuple
 
 from .spotify_client import (
     MIN_SPOTIFY_FOLLOWERS,
@@ -29,6 +29,35 @@ GenreRejectReason = Literal[
     "missing_credentials",
     "spotify_error",
 ]
+
+# Process / session reuse: same mood query must not re-hit Spotify on every
+# Streamlit rerun or chip click. Keyed by normalized query + limit + floor.
+# Transient spotify_error is not stored so a later call can retry.
+_GenreCacheKey = Tuple[str, int, int]
+_GENRE_ARTIST_CACHE: Dict[_GenreCacheKey, "GenreArtistCandidates"] = {}
+
+
+def clear_genre_artist_cache() -> None:
+    """Drop cached mood → candidate lookups (tests / credential rotation)."""
+    _GENRE_ARTIST_CACHE.clear()
+
+
+def _genre_cache_key(
+    genre_query: str,
+    *,
+    limit: int,
+    min_followers: int,
+) -> _GenreCacheKey:
+    return (genre_query.strip().lower(), int(limit), int(min_followers))
+
+
+def _cache_store(
+    session_cache: Optional[MutableMapping],
+) -> MutableMapping:
+    """Prefer caller session dict (Streamlit); else module process cache."""
+    if session_cache is not None:
+        return session_cache
+    return _GENRE_ARTIST_CACHE
 
 
 @dataclass(frozen=True)
@@ -182,6 +211,41 @@ def candidates_as_combo_rows(
     return rows
 
 
+def mood_combo_names(
+    query: str,
+    *,
+    limit: int = 10,
+    min_followers: int = MIN_SPOTIFY_FOLLOWERS,
+    session_cache: Optional[MutableMapping] = None,
+    genre_search=None,
+) -> List[str]:
+    """
+    Name list for Sketch mood match rows — same Spotify genre API, cached.
+
+    Pass Streamlit ``session_state`` (or a dedicated dict) as ``session_cache``
+    so reruns / chip clicks reuse the prior lookup. Does not invent catalog
+    fingerprints (Glass/Eno); empty on fail-closed.
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+    result = genre_artist_candidates(
+        q,
+        limit=limit,
+        min_followers=min_followers,
+        session_cache=session_cache,
+        genre_search=genre_search,
+    )
+    if not result.ok:
+        return []
+    names: List[str] = []
+    for row in candidates_as_combo_rows(result):
+        name = str((row or {}).get("name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
 def genre_artist_candidates(
     genre: str,
     *,
@@ -191,6 +255,7 @@ def genre_artist_candidates(
     client_secret: Optional[str] = None,
     opener: Any = None,
     genre_search=None,
+    session_cache: Optional[MutableMapping] = None,
 ) -> GenreArtistCandidates:
     """
     Mood path entry: genre query → ranked artist candidates.
@@ -202,6 +267,10 @@ def genre_artist_candidates(
 
     ``genre_search`` is injectable ``(genre) -> list[SpotifyArtist]`` for tests.
     Default uses Client Credentials genre-first search.
+
+    ``session_cache`` is an optional mutable mapping (e.g. Streamlit
+    session_state bucket) keyed by normalized mood query. When omitted, a
+    process-level cache is used so Streamlit reruns still skip Spotify.
     """
     q = (genre or "").strip()
     if not q:
@@ -212,6 +281,12 @@ def genre_artist_candidates(
             reason="empty_query",
             message="Empty genre query — nothing to search.",
         )
+
+    key = _genre_cache_key(q, limit=limit, min_followers=min_followers)
+    store = _cache_store(session_cache)
+    cached = store.get(key)
+    if isinstance(cached, GenreArtistCandidates):
+        return cached
 
     search_fn = (
         genre_search
@@ -230,14 +305,17 @@ def genre_artist_candidates(
     try:
         artists = search_fn(q)
     except MissingSpotifyCredentials as exc:
-        return GenreArtistCandidates(
+        result = GenreArtistCandidates(
             genre_query=q,
             candidates=(),
             ok=False,
             reason="missing_credentials",
             message=str(exc),
         )
+        store[key] = result
+        return result
     except SpotifyClientError as exc:
+        # Do not cache transient transport failures — allow retry next rerun.
         return GenreArtistCandidates(
             genre_query=q,
             candidates=(),
@@ -253,17 +331,20 @@ def genre_artist_candidates(
         min_followers=min_followers,
     )
     if reason is not None:
-        return GenreArtistCandidates(
+        result = GenreArtistCandidates(
             genre_query=q,
             candidates=(),
             ok=False,
             reason=reason,
             message=message,
         )
-    return GenreArtistCandidates(
-        genre_query=q,
-        candidates=candidates,
-        ok=True,
-        reason=None,
-        message=message,
-    )
+    else:
+        result = GenreArtistCandidates(
+            genre_query=q,
+            candidates=candidates,
+            ok=True,
+            reason=None,
+            message=message,
+        )
+    store[key] = result
+    return result
