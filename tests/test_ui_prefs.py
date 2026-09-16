@@ -281,6 +281,10 @@ def test_generate_busy_keeps_prior_preview_keys_in_source():
     assert 'st.session_state["auto_generate"] = True' in live_struct
     assert 'st.session_state.pop("last_run"' not in live_struct
     assert "_live_param_tweak" in live_struct
+    # No silent no-op: chip rewrite requires style intent (catalog or vibe).
+    assert "catalog_pick" in live_struct
+    assert "vibe_text" in live_struct
+    assert "Pick a style or type a vibe" in live_struct
     apply_section = src[
         src.index("def _apply_section_chip") : src.index("def _apply_timing_factor")
     ]
@@ -672,7 +676,8 @@ def test_one_page_chrome_takeovers_source_and_nav():
     assert "auto_generate" not in src[
         src.index("def _apply_register_shift") : src.index("def _schedule_live_generate")
     ]
-    assert "pending_replay" not in src[
+    # Octave writes the file — while Playing, re-stream so IAC matches Preview.
+    assert 'st.session_state["pending_replay"] = True' in src[
         src.index("def _apply_register_shift") : src.index("def _schedule_live_generate")
     ]
     listen = src[src.index("def _render_listen") : src.index("def _render_play_hero")]

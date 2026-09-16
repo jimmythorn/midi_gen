@@ -134,18 +134,38 @@ def generate_drone_events(
         return final_drone_events
 
     num_root_notes = len(processed_root_notes_midi)
-    bars_per_segment = total_bars // num_root_notes if num_root_notes > 0 else total_bars
+    # Tick quotas honor Timing Double half-bar chords (bars < roots) without
+    # silencing early segments via integer bars_per_segment == 0.
+    total_duration_ticks = int(total_bars) * ticks_per_bar
+    if num_root_notes > 0 and int(total_bars) >= num_root_notes:
+        bars_per_segment = int(total_bars) // num_root_notes
+        tick_quotas = [
+            (
+                (int(total_bars) - bars_per_segment * (num_root_notes - 1))
+                if idx == num_root_notes - 1
+                else bars_per_segment
+            )
+            * ticks_per_bar
+            for idx in range(num_root_notes)
+        ]
+    else:
+        base_ticks = total_duration_ticks // num_root_notes if num_root_notes else 0
+        rem_ticks = (
+            total_duration_ticks - base_ticks * num_root_notes if num_root_notes else 0
+        )
+        tick_quotas = [
+            base_ticks + (1 if i < rem_ticks else 0) for i in range(num_root_notes)
+        ]
 
     for idx, root_midi_note in enumerate(processed_root_notes_midi):
-        segment_duration_bars = bars_per_segment
-        if idx == num_root_notes - 1: # Last segment gets remaining bars
-            segment_duration_bars = total_bars - (bars_per_segment * idx)
-        
-        if segment_duration_bars <= 0:
+        segment_duration_ticks = int(tick_quotas[idx]) if idx < len(tick_quotas) else 0
+        if segment_duration_ticks <= 0:
             continue
+        segment_duration_bars = max(
+            1, (segment_duration_ticks + ticks_per_bar - 1) // ticks_per_bar
+        )
 
         segment_start_tick = global_current_tick
-        segment_duration_ticks = segment_duration_bars * ticks_per_bar
 
         if held:
             base_chord_notes = _held_chord_voicing(

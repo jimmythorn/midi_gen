@@ -105,6 +105,30 @@ def _effective_timing_factor(options: Dict, factor: Optional[Any] = None) -> flo
     return float(resolve_extend_factor(options.get("extend_factor", 1)))
 
 
+def distribute_segment_units(total: int, n: int) -> List[int]:
+    """
+    Split ``total`` into ``n`` segment lengths that sum to ``total``.
+
+    When every segment can be ≥1 (``total >= n``), keep the historic
+    last-gets-remainder layout. When ``total < n`` (Timing Double at the
+    half-bar floor), spread evenly so early chords are not silenced by
+    integer ``bars // n == 0`` truncation.
+    """
+    if n <= 0:
+        return []
+    total_i = max(0, int(total))
+    if total_i <= 0:
+        return [0] * int(n)
+    n_i = int(n)
+    base = total_i // n_i
+    if base >= 1:
+        out = [base] * n_i
+        out[-1] = total_i - base * (n_i - 1)
+        return out
+    base2, rem = divmod(total_i, n_i)
+    return [base2 + (1 if i < rem else 0) for i in range(n_i)]
+
+
 def apply_timing_factor(options: Dict, factor: Optional[Any] = None) -> Dict:
     """
     Return a copy of ``options`` with ``bars`` scaled by timing_factor.
@@ -113,7 +137,9 @@ def apply_timing_factor(options: Dict, factor: Optional[Any] = None) -> Dict:
     progression length unchanged.
 
     Double (0.5) floors at ½ bar per chord — never below 0.5 bars/chord after
-    stretch; ``bars`` rounded to an integer ≥ 1.
+    stretch; ``bars`` rounded to an integer ≥ 1. Engines must honor fractional
+    bars/chord via step/tick quotas (see ``distribute_segment_units``) so
+    chords are not dropped when ``bars < chord_count``.
 
     Prefer ``timing_factor``. If only ``extend_factor`` is set, map 1→1, 2→2,
     4→4 (no 0.5 via extend). Safe before ``create_arp``.
@@ -359,15 +385,17 @@ def create_arp(options: Dict):
         rng = random.Random(options.get('seed')) if options.get('seed') is not None else random.Random()
 
         if processed_root_notes_midi:
-            bars_per_segment = bars // len(processed_root_notes_midi) if len(processed_root_notes_midi) > 0 else bars
+            n_roots = len(processed_root_notes_midi)
+            # Step quotas honor half-bar Timing Double (bars < chords) without
+            # dropping early roots via integer bars_per_segment == 0.
+            step_quotas = distribute_segment_units(int(bars) * steps_per_bar, n_roots)
             global_bar = 0
 
             for idx, current_root_midi in enumerate(processed_root_notes_midi):
-                num_bars_for_segment = bars_per_segment
-                if idx == len(processed_root_notes_midi) - 1:
-                    num_bars_for_segment = bars - (bars_per_segment * idx)
-                if num_bars_for_segment <= 0:
+                step_quota = int(step_quotas[idx]) if idx < len(step_quotas) else 0
+                if step_quota <= 0:
                     continue
+                bars_needed = max(1, (step_quota + steps_per_bar - 1) // steps_per_bar)
 
                 # Seed cell for this harmonic segment
                 segment_progression = chord_progression
@@ -405,8 +433,9 @@ def create_arp(options: Dict):
                 cell: List[Optional[int]] = list(seed)
                 phase = 0
                 source_notes = [n for n in cell if n is not None]
+                segment_events: List[Optional[int]] = []
 
-                for bar_i in range(num_bars_for_segment):
+                for bar_i in range(bars_needed):
                     # Mutate after the seed window, every N bars
                     if development and bar_i >= development["seed_bars"]:
                         since_seed = bar_i - development["seed_bars"]
@@ -454,7 +483,7 @@ def create_arp(options: Dict):
                             gates=gates,
                             pitches=pitches,
                         )
-                    final_event_list.extend(
+                    segment_events.extend(
                         _expand_cell_to_grid(
                             placed,
                             arp_steps=arp_steps,
@@ -464,7 +493,8 @@ def create_arp(options: Dict):
                         )
                     )
 
-                global_bar += num_bars_for_segment
+                final_event_list.extend(segment_events[:step_quota])
+                global_bar += max(1, step_quota // steps_per_bar)
 
         # Ensure total length matches bars * steps_per_bar
         total_expected_steps = bars * steps_per_bar
