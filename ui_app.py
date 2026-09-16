@@ -294,30 +294,58 @@ def _render_catalog_selectbox(names: list[str]) -> None:
     _render_who_caption()
 
 
+def _bump_preview_rev() -> None:
+    """Force Preview to load the new wav (note edit / register / tempo write)."""
+    st.session_state["_preview_rev"] = int(st.session_state.get("_preview_rev") or 0) + 1
+
+
+def _live_structure_regenerate() -> None:
+    """
+    When a sketch is already live, rewrite it from Song part / Timing /
+    Pattern|Progression. Keeps prior last_run / Preview until the new MIDI lands.
+    """
+    if not st.session_state.get("last_run"):
+        return
+    st.session_state["_live_param_tweak"] = True
+    # Chip clicks are discrete — fire now (no arp-slider debounce).
+    st.session_state.pop("_live_generate_after", None)
+    st.session_state["auto_generate"] = True
+    if get_shared_player().playing:
+        st.session_state["pending_replay"] = True
+
+
 def _apply_section_chip(role: str) -> None:
-    """Stage Song part only — does not clear the prior sketch or trigger Generate."""
+    """Song part chip — stages role; live sketch rewrites without clearing Preview."""
     st.session_state["section_role"] = toggle_section_chip(
         st.session_state.get("section_role"), role
     )
+    _live_structure_regenerate()
 
 
 def _apply_timing_factor(factor: float) -> None:
-    """Stage Timing only — does not clear the prior sketch or trigger Generate."""
+    """Timing chip — stages factor; live sketch rewrites without clearing Preview."""
     st.session_state["timing_factor"] = toggle_timing_factor(
         st.session_state.get("timing_factor", DEFAULT_TIMING_FACTOR), factor
     )
+    _live_structure_regenerate()
 
 
 def _apply_generation_mode(mode: str) -> None:
-    """Stage Pattern|Progression only — does not clear the prior sketch or trigger Generate."""
+    """Pattern|Progression — stages mode; live sketch rewrites without clearing Preview."""
     st.session_state["generation_mode"] = clamp_generation_mode(mode)
     # Keep legacy shape key aligned for Length takeover / sketch layout.
     st.session_state["generation_type"] = (
         "arpeggio" if st.session_state["generation_mode"] == "pattern" else "drone"
     )
+    _live_structure_regenerate()
 
 
-# --- One-page chrome: home stays sacred; extras are full-screen takeovers ---
+def _on_sketch_layout_change() -> None:
+    """Bars / chord count — debounce rewrite when a sketch is already live."""
+    if st.session_state.get("last_run"):
+        _schedule_live_generate()
+
+
 # Browse / Mood / Capture moved onto home (mood chips + Play/Record tab).
 TAKEOVER_LABELS = {
     "geek": "Geek",
@@ -539,6 +567,7 @@ def _flush_bpm_write() -> bool:
     refresh_last_run_after_note_write(
         last_run, notes, dirty=bool(last_run.get("notes_dirty"))
     )
+    _bump_preview_rev()
     return True
 
 
@@ -560,6 +589,7 @@ def _apply_register_shift(delta: int) -> None:
     opts["octave_shift"] = nxt
     last_run["options"] = opts
     refresh_last_run_after_note_write(last_run, notes, dirty=True)
+    _bump_preview_rev()
 
 
 def _schedule_live_generate() -> None:
@@ -630,6 +660,7 @@ def _commit_note_edits(notes: list) -> None:
     if not last_run:
         return
     refresh_last_run_after_note_write(last_run, notes, dirty=True)
+    _bump_preview_rev()
     if get_shared_player().playing:
         st.session_state["pending_replay"] = True
 
@@ -642,6 +673,7 @@ def _reset_generated_notes() -> None:
     refresh_last_run_after_note_write(
         last_run, [dict(n) for n in generated], dirty=False
     )
+    _bump_preview_rev()
     if get_shared_player().playing:
         st.session_state["pending_replay"] = True
 
@@ -892,7 +924,7 @@ def _render_section_chips(*, key_prefix: str = "home_section") -> None:
 
 
 def _render_timing_chips(*, key_prefix: str = "home_timing") -> None:
-    """Double / 1× / Half / Quarter → Engine timing_factor. Stage until Generate."""
+    """Double / 1× / Half / Quarter → Engine timing_factor. Live rewrite when sketch exists."""
     current = clamp_timing_factor(
         st.session_state.get("timing_factor", DEFAULT_TIMING_FACTOR)
     )
@@ -923,7 +955,7 @@ def _render_timing_chips(*, key_prefix: str = "home_timing") -> None:
 
 
 def _render_generation_mode_toggle(*, key_prefix: str = "home_mode") -> None:
-    """Pattern | Progression → apply_generation_mode. Stage until Generate."""
+    """Pattern | Progression → apply_generation_mode. Live rewrite when sketch exists."""
     current = clamp_generation_mode(
         st.session_state.get("generation_mode", DEFAULT_GENERATION_MODE)
     )
@@ -974,7 +1006,8 @@ def _render_sketch_layout() -> None:
             max_value=32,
             step=1,
             key="bars",
-            help="Sketch length. 16 bars / 4 chords = 4 bars each. Press Generate to apply.",
+            on_change=_on_sketch_layout_change,
+            help="Sketch length. 16 bars / 4 chords = 4 bars each. Live rewrite when a sketch is up.",
         )
     with chord_col:
         st.slider(
@@ -983,7 +1016,8 @@ def _render_sketch_layout() -> None:
             max_value=8,
             step=1,
             key="chord_count",
-            help="How many roots in the loop. Press Generate to apply.",
+            on_change=_on_sketch_layout_change,
+            help="How many roots in the loop. Live rewrite when a sketch is up.",
         )
     can_generate = bool(
         str(st.session_state.get("catalog_pick") or "").strip()

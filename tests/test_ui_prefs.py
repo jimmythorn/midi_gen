@@ -181,7 +181,8 @@ def test_surprise_me_populates_artist_and_effects():
     assert at.session_state["home_tabs"] == "Play / Record"
 
 
-def test_pattern_chip_stages_until_generate():
+def test_pattern_chip_live_rewrites_existing_sketch():
+    """With a live sketch, Pattern chip rewrites MIDI (no stale progression)."""
     from midi_gen.style_prompting import generation_mode_from_type
 
     at = _apptest()
@@ -195,34 +196,28 @@ def test_pattern_chip_stages_until_generate():
         opts.get("generation_type")
     )
     assert mode == "progression"
-    prior_path = at.session_state["last_run"]["path"]
     prior_wav = at.session_state["last_run"].get("wav_bytes")
+    assert prior_wav
+    rev_before = int(at.session_state.get("_preview_rev") or 0)
+
     at.button(key="home_mode_pattern").click().run()
     assert not at.exception, at.exception
     assert at.session_state["generation_mode"] == "pattern"
-    assert at.session_state["last_run"]["path"] == prior_path
-    assert at.session_state["last_run"].get("wav_bytes") == prior_wav
-    try:
-        assert not at.session_state["auto_generate"]
-    except KeyError:
-        pass
-    opts = at.session_state["last_run"]["options"]
-    stale = opts.get("generation_mode") or generation_mode_from_type(
-        opts.get("generation_type")
-    )
-    assert stale == "progression"
-    at.button(key="home_generate").click().run()
-    assert not at.exception, at.exception
+    # Prior sketch must survive the rewrite handoff (never wiped to None).
+    assert at.session_state["last_run"]
+    assert at.session_state["last_run"].get("wav_bytes")
     opts = at.session_state["last_run"]["options"]
     mode = opts.get("generation_mode") or generation_mode_from_type(
         opts.get("generation_type")
     )
     assert mode == "pattern"
     assert opts.get("generation_type") == "arpeggio"
+    # Preview remounts only after new MIDI lands.
+    assert int(at.session_state.get("_preview_rev") or 0) >= rev_before + 1
 
 
 def test_timing_and_pattern_chips_keep_last_run_sticky():
-    """Bar: Timing Half / Pattern must not clear session run or Preview wav."""
+    """Bar: Timing / Pattern rewrite the live sketch without blanking Preview."""
     at = _apptest()
     at.session_state["use_sdk"] = False
     at.session_state["catalog_pick"] = "Philip Glass"
@@ -231,34 +226,24 @@ def test_timing_and_pattern_chips_keep_last_run_sticky():
     assert not at.exception, at.exception
     run = at.session_state["last_run"]
     assert run and run.get("wav_bytes")
-    wav_before = run["wav_bytes"]
-    path_before = run["path"]
+    bars_before = int((run.get("options") or {}).get("bars") or 16)
 
     at.button(key="home_timing_0_5").click().run()
     assert not at.exception, at.exception
     assert float(at.session_state["timing_factor"]) == 0.5
-    assert at.session_state["last_run"]["path"] == path_before
-    assert at.session_state["last_run"]["wav_bytes"] == wav_before
-    try:
-        assert not at.session_state["auto_generate"]
-    except KeyError:
-        pass
+    assert at.session_state["last_run"]
+    assert at.session_state["last_run"].get("wav_bytes")
+    opts = at.session_state["last_run"]["options"]
+    assert float(opts.get("timing_factor") or 0) == 0.5
+    # Play loop length must match Double-time MIDI (half bars), not stale base bars.
+    assert int(opts.get("bars") or 0) == max(1, bars_before // 2)
 
     at.button(key="home_mode_pattern").click().run()
     assert not at.exception, at.exception
     assert at.session_state["generation_mode"] == "pattern"
-    assert at.session_state["last_run"]["path"] == path_before
-    assert at.session_state["last_run"]["wav_bytes"] == wav_before
-    try:
-        assert not at.session_state["auto_generate"]
-    except KeyError:
-        pass
-
-    # Busy path keeps prior preview keys (do not wipe last_run to stage generate).
-    at.session_state["auto_generate"] = True
-    assert at.session_state["last_run"]["path"] == path_before
-    assert at.session_state["last_run"]["wav_bytes"] == wav_before
+    assert at.session_state["last_run"]
     assert at.session_state["last_run"].get("wav_bytes")
+    assert at.session_state["last_run"]["options"].get("generation_type") == "arpeggio"
 
 
 def test_generate_busy_keeps_prior_preview_keys_in_source():
@@ -279,16 +264,26 @@ def test_generate_busy_keeps_prior_preview_keys_in_source():
     assert "if _gen_busy and not run" in play_tab
     assert "if run:" in play_tab
     assert play_tab.index("if _gen_busy and not run") < play_tab.index("_render_result_row")
+    live_struct = src[
+        src.index("def _live_structure_regenerate") : src.index("def _apply_section_chip")
+    ]
+    assert 'st.session_state["auto_generate"] = True' in live_struct
+    assert 'st.session_state.pop("last_run"' not in live_struct
+    assert "_live_param_tweak" in live_struct
+    apply_section = src[
+        src.index("def _apply_section_chip") : src.index("def _apply_timing_factor")
+    ]
     apply_timing = src[
         src.index("def _apply_timing_factor") : src.index("def _apply_generation_mode")
     ]
     apply_mode = src[
-        src.index("def _apply_generation_mode") : src.index("TAKEOVER_LABELS")
+        src.index("def _apply_generation_mode") : src.index("def _on_sketch_layout_change")
     ]
-    assert "auto_generate" not in apply_timing
-    assert "auto_generate" not in apply_mode
-    assert "last_run" not in apply_timing
-    assert "last_run" not in apply_mode
+    assert "_live_structure_regenerate()" in apply_section
+    assert "_live_structure_regenerate()" in apply_timing
+    assert "_live_structure_regenerate()" in apply_mode
+    assert "last_run" not in apply_timing.replace("_live_structure_regenerate()", "")
+    assert "last_run" not in apply_mode.replace("_live_structure_regenerate()", "")
 
 
 def test_featured_card_sets_catalog_without_widget_exception():
@@ -408,8 +403,11 @@ def test_ui_widget_mutations_use_callbacks():
     assert "on_change=_on_timing_select" not in src
     assert "on_change=_on_generation_mode_select" not in src
     assert "on_change=_on_section_select" not in src
-    assert 'st.session_state["auto_generate"] = True' not in src[
-        src.index("def _apply_generation_mode") : src.index("TAKEOVER_LABELS")
+    assert "_live_structure_regenerate()" in src[
+        src.index("def _apply_generation_mode") : src.index("def _on_sketch_layout_change")
+    ]
+    assert 'st.session_state["auto_generate"] = True' in src[
+        src.index("def _live_structure_regenerate") : src.index("def _apply_section_chip")
     ]
     assert 'st.session_state["auto_generate"] = True' in src[
         src.index("def _on_generate_click") : src.index("def _apply_featured_style")
@@ -418,6 +416,13 @@ def test_ui_widget_mutations_use_callbacks():
     assert 'key="mood_select"' not in src
     after_vibe_widget = src.split('key="vibe_text"', 1)[1]
     assert 'st.session_state["vibe_text"] = chip' not in after_vibe_widget
+    assert "on_change=_on_sketch_layout_change" in src
+    assert "_bump_preview_rev()" in src[
+        src.index("def _commit_note_edits") : src.index("def _reset_generated_notes")
+    ]
+    assert "_bump_preview_rev()" in src[
+        src.index("def _apply_register_shift") : src.index("def _schedule_live_generate")
+    ]
 
 
 def test_arp_live_knobs_present_and_override_steps():
@@ -488,6 +493,7 @@ def test_register_octave_up_transposes_without_generate():
     run = at.session_state["last_run"]
     before = [n["note"] for n in run["edit_notes"]]
     min_before = int((run.get("options") or {}).get("min_octave") or 3)
+    rev_before = int(at.session_state.get("_preview_rev") or 0)
     assert before
     assert "prog_oct_up" in [b.key for b in at.button]
     at.button(key="prog_oct_up").click().run()
@@ -498,6 +504,32 @@ def test_register_octave_up_transposes_without_generate():
     assert at.session_state["prog_octave_shift"] == 1
     assert at.session_state["last_run"]["notes_dirty"] is True
     assert at.session_state["last_run"]["options"]["min_octave"] == min_before + 1
+    assert int(at.session_state.get("_preview_rev") or 0) == rev_before + 1
+
+
+def test_song_part_chip_live_rewrites_progression():
+    """Bridge chip with a live sketch must change chord roots before Play."""
+    from midi_gen.musician_styles import get_profile_by_id, resolve_section_recipe
+
+    at = _apptest()
+    at.session_state["use_sdk"] = False
+    at.session_state["catalog_pick"] = "Philip Glass"
+    at.session_state["auto_generate"] = True
+    at.run()
+    assert not at.exception, at.exception
+    glass = get_profile_by_id("glass_minimal")
+    bridge = resolve_section_recipe(glass, "bridge")
+    assert at.session_state["last_run"]["options"]["chord_progression"] == glass.chord_progression
+    prior_wav = at.session_state["last_run"].get("wav_bytes")
+    assert prior_wav
+
+    at.button(key="home_section_bridge").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["section_role"] == "bridge"
+    run = at.session_state["last_run"]
+    assert run and run.get("wav_bytes")
+    assert run["options"]["chord_progression"] == bridge.chord_progression
+    assert run["options"].get("section_role") == "bridge"
 
 
 def test_bpm_slider_rewrites_tempo_without_generate():

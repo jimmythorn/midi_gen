@@ -86,6 +86,8 @@ def test_generate_overrides_wire_timing_and_generation_mode(tmp_path):
     assert path.endswith("sketch.mid")
     assert result.profile.id == "glass_minimal"
     assert options.get("generation_type") == "arpeggio"
+    assert options.get("generation_mode") == "pattern"
+    assert options.get("bars") == 16  # synced for Play / caption
     assert captured["options"].get("timing_factor") in (2, 2.0)
     assert captured["options"]["bars"] == 16
 

@@ -169,8 +169,10 @@ def apply_generation_mode(
     key = str(mode).strip().lower()
     if key == "pattern":
         opts["generation_type"] = "arpeggio"
+        opts["generation_mode"] = "pattern"
     elif key == "progression":
         opts["generation_type"] = "drone"
+        opts["generation_mode"] = "progression"
         # Explicit False (wash) must still win.
         if opts.get("drone_held") is not False:
             opts["drone_held"] = True
