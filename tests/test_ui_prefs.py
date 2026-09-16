@@ -252,6 +252,7 @@ def test_generate_busy_keeps_prior_preview_keys_in_source():
         src.index("def _on_generate_click") : src.index("def _apply_search_kind")
     ]
     assert 'st.session_state["auto_generate"] = True' in gen_click
+    assert 'st.session_state["_open_play_after_generate"] = True' in gen_click
     assert 'st.session_state.pop("last_run"' not in gen_click
     assert 'st.session_state["last_run"] = None' not in gen_click
     # Preview remount only after new MIDI lands — not at Generate click.
@@ -259,6 +260,16 @@ def test_generate_busy_keeps_prior_preview_keys_in_source():
     gen_ok = src[src.index('st.session_state["last_run"] = {') :]
     assert 'st.session_state["_preview_rev"]' in gen_ok[
         : gen_ok.index("_queue_play_record_tab()")
+    ]
+    assert "_open_play_after_generate" in gen_ok[
+        : gen_ok.index("_queue_play_record_tab()") + 40
+    ]
+    # Live structure rewrite must not force the Play tab.
+    assert "_open_play_after_generate" not in src[
+        src.index("def _live_structure_regenerate") : src.index("def _apply_section_chip")
+    ]
+    assert "_open_play_after_generate" not in src[
+        src.index("def _schedule_live_generate") : src.index("def _flush_live_generate_debounce")
     ]
     play_tab = src[src.index("with tab_play:") : src.index("# Auto-generate")]
     assert "if _gen_busy and not run" in play_tab
@@ -523,6 +534,7 @@ def test_song_part_chip_live_rewrites_progression():
     prior_wav = at.session_state["last_run"].get("wav_bytes")
     assert prior_wav
 
+    at.session_state["home_tabs"] = "Search + Preview"
     at.button(key="home_section_bridge").click().run()
     assert not at.exception, at.exception
     assert at.session_state["section_role"] == "bridge"
@@ -530,6 +542,27 @@ def test_song_part_chip_live_rewrites_progression():
     assert run and run.get("wav_bytes")
     assert run["options"]["chord_progression"] == bridge.chord_progression
     assert run["options"].get("section_role") == "bridge"
+    # Live chip rewrite must not yank Search → Play / Record.
+    assert at.session_state.get("home_tabs") == "Search + Preview"
+
+    # Toggle Bridge off restores full-sketch roots.
+    at.button(key="home_section_bridge").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state.get("section_role") in (None, "")
+    assert at.session_state["last_run"]["options"]["chord_progression"] == glass.chord_progression
+    assert at.session_state.get("home_tabs") == "Search + Preview"
+
+
+def test_generate_button_still_opens_play_tab():
+    at = _apptest()
+    at.session_state["use_sdk"] = False
+    at.session_state["catalog_pick"] = "Philip Glass"
+    at.run()
+    assert not at.exception, at.exception
+    at.button(key="home_generate").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["last_run"]
+    assert at.session_state["home_tabs"] == "Play / Record"
 
 
 def test_bpm_slider_rewrites_tempo_without_generate():

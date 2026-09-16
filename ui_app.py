@@ -244,6 +244,7 @@ def _on_generate_click() -> None:
         st.session_state["_live_param_tweak"] = True
     # Do not bump _preview_rev here — remounting Preview before new MIDI lands
     # blanks the player. Rev advances only when a new sketch succeeds.
+    st.session_state["_open_play_after_generate"] = True
     st.session_state["auto_generate"] = True
 
 
@@ -1868,6 +1869,7 @@ if _artist_rejected:
     st.session_state.pop("_live_generate_after", None)
     st.session_state.pop("_bpm_write_after", None)
     st.session_state.pop("pending_replay", False)
+    st.session_state.pop("_open_play_after_generate", False)
     st.session_state.pop("spotify_artist_name", None)
     if _had_last_run:
         st.rerun()
@@ -2814,7 +2816,10 @@ if generate:
             st.session_state.pop("generate_error", None)
             st.session_state.pop("artist_reject_reason", None)
             st.session_state.pop("live_message", None)
-            _queue_play_record_tab()
+            # Only the Generate button jumps to Play / Record. Live structure /
+            # arp / effects rewrites stay on the current tab so chips stay usable.
+            if st.session_state.pop("_open_play_after_generate", False):
+                _queue_play_record_tab()
             st.rerun()
         except ArtistRejected as exc:
             st.session_state["artist_reject_reason"] = exc.result.reason
@@ -2824,11 +2829,13 @@ if generate:
                 exc.result.reason
             )
             st.session_state.pop("pending_replay", False)
+            st.session_state.pop("_open_play_after_generate", False)
             st.rerun()
         except Exception as exc:
             st.session_state.pop("artist_reject_reason", None)
             st.session_state["generate_error"] = str(exc)
             st.session_state.pop("pending_replay", False)
+            st.session_state.pop("_open_play_after_generate", False)
             st.rerun()
 
 if st.session_state.get("generate_error") and run and not takeover:
