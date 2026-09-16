@@ -54,6 +54,11 @@ from midi_gen.live_midi import (
     preferred_iac_port,
     refresh_output_ports,
 )
+from midi_gen.logic_mcp_bridge import (
+    OFFLINE_MUSICIAN_COPY,
+    LogicMcpBridge,
+    get_mcp_readiness,
+)
 from midi_gen.musician_styles import list_musicians, list_styles
 from midi_gen.preview import format_summary_text, summarize_midi_file
 from midi_gen import style_prompting as _style_prompting
@@ -1178,6 +1183,23 @@ st.markdown(
         background: color-mix(in srgb, #e07a5f 18%, var(--panel));
         color: #f0b4a4;
       }
+      .mcp-chip {
+        display: inline-block;
+        font-size: 0.82rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        padding: 0.28rem 0.65rem;
+        border-radius: 6px;
+        margin: 0.15rem 0.45rem 0.55rem 0;
+      }
+      .mcp-chip.ok {
+        background: color-mix(in srgb, var(--accent) 22%, var(--panel));
+        color: var(--accent);
+      }
+      .mcp-chip.miss {
+        background: color-mix(in srgb, #e07a5f 18%, var(--panel));
+        color: #f0b4a4;
+      }
 
       /* Capture / Play context (Audition strip dropped) */
       .audition-capture {
@@ -1685,6 +1707,28 @@ def _render_iac_status_chip(ports: list[str]) -> None:
         )
 
 
+def _render_mcp_status_chip() -> None:
+    """Logic Pro MCP Ready / Offline chip — fail-closed when doctor/health fails."""
+    try:
+        status = get_mcp_readiness()
+    except Exception:
+        status = None
+    if status is not None and status.ok:
+        st.markdown(
+            '<span class="mcp-chip ok">Logic MCP · Ready</span>',
+            unsafe_allow_html=True,
+        )
+        st.session_state["logic_mcp_ready"] = True
+    else:
+        st.markdown(
+            '<span class="mcp-chip miss">Logic MCP · Offline</span>',
+            unsafe_allow_html=True,
+        )
+        st.session_state["logic_mcp_ready"] = False
+        # Honesty copy lives on the Offline chip only — no extra layout chrome.
+        st.caption(OFFLINE_MUSICIAN_COPY)
+
+
 def _apply_refreshed_ports(ports: list[str]) -> None:
     """Prefer IAC after a mid-session refresh; drop stale selections."""
     preferred = preferred_iac_port(ports)
@@ -2074,10 +2118,32 @@ def _render_play_hero(run_data: dict) -> None:
                 help="Stop the stream, flush hanging notes, and stop Logic "
                 "(MMC Stop + MIDI Stop). Works while Playing or idle.",
             ):
-                player.stop(wait=True, port_name=clear_port)
-                st.session_state["live_was_playing"] = False
-                st.session_state["live_message"] = (
-                    f"Cleared IAC · Logic stopped ({clear_port})."
+                _stop_iac_and_maybe_mcp(player, clear_port)
+                st.rerun()
+            # Probe here so Record state does not depend on Settings chip order.
+            try:
+                _mcp_status = get_mcp_readiness()
+                mcp_ready = bool(_mcp_status.ok)
+            except Exception:
+                mcp_ready = False
+            st.session_state["logic_mcp_ready"] = mcp_ready
+            if st.button(
+                "Record in Logic",
+                use_container_width=True,
+                disabled=not (live.available and mcp_ready),
+                key="record_logic_mcp",
+                help=(
+                    "Arm explicit track via Logic MCP → transport.record (State A) → "
+                    "Play into Logic over IAC. Never imports MIDI via MCP."
+                    if mcp_ready
+                    else OFFLINE_MUSICIAN_COPY
+                ),
+                type="secondary",
+            ):
+                _start_mcp_record_then_iac_play(
+                    player,
+                    path=path,
+                    options=options,
                 )
                 st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
@@ -2126,8 +2192,14 @@ def _render_play_hero(run_data: dict) -> None:
 
         live_msg = st.session_state.get("live_message")
         if live_msg:
-            if "port lost" in live_msg.lower() or "failed" in live_msg.lower() or (
-                player.last_error and live_msg == player.last_error
+            if (
+                "port lost" in live_msg.lower()
+                or "failed" in live_msg.lower()
+                or "uncertain" in live_msg.lower()
+                or "offline" in live_msg.lower()
+                or "not treating as recorded" in live_msg.lower()
+                or "needs an explicit track" in live_msg.lower()
+                or (player.last_error and live_msg == player.last_error)
             ):
                 st.error(live_msg)
             else:
@@ -2279,6 +2351,91 @@ def _render_effects_chips(run_data: dict | None) -> None:
     )
 
 
+def _stop_iac_and_maybe_mcp(player, clear_port: str | None) -> None:
+    """Always stop IAC; best-effort MCP transport.stop when this session used MCP Record."""
+    player.stop(wait=True, port_name=clear_port)
+    st.session_state["live_was_playing"] = False
+    mcp_bits: list[str] = []
+    if st.session_state.pop("logic_mcp_record_armed", False):
+        try:
+            stop_res = LogicMcpBridge().transport_stop()
+            if stop_res.ok:
+                mcp_bits.append("MCP Stop confirmed")
+            elif stop_res.offline:
+                mcp_bits.append("MCP offline (IAC cleared)")
+            else:
+                mcp_bits.append(stop_res.message or "MCP Stop uncertain")
+        except Exception:
+            mcp_bits.append("MCP Stop skipped")
+    base = f"Cleared IAC · Logic stopped ({clear_port})." if clear_port else "Cleared IAC."
+    if mcp_bits:
+        base = base.rstrip(".") + " · " + " · ".join(mcp_bits) + "."
+    st.session_state["live_message"] = base
+
+
+def _start_mcp_record_then_iac_play(player, *, path: str, options: dict) -> None:
+    """
+    Optional Record path: MCP arm + transport.record (State A only), then existing
+    IAC ``play_file``. Never routes notes through MCP MIDI import.
+    """
+    try:
+        readiness = get_mcp_readiness(force=True)
+    except Exception:
+        readiness = None
+    if readiness is None or not readiness.ok:
+        st.session_state["logic_mcp_ready"] = False
+        st.session_state["live_message"] = OFFLINE_MUSICIAN_COPY
+        return
+    try:
+        armed = LogicMcpBridge().arm_and_record(arm_only=True)
+    except Exception as exc:
+        st.session_state["live_message"] = f"{OFFLINE_MUSICIAN_COPY} ({exc})"
+        return
+    if not armed.ok:
+        st.session_state["logic_mcp_record_armed"] = False
+        st.session_state["live_message"] = armed.musician_copy
+        return
+    st.session_state["logic_mcp_record_armed"] = True
+    # MCP already punched Record — skip MMC Record Strobe so IAC does not toggle it off.
+    try:
+        sketch_bpm = float(options.get("bpm") or 120)
+        count_in = bool(st.session_state.get("live_count_in", False))
+        loop_play = bool(st.session_state.get("live_loop", True))
+        use_click = bool(st.session_state.get("live_soft_click", False))
+        lock_logic = bool(st.session_state.get("live_sync_logic", False))
+        player.play_file(
+            path,
+            st.session_state.get("live_port"),
+            count_in_bars=0.0 if lock_logic else (1.0 if count_in else 0.0),
+            bpm=sketch_bpm,
+            bars=float(options.get("bars") or 8),
+            loop=loop_play,
+            click=False if lock_logic else (use_click if count_in else False),
+            sync="follow" if lock_logic else "internal",
+            send_clock=not lock_logic,
+            send_mmc=False,
+        )
+        bits = [
+            armed.message or "MCP Record confirmed",
+            f"Streaming to {player.port_name} (IAC)",
+        ]
+        if lock_logic:
+            bits.append("waiting for Logic Play")
+        elif count_in:
+            bits.append("1-bar count-in")
+        if loop_play:
+            bits.append("loops until Stop")
+        st.session_state["live_message"] = " · ".join(bits) + "."
+        st.session_state["live_was_playing"] = True
+        st.session_state["iac_tip_dismissed"] = True
+        _persist_live_prefs()
+    except Exception as exc:
+        st.session_state["live_message"] = (
+            f"MCP Record confirmed, but live MIDI failed: {exc}"
+        )
+        st.session_state["live_was_playing"] = bool(player.playing)
+
+
 def _render_capture_setup() -> None:
     """Count-in / loop, IAC tip, Refresh, silence checklist (Play / Record tab)."""
     st.markdown("### Settings")
@@ -2286,6 +2443,7 @@ def _render_capture_setup() -> None:
     with port_col:
         _show_iac_tip()
         _render_iac_status_chip(ports)
+        _render_mcp_status_chip()
         st.button(
             "Refresh ports",
             use_container_width=True,
