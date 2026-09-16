@@ -298,10 +298,13 @@ def test_ui_source_guards_record_chip_and_iac_play_unchanged():
     assert "from midi_gen.logic_mcp_bridge import" in src
     assert 'key="record_logic_mcp"' in src
     assert "disabled=not (live.available and mcp_ready)" in src
+    assert "get_mcp_readiness(force=True)" in src
     assert "_start_mcp_record_then_iac_play" in src
     assert "_render_mcp_status_chip" in src
     assert "OFFLINE_MUSICIAN_COPY" in src
     assert "send_mmc=False" in src  # MCP already recording — do not MMC-toggle
+    # Live rewrite replay must also skip MMC while MCP Record is armed.
+    assert "send_mmc=False if mcp_armed else None" in src
 
     # Play primacy + existing IAC play_file path remain.
     play = src[src.index("def _render_play_hero") : src.index("def _render_download")]

@@ -307,6 +307,18 @@ def _live_structure_regenerate() -> None:
     """
     if not st.session_state.get("last_run"):
         return
+    # Chip looks live only when Generate would actually run.
+    has_intent = bool(
+        str(st.session_state.get("catalog_pick") or "").strip()
+        or str(st.session_state.get("vibe_text") or "").strip()
+    )
+    if not has_intent:
+        st.session_state["live_message"] = (
+            "Pick a style or type a vibe before reshaping the live sketch."
+        )
+        st.session_state.pop("auto_generate", None)
+        st.session_state.pop("pending_replay", False)
+        return
     st.session_state["_live_param_tweak"] = True
     # Chip clicks are discrete — fire now (no arp-slider debounce).
     st.session_state.pop("_live_generate_after", None)
@@ -591,6 +603,9 @@ def _apply_register_shift(delta: int) -> None:
     last_run["options"] = opts
     refresh_last_run_after_note_write(last_run, notes, dirty=True)
     _bump_preview_rev()
+    # Same honesty as note commit: keep IAC stream on the written pitches.
+    if get_shared_player().playing:
+        st.session_state["pending_replay"] = True
 
 
 def _schedule_live_generate() -> None:
@@ -1064,6 +1079,8 @@ def _replay_into_logic(player: Any, run: dict, ports: list[str]) -> None:
         return
     try:
         opts = run["options"]
+        # MCP Record session already punched record — do not MMC-toggle it off.
+        mcp_armed = bool(st.session_state.get("logic_mcp_record_armed"))
         player.play_file(
             run["path"],
             port,
@@ -1074,6 +1091,7 @@ def _replay_into_logic(player: Any, run: dict, ports: list[str]) -> None:
             click=False,
             sync="follow" if st.session_state.get("live_sync_logic", False) else "internal",
             send_clock=not bool(st.session_state.get("live_sync_logic", False)),
+            send_mmc=False if mcp_armed else None,
         )
         st.session_state["live_was_playing"] = True
         st.session_state["live_message"] = f"Streaming to {player.port_name}."
@@ -1955,8 +1973,14 @@ if "live_port" not in st.session_state and default_port:
     st.session_state["live_port"] = default_port
 
 run = st.session_state.get("last_run")
+# Live rewrite arms auto_generate + pending_replay together. Replay must wait
+# for the new MIDI — otherwise Play streams the stale path, generate stops it,
+# and the rewritten sketch never resumes (caption claimed "keep streaming").
 if run and st.session_state.pop("pending_replay", False):
-    _replay_into_logic(player, run, ports)
+    if st.session_state.get("auto_generate"):
+        st.session_state["pending_replay"] = True
+    else:
+        _replay_into_logic(player, run, ports)
 
 _transport_busy = bool(player.playing)
 generate = False
@@ -2157,8 +2181,9 @@ def _render_play_hero(run_data: dict) -> None:
                 _stop_iac_and_maybe_mcp(player, clear_port)
                 st.rerun()
             # Probe here so Record state does not depend on Settings chip order.
+            # force=True: fail-closed enablement (stale Ready cache must not arm CTA).
             try:
-                _mcp_status = get_mcp_readiness()
+                _mcp_status = get_mcp_readiness(force=True)
                 mcp_ready = bool(_mcp_status.ok)
             except Exception:
                 mcp_ready = False
@@ -2714,7 +2739,12 @@ if (
 _flush_live_generate_debounce()
 _flush_bpm_write()
 if st.session_state.pop("auto_generate", False):
-    generate = False if _artist_rejected or not _has_style_intent else True
+    if _artist_rejected or not _has_style_intent:
+        generate = False
+        # Do not replay a stale sketch when the rewrite was refused.
+        st.session_state.pop("pending_replay", False)
+    else:
+        generate = True
 
 bars = clamp_bars(int(st.session_state.get("bars", DEFAULT_SKETCH_BARS)))
 chord_count = clamp_chord_count(st.session_state.get("chord_count", DEFAULT_CHORD_COUNT))

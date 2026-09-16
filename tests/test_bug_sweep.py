@@ -152,3 +152,144 @@ def test_profile_from_dict_clamps_invalid_mode_and_roots():
     })
     assert profile.mode == "minor"
     assert profile.root_notes == ["C4", "G4"]
+
+
+def test_play_record_honesty_pending_replay_defers_during_live_rewrite():
+    """Live rewrite must not Play the stale MIDI path before generate lands."""
+    src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
+    # Defer: pending_replay + auto_generate → restore flag, do not call replay yet.
+    block = src[
+        src.index("# Live rewrite arms auto_generate") : src.index("_transport_busy = bool")
+    ]
+    assert 'st.session_state.pop("pending_replay", False)' in block
+    assert 'st.session_state.get("auto_generate")' in block
+    assert 'st.session_state["pending_replay"] = True' in block
+    assert "_replay_into_logic(player, run, ports)" in block
+    # Replay only on the else branch (after rewrite), not while generating.
+    assert block.index('st.session_state.get("auto_generate")') < block.index(
+        "_replay_into_logic(player, run, ports)"
+    )
+
+
+def test_play_record_honesty_record_cta_force_probes_mcp():
+    """Record enablement must force-probe MCP — stale Ready cache is fail-open."""
+    src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
+    play = src[src.index("def _render_play_hero") : src.index("def _render_download")]
+    assert "get_mcp_readiness(force=True)" in play
+    assert "disabled=not (live.available and mcp_ready)" in play
+
+
+def test_play_record_honesty_replay_skips_mmc_when_mcp_armed():
+    """Live rewrite during MCP Record must not MMC Record-Strobe (toggle off)."""
+    src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
+    replay = src[
+        src.index("def _replay_into_logic") : src.index("def _apply_effects_preset")
+    ]
+    assert 'st.session_state.get("logic_mcp_record_armed")' in replay
+    assert "send_mmc=False if mcp_armed else None" in replay
+
+
+def test_play_record_honesty_live_midi_not_rewritten_for_mcp():
+    """Product lock: Play notes stay on IAC live_midi — no MCP surface in streamer."""
+    live_src = (_ROOT / "live_midi.py").read_text(encoding="utf-8")
+    assert "logic_mcp" not in live_src.lower()
+    assert "LogicProMCP" not in live_src
+    assert "record_sequence" not in live_src
+
+
+def test_octave_shift_arms_pending_replay_while_playing():
+    """Register +/− must re-stream like note commits — file alone is not enough."""
+    src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
+    block = src[
+        src.index("def _apply_register_shift") : src.index("def _schedule_live_generate")
+    ]
+    assert "get_shared_player().playing" in block
+    assert 'st.session_state["pending_replay"] = True' in block
+
+
+def test_live_structure_regenerate_requires_style_intent():
+    """Chip rewrite must not arm auto_generate when catalog+vibe are empty."""
+    src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
+    block = src[
+        src.index("def _live_structure_regenerate") : src.index("def _apply_section_chip")
+    ]
+    assert "catalog_pick" in block
+    assert "vibe_text" in block
+    assert "Pick a style or type a vibe" in block
+    assert 'st.session_state.pop("auto_generate", None)' in block
+
+
+def test_timing_double_half_bar_keeps_all_chord_roots(tmp_path):
+    """Timing Double at 0.5 bars/chord must not silence early progression roots."""
+    import mido
+
+    from midi_gen.arpeggio_generation import apply_timing_factor, create_arp, distribute_segment_units
+
+    # Historic last-gets-remainder when every bucket ≥ 1.
+    assert distribute_segment_units(8, 4) == [2, 2, 2, 2]
+    assert distribute_segment_units(5, 4) == [1, 1, 1, 2]
+    # Step quotas for 2 bars × 16 steps across 4 chords → 8 each.
+    assert distribute_segment_units(32, 4) == [8, 8, 8, 8]
+    # Sub-unit totals still spread (no silent all-to-last).
+    assert distribute_segment_units(2, 4) == [1, 1, 0, 0]
+
+    roots = ["C3", "E3", "G3", "B3"]
+    opts = apply_timing_factor(
+        {
+            "generation_type": "arpeggio",
+            "mode": "major",
+            "bars": 4,
+            "root_notes": list(roots),
+            "chord_progression": list(roots),
+            "timing_factor": 0.5,
+            "arp_steps": 8,
+            "min_octave": 3,
+            "max_octave": 5,
+            "seed": 7,
+            "filename": str(tmp_path / "half_bar_roots.mid"),
+            "effects_config": [],
+        }
+    )
+    assert opts["bars"] == 2
+    path = create_arp(opts)
+    mid = mido.MidiFile(path)
+    pcs = set()
+    for tr in mid.tracks:
+        for msg in tr:
+            if msg.type == "note_on" and msg.velocity > 0:
+                pcs.add(msg.note % 12)
+    # Roots C E G B → pitch classes 0, 4, 7, 11 (triads may add neighbors)
+    assert {0, 4, 7, 11}.issubset(pcs)
+
+
+def test_timing_double_half_bar_drone_held_keeps_all_roots(tmp_path):
+    """Progression / held drone must keep every root under Timing Double floor."""
+    import mido
+
+    from midi_gen.arpeggio_generation import apply_timing_factor, create_arp
+
+    roots = ["C3", "G3", "A3", "F3"]
+    opts = apply_timing_factor(
+        {
+            "generation_type": "drone",
+            "drone_held": True,
+            "mode": "major",
+            "bars": 4,
+            "chord_progression": list(roots),
+            "timing_factor": 0.5,
+            "min_octave": 3,
+            "max_octave": 5,
+            "seed": 3,
+            "filename": str(tmp_path / "half_bar_drone.mid"),
+            "effects_config": [],
+        }
+    )
+    assert opts["bars"] == 2
+    path = create_arp(opts)
+    mid = mido.MidiFile(path)
+    pcs = set()
+    for tr in mid.tracks:
+        for msg in tr:
+            if msg.type == "note_on" and msg.velocity > 0:
+                pcs.add(msg.note % 12)
+    assert {0, 7, 9, 5}.issubset(pcs)
