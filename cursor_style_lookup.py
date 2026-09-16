@@ -754,6 +754,11 @@ def generate_midi_for_style(
 
         options = apply_generation_mode(options, generation_mode)
     path = create_arp(options)
+    # create_arp stretches bars from timing_factor on a copy. Sync the returned
+    # options so Preview caption + Play loop length match the written MIDI.
+    from .arpeggio_generation import apply_timing_factor
+
+    options = apply_timing_factor(options)
     return path, result, options
 
 

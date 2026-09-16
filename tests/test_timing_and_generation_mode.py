@@ -180,6 +180,39 @@ def test_create_arp_timing_factor_double(tmp_path):
     assert len(captured["roots"]) == 4
 
 
+def test_generate_midi_returns_stretched_bars_for_play(tmp_path):
+    """last_run options.bars must match Timing-stretched MIDI (Play loop length)."""
+    from unittest import mock
+
+    from midi_gen.cursor_style_lookup import generate_midi_for_style
+
+    captured = {}
+
+    def fake_create_arp(options):
+        stretched = apply_timing_factor(dict(options))
+        captured["options"] = stretched
+        out = tmp_path / "timing_sync.mid"
+        out.write_bytes(b"MThd")
+        return str(out)
+
+    with mock.patch(
+        "midi_gen.arpeggio_generation.create_arp", side_effect=fake_create_arp
+    ):
+        _path, _result, options = generate_midi_for_style(
+            "Philip Glass",
+            use_cursor_sdk=False,
+            overrides={
+                "bars": 16,
+                "timing_factor": 2.0,
+                "generation_mode": "progression",
+                "chord_count": 4,
+            },
+        )
+    assert options["bars"] == 32
+    assert float(options["timing_factor"]) == 2.0
+    assert captured["options"]["bars"] == 32
+
+
 def test_progression_override_sets_drone_held():
     opts = {
         "generation_type": "arpeggio",
@@ -189,6 +222,7 @@ def test_progression_override_sets_drone_held():
     out = apply_generation_mode(opts, "progression")
     assert out["generation_type"] == "drone"
     assert out["drone_held"] is True
+    assert out["generation_mode"] == "progression"
     assert out["chord_progression"] == PROGRESSION
     assert opts["generation_type"] == "arpeggio"  # no mutate caller
 
@@ -201,6 +235,7 @@ def test_progression_override_wash_opt_out_wins():
     out = apply_generation_mode(opts, "progression")
     assert out["generation_type"] == "drone"
     assert out["drone_held"] is False
+    assert out["generation_mode"] == "progression"
     # Fingerprint fields untouched
     assert out.get("chord_progression") == opts.get("chord_progression")
     assert out.get("development") == opts.get("development")
@@ -214,6 +249,7 @@ def test_pattern_override_sets_arpeggio():
     }
     out = apply_generation_mode(opts, "pattern")
     assert out["generation_type"] == "arpeggio"
+    assert out["generation_mode"] == "pattern"
     assert out["drone_held"] is True  # left alone
     assert out["chord_progression"] == PROGRESSION
 

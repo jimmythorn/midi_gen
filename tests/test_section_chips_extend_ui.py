@@ -146,7 +146,8 @@ def test_generate_overrides_wire_section_role_and_extend_factor(tmp_path):
     assert result.profile.id == "glass_minimal"
     assert options.get("section_role") == "bridge"
     assert options.get("extend_factor") == 2
-    assert options.get("bars") == 8  # stretch happens inside create_arp
+    # Returned options.bars must match the stretched MIDI (Play / caption).
+    assert options.get("bars") == 16
     assert captured["options"].get("extend_factor") == 2
     assert captured["options"]["bars"] == 16
     assert captured["options"]["chord_progression"] == resolve_section_recipe(
