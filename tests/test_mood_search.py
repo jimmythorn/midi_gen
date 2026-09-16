@@ -19,7 +19,9 @@ if "midi_gen" not in sys.modules:
 from midi_gen.mood_search import (
     ArtistCandidate,
     candidates_as_combo_rows,
+    clear_genre_artist_cache,
     genre_artist_candidates,
+    mood_combo_names,
     rank_artist_candidates,
 )
 from midi_gen.spotify_client import (
@@ -31,6 +33,13 @@ from midi_gen.spotify_client import (
     search_artists_by_genre,
     search_artists_by_genre_with_credentials,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_mood_genre_cache():
+    clear_genre_artist_cache()
+    yield
+    clear_genre_artist_cache()
 
 
 def _artist(
@@ -270,6 +279,110 @@ def test_genre_artist_candidates_spotify_error():
     assert "503" in result.message
 
 
+def test_genre_artist_candidates_caches_same_query():
+    """Same mood query must not re-hit Spotify on rerun / chip click."""
+    calls: list[str] = []
+
+    def fake_search(genre: str):
+        calls.append(genre)
+        return [
+            _artist(
+                "Brian Eno",
+                artist_id="eno",
+                followers_total=2_000_000,
+                genres=["ambient", "art rock"],
+            )
+        ]
+
+    first = genre_artist_candidates("Ambient", genre_search=fake_search)
+    second = genre_artist_candidates(" ambient ", genre_search=fake_search)
+    assert first.ok and second.ok
+    assert first.candidates[0].name == "Brian Eno"
+    assert second.candidates == first.candidates
+    assert calls == ["Ambient"]  # second call served from cache
+
+
+def test_genre_artist_candidates_session_cache_isolated():
+    calls: list[str] = []
+
+    def fake_search(genre: str):
+        calls.append(genre)
+        return [
+            _artist(
+                "Nils Frahm",
+                artist_id="nf",
+                followers_total=500_000,
+                genres=["ambient"],
+            )
+        ]
+
+    session: dict = {}
+    a = genre_artist_candidates(
+        "ambient", genre_search=fake_search, session_cache=session
+    )
+    b = genre_artist_candidates(
+        "ambient", genre_search=fake_search, session_cache=session
+    )
+    assert a.ok and b.ok
+    assert calls == ["ambient"]
+    assert session  # keyed entry stored for Streamlit session_state reuse
+
+
+def test_spotify_error_not_cached_allows_retry():
+    calls = {"n": 0}
+
+    def boom(_genre: str):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise SpotifyClientError("HTTP 503")
+        return [
+            _artist(
+                "Aphex Twin",
+                artist_id="afx",
+                followers_total=1_000_000,
+                genres=["ambient", "idm"],
+            )
+        ]
+
+    first = genre_artist_candidates("idm", genre_search=boom)
+    assert not first.ok and first.reason == "spotify_error"
+    second = genre_artist_candidates("idm", genre_search=boom)
+    assert second.ok
+    assert second.candidates[0].name == "Aphex Twin"
+    assert calls["n"] == 2
+
+
+def test_mood_combo_names_uses_cache_no_fingerprint_invent():
+    """Helper returns Spotify names only — never invents Glass/Eno wallpaper."""
+    calls: list[str] = []
+
+    def fake_search(genre: str):
+        calls.append(genre)
+        return [
+            _artist(
+                "Grouper",
+                artist_id="grp",
+                followers_total=200_000,
+                genres=["ambient", "drone"],
+            )
+        ]
+
+    session: dict = {}
+    names = mood_combo_names(
+        "drone", limit=10, session_cache=session, genre_search=fake_search
+    )
+    again = mood_combo_names(
+        "drone", limit=10, session_cache=session, genre_search=fake_search
+    )
+    assert names == ["Grouper"]
+    assert again == names
+    assert calls == ["drone"]
+    assert "Philip Glass" not in names
+    assert "Brian Eno" not in names
+    assert mood_combo_names("", genre_search=fake_search) == []
+    assert mood_combo_names("zzz-none", genre_search=lambda _g: []) == []
+
+
 def test_genre_with_credentials_missing_raises(monkeypatch):
     monkeypatch.delenv("SPOTIFY_CLIENT_ID", raising=False)
     monkeypatch.delenv("SPOTIFY_CLIENT_SECRET", raising=False)
@@ -314,7 +427,9 @@ def test_package_exports_mood_api():
         "ArtistCandidate",
         "GenreArtistCandidates",
         "candidates_as_combo_rows",
+        "clear_genre_artist_cache",
         "genre_artist_candidates",
+        "mood_combo_names",
     ):
         assert name in init_text
         assert f'"{name}"' in init_text or f"'{name}'" in init_text
@@ -328,3 +443,5 @@ def test_package_exports_mood_api():
     assert c.followers_total >= MIN_SPOTIFY_FOLLOWERS
     assert callable(genre_artist_candidates)
     assert callable(candidates_as_combo_rows)
+    assert callable(mood_combo_names)
+    assert callable(clear_genre_artist_cache)
