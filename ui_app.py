@@ -1064,6 +1064,8 @@ def _replay_into_logic(player: Any, run: dict, ports: list[str]) -> None:
         return
     try:
         opts = run["options"]
+        # MCP Record session already punched record — do not MMC-toggle it off.
+        mcp_armed = bool(st.session_state.get("logic_mcp_record_armed"))
         player.play_file(
             run["path"],
             port,
@@ -1074,6 +1076,7 @@ def _replay_into_logic(player: Any, run: dict, ports: list[str]) -> None:
             click=False,
             sync="follow" if st.session_state.get("live_sync_logic", False) else "internal",
             send_clock=not bool(st.session_state.get("live_sync_logic", False)),
+            send_mmc=False if mcp_armed else None,
         )
         st.session_state["live_was_playing"] = True
         st.session_state["live_message"] = f"Streaming to {player.port_name}."
@@ -1955,8 +1958,14 @@ if "live_port" not in st.session_state and default_port:
     st.session_state["live_port"] = default_port
 
 run = st.session_state.get("last_run")
+# Live rewrite arms auto_generate + pending_replay together. Replay must wait
+# for the new MIDI — otherwise Play streams the stale path, generate stops it,
+# and the rewritten sketch never resumes (caption claimed "keep streaming").
 if run and st.session_state.pop("pending_replay", False):
-    _replay_into_logic(player, run, ports)
+    if st.session_state.get("auto_generate"):
+        st.session_state["pending_replay"] = True
+    else:
+        _replay_into_logic(player, run, ports)
 
 _transport_busy = bool(player.playing)
 generate = False
@@ -2157,8 +2166,9 @@ def _render_play_hero(run_data: dict) -> None:
                 _stop_iac_and_maybe_mcp(player, clear_port)
                 st.rerun()
             # Probe here so Record state does not depend on Settings chip order.
+            # force=True: fail-closed enablement (stale Ready cache must not arm CTA).
             try:
-                _mcp_status = get_mcp_readiness()
+                _mcp_status = get_mcp_readiness(force=True)
                 mcp_ready = bool(_mcp_status.ok)
             except Exception:
                 mcp_ready = False

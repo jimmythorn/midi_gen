@@ -152,3 +152,46 @@ def test_profile_from_dict_clamps_invalid_mode_and_roots():
     })
     assert profile.mode == "minor"
     assert profile.root_notes == ["C4", "G4"]
+
+
+def test_play_record_honesty_pending_replay_defers_during_live_rewrite():
+    """Live rewrite must not Play the stale MIDI path before generate lands."""
+    src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
+    # Defer: pending_replay + auto_generate → restore flag, do not call replay yet.
+    block = src[
+        src.index("# Live rewrite arms auto_generate") : src.index("_transport_busy = bool")
+    ]
+    assert 'st.session_state.pop("pending_replay", False)' in block
+    assert 'st.session_state.get("auto_generate")' in block
+    assert 'st.session_state["pending_replay"] = True' in block
+    assert "_replay_into_logic(player, run, ports)" in block
+    # Replay only on the else branch (after rewrite), not while generating.
+    assert block.index('st.session_state.get("auto_generate")') < block.index(
+        "_replay_into_logic(player, run, ports)"
+    )
+
+
+def test_play_record_honesty_record_cta_force_probes_mcp():
+    """Record enablement must force-probe MCP — stale Ready cache is fail-open."""
+    src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
+    play = src[src.index("def _render_play_hero") : src.index("def _render_download")]
+    assert "get_mcp_readiness(force=True)" in play
+    assert "disabled=not (live.available and mcp_ready)" in play
+
+
+def test_play_record_honesty_replay_skips_mmc_when_mcp_armed():
+    """Live rewrite during MCP Record must not MMC Record-Strobe (toggle off)."""
+    src = (_ROOT / "ui_app.py").read_text(encoding="utf-8")
+    replay = src[
+        src.index("def _replay_into_logic") : src.index("def _apply_effects_preset")
+    ]
+    assert 'st.session_state.get("logic_mcp_record_armed")' in replay
+    assert "send_mmc=False if mcp_armed else None" in replay
+
+
+def test_play_record_honesty_live_midi_not_rewritten_for_mcp():
+    """Product lock: Play notes stay on IAC live_midi — no MCP surface in streamer."""
+    live_src = (_ROOT / "live_midi.py").read_text(encoding="utf-8")
+    assert "logic_mcp" not in live_src.lower()
+    assert "LogicProMCP" not in live_src
+    assert "record_sequence" not in live_src
