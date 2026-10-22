@@ -27,6 +27,10 @@ else
   PYTHON="$(command -v python3)"
 fi
 
+# eMudhra/emSign CA compromise (GHSA-6q48-6c7w-9gw2): refresh installer + CA
+# bundle in this interpreter so existing venvs pick up certifi>=2026.10.19.
+"$PYTHON" -m pip install --upgrade "pip>=26.2.2" "certifi>=2026.10.19"
+
 # Prefer editable install when available; otherwise symlink package name
 if ! "$PYTHON" -c "import midi_gen" >/dev/null 2>&1; then
   if [[ -f "$ROOT/pyproject.toml" ]]; then
