@@ -32,6 +32,8 @@ pip install -e .
 ./run_ui.sh
 ```
 
+Existing venv after the Oct 2026 emSign CA incident: `python -m pip install -U 'pip>=26.2.2' 'certifi>=2026.10.19'` (or re-run `./run_ui.sh`, which upgrades both before install).
+
 Open **http://127.0.0.1:8501**.
 
 CLI (optional / power users):
